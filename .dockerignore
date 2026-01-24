@@ -1,0 +1,24 @@
+# Avoid sending these into Docker build context
+.git
+.github
+.agent
+.continue
+.cursor
+*.md
+LICENSE
+.gitignore
+.dockerignore
+.pytest_cache
+.coverage
+coverage.xml
+coverage_output.txt
+htmlcov
+__pycache__
+*.pyc
+.venv
+venv
+env
+model_cache
+models
+temp_audio
+media

@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+USER root
+
+# Force unbuffered logging for progress bars
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y ffmpeg git build-essential && rm -rf /var/lib/apt/lists/*
+
+# Install Python libraries and upgrade dependencies
+COPY pip.conf /etc/pip.conf
+COPY test_requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install --upgrade pip && \
+    python3 -m pip install -r test_requirements.txt
+
+WORKDIR /app
+
+# Copy the source code
+COPY . .
+RUN chmod +x tests/run_suite.sh
+
+# Default command
+CMD ["/bin/bash", "tests/run_suite.sh"]

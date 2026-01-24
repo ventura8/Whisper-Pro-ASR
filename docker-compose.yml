@@ -1,0 +1,72 @@
+---
+services:
+  whisper-pro-asr:
+    build: .
+    container_name: whisper-pro-asr
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+
+    # --- [HARDWARE ACCELERATION] ---
+    # The application performs automated detection of both Intel and NVIDIA hardware.
+    # To enable hardware passthrough, uncomment the appropriate sections below.
+
+    # 1. Intel NPU / iGPU / Arc
+    # devices:
+    #   - /dev/dri:/dev/dri  # Integrated GPU
+    #   - /dev/accel/accel0:/dev/accel/accel0  # Meteor/Lunar Lake NPU
+    #   - /dev/dxg:/dev/dxg  # Windows/WSL2 GPU mapping
+
+    # 2. NVIDIA Silicon (CUDA)
+    # Note: Requires NVIDIA Container Toolkit on the HOST for driver passthrough.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+    environment:
+      - DEBUG=false
+
+      # --- [ENGINE CONFIGURATION] ---
+      # Hardware Target: AUTO (Automated detection), CUDA (NVIDIA), CPU
+      - ASR_DEVICE=AUTO
+      # Computation Precision: AUTO, int8, float16 (default: AUTO)
+      - ASR_COMPUTE_TYPE=AUTO
+      # Model Weight Source (Faster-Whisper ID or local path)
+      - ASR_MODEL=Systran/faster-whisper-large-v3
+
+      # --- [INFERENCE PARAMETERS] ---
+      # Generation Search Breadth (Higher = more accurate, lower = faster)
+      - ASR_BEAM_SIZE=5
+      # Parallel segment batching (1 is recommended for single-GPU/NPU stability)
+      - ASR_BATCH_SIZE=1
+
+      # --- [PREPROCESSING (UVR / MDX-NET)] ---
+      # Target Device: AUTO, CPU, CUDA (NVIDIA), GPU (Intel), NPU (Intel)
+      - ASR_PREPROCESS_DEVICE=AUTO
+      # Isolation Model Filename
+      - VOCAL_SEPARATION_MODEL=UVR-MDX-NET-Inst_HQ_3.onnx
+      # Vocal Separation Logic Toggles
+      - ENABLE_VOCAL_SEPARATION=true
+      - ENABLE_LD_PREPROCESSING=true
+      - SMART_SAMPLING_SEARCH=false
+
+      # --- [RESOURCE ALLOCATION] ---
+      # Core limit for Whisper ASR logic
+      - ASR_THREADS=4
+      # Core limit for Preprocessing (ONNX Runtime)
+      - ASR_PREPROCESS_THREADS=4
+      # Core limit for Media Normalization (0 = auto-detect system-wide)
+      - FFMPEG_THREADS=4
+
+    volumes:
+      # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
+      - ./model_cache:/app/model_cache
+      # Recommended: Mirror your Bazarr media mappings here for instant (0-copy) local processing
+      # If paths match, Whisper Pro reads files directly instead of requiring uploads.
+      # - /mnt/nas/media:/media
+      # - /tv:/tv
+      # - /movies:/movies

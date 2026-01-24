@@ -1,0 +1,32 @@
+# Core API
+flask~=3.1.2
+werkzeug~=3.1.5
+flasgger~=0.9.7.1
+
+# Whisper Inference (CPU Optimized)
+faster-whisper~=1.2.1
+ctranslate2~=4.6.3
+tokenizers~=0.21.0
+torch~=2.5.1
+torchaudio~=2.5.1
+
+# Configuration & Utilities
+colorlog~=6.10.1
+pyyaml~=6.0.3
+requests~=2.32.5
+pydub~=0.25.1
+psutil~=7.2.1
+tqdm~=4.67.1
+
+# Audio Handling
+soundfile~=0.13.1
+ffmpeg-python~=0.2.0
+librosa~=0.10.2
+
+# Optimization & Runtime
+openvino~=2025.4.1
+openvino-genai~=2025.4.1
+openvino-tokenizers~=2025.4.1
+numpy~=2.3.5
+transformers~=4.48.2
+huggingface-hub~=0.27.1
