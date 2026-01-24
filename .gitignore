@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Model Caches (OpenVINO Blobs)
+model_cache/
+models/
+
+# Media / Temp
+temp_audio/
+media/
+*.mp4
+*.mkv
+*.wav
+*.srt
+
+# Docker
+.docker/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project Scripts (Debug/Diagnostic)
+inspect_ov_api.py
+inspect_topology.py
+verify_graph_surgery.py
+shim_snippet.py
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+coverage.xml
+coverage.md
+coverage_output.txt
+report.xml
+htmlcov/

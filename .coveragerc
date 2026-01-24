@@ -1,0 +1,14 @@
+[run]
+source = 
+    modules
+    whisper_server.py
+omit =
+    */tests/*
+    */__pycache__/*
+
+[report]
+fail_under = 90
+show_missing = true
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
