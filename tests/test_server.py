@@ -6,7 +6,7 @@ from io import BytesIO
 # pylint: disable=reimported, import-outside-toplevel
 from unittest import mock
 
-import whisper_server
+import whisper_pro_asr
 
 
 def test_patch_path_explicit_cuda():
@@ -17,7 +17,7 @@ def test_patch_path_explicit_cuda():
             with mock.patch("os.path.exists",
                             side_effect=lambda p: "/nvidia" in p or "\\nvidia" in p):
                 # Call the function directly
-                whisper_server._initialize_hardware_path()
+                whisper_pro_asr._initialize_hardware_path()
                 # Check if nvidia path was added
                 nvidia_found = any("nvidia" in p for p in fake_path)
                 assert nvidia_found, f"Expected nvidia path in {fake_path}"
@@ -29,7 +29,7 @@ def test_patch_path_auto_nvidia():
         with mock.patch("os.path.exists", side_effect=lambda p: "nvidia" in p or "\\nvidia" in p):
             fake_path = []
             with mock.patch.object(sys, "path", fake_path):
-                whisper_server._initialize_hardware_path()
+                whisper_pro_asr._initialize_hardware_path()
                 # Check if nvidia path was added
                 nvidia_found = any("nvidia" in p for p in fake_path)
                 assert nvidia_found, f"Expected nvidia path in {fake_path}"
@@ -38,18 +38,18 @@ def test_patch_path_auto_nvidia():
 def test_on_import_onnx_exceptions():
     """Test that the server handles onnxruntime import errors gracefully."""
     import logging
-    import whisper_server
+    import whisper_pro_asr
     # The module should have proper exception handling
     # Check that logger is set up and module loads without crash
     logger = logging.getLogger(__name__)
     assert logger is not None
     # Module loaded successfully
-    assert whisper_server is not None
+    assert whisper_pro_asr is not None
 
 
 def test_request_logging_types():
     """Test request logging formats (Multipart, Form, JSON)."""
-    app = whisper_server.create_app()
+    app = whisper_pro_asr.create_app()
     with app.test_client() as client:
         # 1. Multipart
         client.post("/asr", data={"file": (BytesIO(b"x"), "test.wav"), "field": "val"},
@@ -65,7 +65,7 @@ def test_request_logging_types():
 
 def test_request_logging_data_handling():
     """Test large body and invalid body."""
-    app = whisper_server.create_app()
+    app = whisper_pro_asr.create_app()
     with app.test_client() as client:
         # 1. Large Body (truncated)
         client.post("/asr", data="A"*1500, content_type="text/plain")
@@ -81,7 +81,7 @@ def test_patch_path_explicit_cpu():
         with mock.patch.object(sys, "path", fake_path):
             with mock.patch("os.path.exists",
                             side_effect=lambda p: "/intel" in p or "\\intel" in p):
-                whisper_server._initialize_hardware_path()
+                whisper_pro_asr._initialize_hardware_path()
                 # Check if intel path was added
                 intel_found = any("intel" in p for p in fake_path)
                 assert intel_found, f"Expected intel path in {fake_path}"
@@ -89,14 +89,14 @@ def test_patch_path_explicit_cpu():
 
 def test_request_logging_with_args():
     """Test request logging with query arguments."""
-    app = whisper_server.create_app()
+    app = whisper_pro_asr.create_app()
     with app.test_client() as client:
         client.get("/asr?debug=true&model=large")
 
 
 def test_request_logging_exception():
     """Test request logging exception handler."""
-    app = whisper_server.create_app()
+    app = whisper_pro_asr.create_app()
     with app.test_client():
         # Use a more direct way to trigger the exception in before_request
         # instead of mocking the proxy itself which is risky
@@ -111,7 +111,7 @@ def test_request_logging_exception():
 
             if log_func:
                 mock_req = mock.MagicMock()
-                with mock.patch("whisper_server.request", mock_req):
+                with mock.patch("whisper_pro_asr.request", mock_req):
                     mock_req.content_type = "multipart/form-data"
                     mock_req.args = {}
                     mock_req.headers = {}
