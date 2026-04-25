@@ -53,7 +53,7 @@ jobs:
       - name: Run Pylint
         run: |
           docker run --rm whisper-asr-test python3 -m pylint \
-            modules tests whisper_server.py --recursive=y
+            modules tests whisper_pro_asr.py --recursive=y
 
       - name: Execute Test Suite
         run: |

@@ -202,3 +202,57 @@ def test_convert_to_wav_logging_coverage():
                     with mock.patch("tempfile.NamedTemporaryFile"):
                         # Just ensure it runs without error and exercises the logging block
                         utils.convert_to_wav("input.mp3")
+
+class TestUtilsEdgeCases:
+    """Uncovered edge cases in utils.py."""
+
+    def test_standardization_filters_logic(self):
+        """Test that the filters can be accessed."""
+        # Just check the current value to avoid reload-induced hangs
+        assert "norm" in utils.STANDARD_NORMALIZATION_FILTERS
+
+    def test_convert_to_wav_cleanup_error(self):
+        """Test exception handling when os.remove fails during cleanup."""
+        mock_process = mock.MagicMock()
+        mock_process.__enter__.return_value = mock_process
+        mock_process.stdout.readline.return_value = ""
+        mock_process.returncode = 1  # Force failure
+
+        with mock.patch("modules.utils.get_audio_duration", return_value=10.0):
+            with mock.patch("modules.utils.subprocess.Popen", return_value=mock_process):
+                with mock.patch("os.path.exists", return_value=True):
+                    with mock.patch("os.path.getsize", return_value=123):
+                        with mock.patch("os.remove", side_effect=Exception("Perm error")):
+                            # Should catch the exception on remove and return None
+                            assert utils.convert_to_wav("in.mp3") is None
+
+    def test_parse_ffmpeg_progress_invalid_line(self):
+        """Test _parse_ffmpeg_progress handles malformed status lines."""
+        mock_proc = mock.MagicMock()
+        mock_proc.stdout.readline.side_effect = ["out_time_ms=invalid", ""]
+        # Should not raise
+        utils._parse_ffmpeg_progress(mock_proc, 10.0)  # pylint: disable=protected-access
+
+    def test_generate_vtt_edge_cases(self):
+        """Test generate_vtt with no segments and error handling."""
+        # Text only
+        res = {"text": "Hello"}
+        assert "00:00:00.000" in utils.generate_vtt(res)
+
+        # Empty text
+        assert "[No dialogue detected]" in utils.generate_vtt({"text": ""})
+
+        # None timestamp
+        res = {"segments": [{"timestamp": (None, None), "text": "X"}]}
+        assert "00:00:00.000" in utils.generate_vtt(res)
+
+    def test_generate_tsv_edge_cases(self):
+        """Test generate_tsv with null timestamps and errors."""
+        res = {"segments": [{"timestamp": (None, None), "text": "T"}]}
+        tsv = utils.generate_tsv(res)
+        assert "0\t0\tT" in tsv
+
+        # Exception in loop
+        res = {"segments": [None]}
+        tsv = utils.generate_tsv(res)
+        assert "start\tend\ttext" in tsv # Header only

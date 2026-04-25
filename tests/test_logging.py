@@ -183,7 +183,7 @@ class TestLogBanner:
             mock_conf.PREPROCESS_THREADS = 8
             mock_conf.FFMPEG_THREADS = 2
             mock_conf.APP_NAME = "Whisper Intel XPU"
-            mock_conf.VERSION = "1.0.0"
+            mock_conf.VERSION = "1.0.1"
             mock_conf.MODEL_ID = "test-model"
             mock_conf.OV_CACHE_DIR = "/tmp/cache"
             mock_conf.DEVICE = "CPU"
@@ -355,7 +355,7 @@ class TestGetDeviceProperties:
         with mock.patch("modules.logging_setup.logger") as mock_logger:
             with mock.patch("modules.logging_setup.config") as mock_conf:
                 mock_conf.APP_NAME = "Whisper Pro ASR"
-                mock_conf.VERSION = "1.0.0"
+                mock_conf.VERSION = "1.0.1"
                 mock_conf.MODEL_ID = "test-model"
                 mock_conf.OV_CACHE_DIR = "/tmp/cache"
                 mock_conf.DEVICE = "NPU"

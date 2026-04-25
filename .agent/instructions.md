@@ -9,6 +9,8 @@
 - **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST respect the thread limits set in `modules.config` (`ASR_THREADS`, `PREPROCESS_THREADS`, `FFMPEG_THREADS`).
 - **FFmpeg Parallelization**: Prefer parallelizing across segments (as seen in `language_detection.py`) rather than relying on high thread counts for single-file filters, as some FFmpeg filters are inherently single-threaded.
 - **Library Patching**: If a third-party library (e.g., `audio-separator`) does not expose thread configuration, use monkey-patching on the underlying engine (e.g., `onnxruntime`) to enforce limits.
+- **Stability & Cleanup**: ALL temporary files, file descriptors, and memory-intensive assets MUST be managed using `try...finally` blocks.
+- **Path Resolution**: Always use absolute paths (resolved against `config.CACHE_DIR`) for temporary file management to ensure consistency across different OS environments (Windows/Docker).
  
 ## Media Standardization
 - **Uniform Specification**: All audio ingested MUST be converted to **16kHz, Mono, 16-bit PCM**.

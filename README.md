@@ -52,7 +52,7 @@ services:
 ### Precision Architecture
 - **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA** and **Generic CPU** runtimes.
 - **Dynamic Context Switching**: Effortlessly shifts workloads between disparate accelerators (e.g., performing vocal isolation on an Intel iGPU/NPU while transcribing via CPU).
-- **FFmpeg 8.0.1 (Huffman)**: Core integration of the latest FFmpeg static builds featuring optimized Huffman coding and intelligent core utilization.
+- **FFmpeg 8.1.0**: Core integration of the latest FFmpeg static builds featuring optimized Huffman coding and intelligent core utilization.
 
 ### Advanced Intelligence
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
@@ -308,7 +308,7 @@ To use this service with **Bazarr**:
 ## 🛠 Project Structure
 ```text
 /
-├── whisper_server.py        # Master entry point
+├── whisper_pro_asr.py        # Master entry point
 ├── modules/                 # Service Logic
 │   ├── model_manager.py     # Inference & Execution
 │   ├── preprocessing.py     # UVR Isolation Logic

@@ -8,10 +8,10 @@ cd "$(dirname "$0")/.."
 
 if [ "$SKIP_LINT" != "1" ]; then
   echo "--- Running AutoPEP8 ---"
-  python3 -m autopep8 --in-place --recursive --max-line-length 100 modules tests whisper_server.py scripts
+  python3 -m autopep8 --in-place --recursive --max-line-length 100 modules tests whisper_pro_asr.py scripts
 
   echo "--- Running Pylint ---"
-  python3 -m pylint modules tests whisper_server.py --recursive=y
+  python3 -m pylint modules tests whisper_pro_asr.py --recursive=y
   
   echo "--- Running Yamllint ---"
   yamllint .
@@ -22,7 +22,7 @@ fi
 echo ""
 echo "--- Running Pytest with Coverage ---"
 # We output XML (for PR display) and terminal report
-python3 -m pytest --cov=modules --cov=whisper_server --cov-report=xml:coverage.xml --cov-report=term-missing | tee coverage_output.txt
+python3 -m pytest --cov=modules --cov=whisper_pro_asr --cov-report=xml:coverage.xml --cov-report=term-missing | tee coverage_output.txt
 
 echo ""
 echo "--- Verifying Per-File Coverage (Threshold: 90%) ---"
