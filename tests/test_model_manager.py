@@ -459,3 +459,61 @@ class TestModelManagerInternalEdgeCases:
         model_manager._RESUME_EVENT.set()
         model_manager.wait_for_priority()
         assert model_manager._PAUSE_CONFIRMED.is_set() is False  # cleared after wait
+
+class TestModelManagerEdgeCases:
+    """Uncovered edge cases in model_manager.py."""
+
+    def test_load_model_intel_paths(self):
+        """Test intel engine selection logic."""
+        from modules import model_manager
+        with mock.patch("modules.config.ASR_ENGINE", "INTEL-WHISPER"):
+            with mock.patch("modules.intel_engine.IntelWhisperEngine") as mock_intel:
+                with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", False):
+                    model_manager.load_model()
+                    mock_intel.assert_called_once()
+
+    def test_load_model_warmup_error(self):
+        """Test fallback when preprocessing warmup fails."""
+        from modules import model_manager
+        with mock.patch("modules.model_manager.WhisperModel"):
+            with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", True):
+                with mock.patch(
+                    "modules.preprocessing.get_manager",
+                    side_effect=Exception("Warmup fail")
+                ):
+                    # Should catch and log error but return True
+                    assert model_manager.load_model() is True
+
+    def test_run_intel_whisper_path(self):
+        """Test the intel-whisper transcription pipeline."""
+        from modules import model_manager
+        mock_intel = mock.MagicMock()
+        mock_intel.transcribe.return_value = {
+            "segments": [{"text": "OK", "end": 1.0}],
+            "language": "en"
+        }
+        with mock.patch("modules.model_manager.WHISPER", mock_intel):
+            with mock.patch("modules.config.ASR_ENGINE", "INTEL-WHISPER"):
+                with mock.patch("modules.vad.decode_audio", return_value=[0,0]):
+                    with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", False):
+                        res = model_manager.run_transcription("any.wav")
+                        assert res["text"] == "OK"
+
+    def test_diagnostics_error(self):
+        """Test _log_audio_diagnostics handles soundfile errors."""
+        from modules.model_manager import _log_audio_diagnostics
+        with mock.patch("soundfile.info", side_effect=Exception("Broken file")):
+            # Should not raise
+            _log_audio_diagnostics("broken.wav")
+
+    def test_post_process_vad_edge_cases(self):
+        """Test VAD filtering with empty text and errors."""
+        from modules.model_manager import _post_process_vad
+        # Empty text
+        res = {"segments": [{"text": "", "probability": 1.0}]}
+        assert _post_process_vad(res, "x.wav") == res
+
+        # Exception during iteration
+        with mock.patch("modules.model_manager.logger") as mock_logger:
+            _post_process_vad(None, "x.wav")
+            mock_logger.error.assert_called()

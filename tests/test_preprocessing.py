@@ -371,6 +371,70 @@ class TestPreprocessingEdgeSegments:
             res = manager._postprocess_segment("vocal.wav", 16000, 16000)
             assert len(res) == 16000
 
+    def test_cleanup_stems_relative_path(self):
+        """Test that relative paths from audio-separator are resolved to CACHE_DIR and deleted."""
+        manager = PreprocessingManager()
+
+        with mock.patch('modules.preprocessing.CACHE_DIR', '/mock/cache'):
+            with mock.patch('os.path.exists') as mock_exists:
+                # First exists check is for the relative path itself
+                # Second exists check is for the resolved absolute path
+                # Third exists check is for the resolved absolute path before remove
+                mock_exists.side_effect = lambda path: str(path) in [
+                    os.path.join('/mock/cache', 'file_(Instrumental).wav'),
+                    os.path.join('/mock/cache', 'file_(Vocals).wav')
+                ]
+
+                with mock.patch('os.remove') as mock_remove:
+                    manager._cleanup_stems(
+                        ['file_(Instrumental).wav', 'file_(Vocals).wav'],
+                        keep_path=os.path.join('/mock/cache', 'file_(Vocals).wav')
+                    )
+
+                    # Should only remove the instrumental file
+                    expected_call = os.path.join('/mock/cache', 'file_(Instrumental).wav')
+                    mock_remove.assert_called_once_with(expected_call)
+
+    def test_purge_stale_cache_removes_files(self):
+        """Test that _purge_stale_cache removes orphaned files at startup."""
+        mock_file1 = mock.MagicMock()
+        mock_file1.is_file.return_value = True
+        mock_file2 = mock.MagicMock()
+        mock_file2.is_file.return_value = True
+        mock_dir = mock.MagicMock()
+        mock_dir.is_file.return_value = False
+
+        mock_cache = mock.MagicMock()
+        mock_cache.iterdir.return_value = [mock_file1, mock_file2, mock_dir]
+
+        with mock.patch('modules.preprocessing.CACHE_DIR', mock_cache):
+            PreprocessingManager._purge_stale_cache()
+
+        mock_file1.unlink.assert_called_once()
+        mock_file2.unlink.assert_called_once()
+        mock_dir.unlink.assert_not_called()
+
+    def test_purge_stale_cache_empty_dir(self):
+        """Test that _purge_stale_cache is a no-op on empty directories."""
+        mock_cache = mock.MagicMock()
+        mock_cache.iterdir.return_value = []
+
+        with mock.patch('modules.preprocessing.CACHE_DIR', mock_cache):
+            PreprocessingManager._purge_stale_cache()
+
+    def test_purge_stale_cache_handles_errors(self):
+        """Test that _purge_stale_cache silently handles file deletion errors."""
+        mock_file = mock.MagicMock()
+        mock_file.is_file.return_value = True
+        mock_file.unlink.side_effect = PermissionError("Access denied")
+
+        mock_cache = mock.MagicMock()
+        mock_cache.iterdir.return_value = [mock_file]
+
+        with mock.patch('modules.preprocessing.CACHE_DIR', mock_cache):
+            # Should not raise
+            PreprocessingManager._purge_stale_cache()
+
 
 class TestPreprocessingEdgeConfig:
     """Config, providers, and session options."""
