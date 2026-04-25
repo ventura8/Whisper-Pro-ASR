@@ -8,6 +8,7 @@
 - **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST strictly respect the thread limits set in `modules/config.py` (`ASR_THREADS`, `ASR_PREPROCESS_THREADS`, `FFMPEG_THREADS`). Language detection runs serially (single worker) to ensure thread limits are not exceeded.
 - **Media Standardization**: All audio ingested MUST be converted to **16kHz, Mono, 16-bit PCM**. Always use `utils.STANDARD_AUDIO_FLAGS` and `utils.STANDARD_NORMALIZATION_FILTERS` for FFmpeg commands to ensure pipeline consistency.
 - **Efficiency Optimization**: For non-ASR tasks (identification/status), ALWAYS favor segmented FFmpeg extraction (`-ss` / `-t`) from the source media over full-file normalization. Avoid using `soundfile` (`sf.read`) directly on non-WAV video containers as it causes expensive full-file probes.
+- **Resource Cleanup & Stability**: All temporary files and system resources (file descriptors, locks) MUST be managed using `try...finally` blocks to ensure absolute cleanup even on catastrophic failures. Always verify path existence before deletion and log any cleanup warnings.
 
 
 ## Documentation Index
@@ -96,8 +97,17 @@ docker run --rm whisper-npu-test
 ```
 *Note: The test suite enforces 90%+ code coverage for all critical modules.*
 
+## Release Notes v1.0.1
+- **FIX**: Automatically clean up legacy storage leaks from version 1.0.0 in the preprocessing cache at startup.
+- **FIX**: Resolved an issue where temporary vocal and instrumental stems were not properly cleaned up, causing `model_cache/preprocessing` to grow indefinitely.
+- **FIX**: Warmup inference stems are now properly captured and deleted on startup.
+- **FIX**: Temporary input files during in-memory segment processing are now cleaned up via `finally` blocks, preventing leaks on separator exceptions.
+- **FIX**: Closed leaked file descriptors from `tempfile.mkstemp` in segmented isolation and added error-path cleanup for partial output files.
+- **FIX**: Resolved relative path reconciliation issues for audio stems in Windows and Docker environments.
+- **STAB**: Hardened FFmpeg error parsing for corrupted or zero-byte input files.
+- **FFmpeg 8.1.0**: Upgraded to official static builds with optimized multithreading paths.
+
 ## Release Notes v1.0.0
-- **FFmpeg 8.0.1 (Huffman)**: Upgraded to official static builds with optimized multithreading paths.
 - **Improved Language Detection**: Enhanced accuracy via **Squared Confidence Weighting** and full probability distribution analysis.
 - **OpenAI/Bazarr Compatibility**: Added `/v1/audio/transcriptions` and `/v1/audio/translations` aliases with support for `response_format` and `file` parameters.
 - **Swagger UI**: Integrated interactive documentation at `/docs`.

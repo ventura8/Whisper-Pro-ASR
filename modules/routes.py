@@ -57,7 +57,7 @@ def root():
             version:
               type: string
               description: Version string.
-              example: "1.0.0"
+              example: "1.0.1"
     """
     logger.info("[System] Health check: OK")
     return jsonify({
@@ -91,7 +91,7 @@ def status():
             version:
               type: string
               description: Semantic application version.
-              example: "1.0.0"
+              example: "1.0.1"
             model:
               type: string
               description: Relative or absolute path to the Whisper model weights.

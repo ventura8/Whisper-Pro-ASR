@@ -236,6 +236,31 @@ class PreprocessingManager:
         self.device = config.PREPROCESS_DEVICE
         self.separator = None
         self._lock = threading.Lock()
+        self._purge_stale_cache()
+
+    @staticmethod
+    def _purge_stale_cache():
+        """Remove orphaned files from the preprocessing cache at startup.
+
+        At boot time, no requests are active, so any files remaining in
+        CACHE_DIR are guaranteed leftovers from a previous run (e.g. stems
+        leaked by v1.0.0). This ensures a clean slate on every restart.
+        """
+        purged = 0
+        try:
+            for entry in CACHE_DIR.iterdir():
+                if entry.is_file():
+                    try:
+                        entry.unlink()
+                        purged += 1
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+            if purged:
+                logger.info(
+                    "[System] Startup cleanup: Purged %d orphaned "
+                    "file(s) from preprocessing cache.", purged)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
     def ensure_models_loaded(self):
         """
@@ -273,11 +298,13 @@ class PreprocessingManager:
             original_level = logging.getLogger("audio_separator").level
             logging.getLogger("audio_separator").setLevel(logging.ERROR)
 
+            stems = []
             try:
                 with self._lock:
-                    self.separator.separate(dummy_path)
+                    stems = self.separator.separate(dummy_path)
             finally:
                 logging.getLogger("audio_separator").setLevel(original_level)
+                self._cleanup_stems(stems)
 
             logger.debug("[System] UVR Warmup: Isolation engine ready.")
 
@@ -435,29 +462,36 @@ class PreprocessingManager:
         )
 
         # Create a temporary file for the assembled output
-        final_out_path = tempfile.mkstemp(suffix=".wav")[1]
+        tmp_fd, final_out_path = tempfile.mkstemp(suffix=".wav")
+        os.close(tmp_fd)
 
-        info = sf.info(input_path)
-        sr = info.samplerate
-        total_samples = info.frames
-        msg = "[Prep] Processing segment %d/%d (%.1f%%)..."
+        try:
+            info = sf.info(input_path)
+            total_samples = info.frames
 
-        with sf.SoundFile(final_out_path, mode='w', samplerate=sr,
-                          channels=1, subtype='PCM_16') as writer:
-            seg_samples = int(segment_size * sr)
-            for i, start_f in enumerate(range(0, total_samples, seg_samples)):
-                frames = min(seg_samples, total_samples - start_f)
-                logger.info(msg, i + 1, (total_samples // seg_samples) + 1,
-                            (start_f / total_samples) * 100)
+            with sf.SoundFile(final_out_path, mode='w', samplerate=info.samplerate,
+                              channels=1, subtype='PCM_16') as writer:
+                seg_samples = int(segment_size * info.samplerate)
+                for i, start_f in enumerate(range(0, total_samples, seg_samples)):
+                    frames = min(seg_samples, total_samples - start_f)
+                    logger.info("[Prep] Processing segment %d/%d (%.1f%%)...",
+                                i + 1, (total_samples // seg_samples) + 1,
+                                (start_f / total_samples) * 100)
 
-                if yield_cb:
-                    yield_cb()
+                    if yield_cb:
+                        yield_cb()
 
-                self._isolate_and_write_segment(writer, input_path, start_f, frames)
+                    self._isolate_and_write_segment(writer, input_path, start_f, frames)
 
-        logger.info("[Prep] Segmented vocal isolation finalized in %s.",
-                    utils.format_duration(time.time() - start_time))
-        return final_out_path
+            logger.info("[Prep] Segmented vocal isolation finalized in %s.",
+                        utils.format_duration(time.time() - start_time))
+            return final_out_path
+
+        except Exception:
+            # Clean up the partial output file on failure
+            if os.path.exists(final_out_path):
+                os.remove(final_out_path)
+            raise
 
     def _isolate_and_write_segment(self, writer, input_path, start_frame, frames_to_read):
         """Isolate vocals from a single segment and write to the output stream."""
@@ -521,7 +555,16 @@ class PreprocessingManager:
     def _cleanup_stems(self, output_files, keep_path=None):
         """Securely remove auxiliary stems while preserving the target track."""
         for out_f in output_files:
-            if out_f and out_f != keep_path and os.path.exists(out_f):
+            if not out_f:
+                continue
+
+            # Reconcile relative paths from audio-separator
+            if not os.path.isabs(out_f) and not os.path.exists(out_f):
+                possible = os.path.join(str(CACHE_DIR), out_f)
+                if os.path.exists(possible):
+                    out_f = possible
+
+            if out_f != keep_path and os.path.exists(out_f):
                 try:
                     os.remove(out_f)
                 except Exception: # pylint: disable=broad-exception-caught
@@ -535,6 +578,8 @@ class PreprocessingManager:
         if np.max(np.abs(segment)) < 0.005:
             return segment
 
+        in_path = None
+        output_files = []
         try:
             self._init_separator()
             tmp_id = uuid.uuid4().hex
@@ -553,16 +598,19 @@ class PreprocessingManager:
             if vocal_path and os.path.exists(vocal_path):
                 final_segment = self._postprocess_segment(vocal_path, sr, len(segment))
 
-            # Atomic cleanup
-            if os.path.exists(in_path):
-                os.remove(in_path)
-            self._cleanup_stems(output_files)
-
             return final_segment
 
         except Exception as e: # pylint: disable=broad-exception-caught
             logger.warning("[Prep] Segment isolation failed: %s", e)
             return segment
+        finally:
+            # Guaranteed cleanup of temporary input and all output stems
+            if in_path and os.path.exists(in_path):
+                try:
+                    os.remove(in_path)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+            self._cleanup_stems(output_files)
 
     def _postprocess_segment(self, vocal_path, target_sr, target_len):
         """Load and normalize cleaned audio to original buffer specifications."""

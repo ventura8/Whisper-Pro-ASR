@@ -23,11 +23,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   python3-venv \
   software-properties-common \
   && rm -rf /var/lib/apt/lists/* \
-  && wget https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.0-latest-linux64-gpl-8.0.tar.xz \
-  && tar -xvf ffmpeg-n8.0-latest-linux64-gpl-8.0.tar.xz \
-  && mv ffmpeg-n8.0-latest-linux64-gpl-8.0/bin/ffmpeg /usr/local/bin/ \
-  && mv ffmpeg-n8.0-latest-linux64-gpl-8.0/bin/ffprobe /usr/local/bin/ \
-  && rm -rf ffmpeg-n8.0-latest-linux64-gpl-8.0* \
+  && wget https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz \
+  && tar -xvf ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz \
+  && mv ffmpeg-n8.1-latest-linux64-gpl-8.1/bin/ffmpeg /usr/local/bin/ \
+  && mv ffmpeg-n8.1-latest-linux64-gpl-8.1/bin/ffprobe /usr/local/bin/ \
+  && rm -rf ffmpeg-n8.1-latest-linux64-gpl-8.1* \
   && ffmpeg -version
 
 # Install NVIDIA CUDA 12.8 explicitly (Ubuntu 24.04)
@@ -78,6 +78,6 @@ RUN --mount=type=cache,target=/root/.cache \
 WORKDIR /app
 COPY modules/ ./modules/
 COPY scripts/ ./scripts/
-COPY whisper_server.py .
+COPY whisper_pro_asr.py .
 
-CMD ["python3", "whisper_server.py"]
+CMD ["python3", "whisper_pro_asr.py"]
