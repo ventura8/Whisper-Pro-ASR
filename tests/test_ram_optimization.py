@@ -6,6 +6,7 @@ from modules import routes
 
 # pylint: disable=protected-access
 
+
 class TestRAMOptimization:
     """Test suite for RAM usage optimization features."""
 
@@ -25,7 +26,7 @@ class TestRAMOptimization:
                     with mock.patch("os.path.getsize", return_value=2048):
                         with mock.patch("builtins.open", mock.mock_open(read_data=b"a" * 1024)):
                             with mock.patch("os.path.exists", return_value=True):
-                                res_path, _ = routes._handle_upload()
+                                res_path, _, _ = routes._handle_upload()
 
                                 # Verify .save() was called (streamed)
                                 mock_file.save.assert_called_once()

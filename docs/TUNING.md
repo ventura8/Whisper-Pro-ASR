@@ -42,6 +42,24 @@ Then rebuild: `docker compose up -d --build`
 | Build fails | Check disk space/RAM (~17GB needed) |
 | Slow first run | Normal - NPU compilation takes 2-5 min |
 
+## 🛠 Hardware Acceleration (FFmpeg)
+
+By default, media standardization runs on the CPU to ensure maximum compatibility. You can offload this to your GPU to reduce CPU load:
+
+| Variable | Value | Hardware |
+|:---|:---|:---|
+| `FFMPEG_HWACCEL` | `cuda` | NVIDIA GPUs |
+| `FFMPEG_HWACCEL` | `qsv` | Intel GPUs (Recommended) |
+| `FFMPEG_HWACCEL` | `vaapi` | AMD / Generic Linux |
+
+## 🧩 Granular Resource Orchestration
+
+As of v1.0.4, you can control exactly how many hardware units the service utilizes:
+
+- **`MAX_CUDA_UNITS`**: Caps NVIDIA GPUs utilized.
+- **`MAX_GPU_UNITS` / `MAX_NPU_UNITS`**: Caps Intel Silicon units.
+- **`MAX_CPU_UNITS`**: Caps concurrent multi-threaded CPU tasks (VAD, FFmpeg). Set to `AUTO` to let the system decide based on your core count.
+
 ## SSD Protection (RAM-disk)
 
 For high-volume transcription, it is highly recommended to use a `tmpfs` mount to protect your SSD from write wear.

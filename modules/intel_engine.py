@@ -5,12 +5,12 @@ This module provides a Whisper engine implementation optimized for Intel hardwar
 (NPU/GPU/CPU) using the OpenVINO GenAI pipeline.
 """
 # pylint: disable=broad-exception-caught, invalid-name, import-error
-# pylint: disable=import-outside-toplevel, too-few-public-methods
+# pylint: disable=too-few-public-methods
 import os
 import logging
 import numpy as np
 import openvino_genai as ov_genai
-from . import config
+from . import config, vad
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,6 @@ class IntelWhisperEngine:
 
         # Support direct path input
         if isinstance(audio_data, str):
-            from . import vad
             logger.debug("[Intel] Input is path, decoding: %s", audio_data)
             audio_data = vad.decode_audio(audio_data)
 
@@ -88,7 +87,6 @@ class IntelWhisperEngine:
     def _apply_vad(self, audio_data, **kwargs):
         """Apply Voice Activity Detection to suppress silence."""
         try:
-            from . import vad
             v_threshold = kwargs.get('vad_threshold', 0.35)
             v_min_silence = kwargs.get(
                 'min_silence_duration_ms', config.VAD_MIN_SILENCE_DURATION_MS)

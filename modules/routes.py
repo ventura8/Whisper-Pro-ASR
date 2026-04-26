@@ -2,18 +2,19 @@
 Flask API Endpoints for ASR and Language Detection
 
 This module defines the RESTful interface for the Whisper Pro ASR service,
-including health checks, hardware status, language identification, and 
+including health checks, hardware status, language identification, and
 multi-format transcription.
 """
 # pylint: disable=broad-exception-caught
 import logging
 import os
-import traceback
 import time
 import uuid
+import json
+import traceback
 
 from flask import Blueprint, request, jsonify, Response  # pylint: disable=import-error
-from . import config, model_manager, utils, language_detection
+from . import config, model_manager, utils, language_detection, dashboard
 
 # Blueprint for modular routing
 bp = Blueprint('api', __name__)
@@ -25,45 +26,31 @@ logger = logging.getLogger(__name__)
 @bp.route('/', methods=['GET'])
 def root():
     """
-    Service Health Check
+    Service Health Check / Dashboard
     ---
     tags:
       - System
-    summary: Verify service availability.
+    summary: Verify service availability or view dashboard.
     description: |
-      Exhaustive heartbeat endpoint providing basic service identity and status.
+        Returns the monitoring dashboard if accessed via browser, 
+        otherwise returns a standard JSON health check.
     produces:
       - application/json
+      - text/html
     responses:
       200:
         description: Service is reachable and healthy.
-        schema:
-          type: object
-          required: [message, status, app, version]
-          properties:
-            message:
-              type: string
-              description: Human-readable healthy confirmation.
-              example: "Whisper ASR Webservice is working"
-            status:
-              type: string
-              description: Current operational status.
-              example: "healthy"
-            app:
-              type: string
-              description: Application name.
-              example: "Whisper Pro ASR"
-            version:
-              type: string
-              description: Version string.
-              example: "1.0.1"
     """
-    logger.info("[System] Health check: OK")
+    if 'text/html' in request.headers.get('Accept', ''):
+        return dashboard.get_dashboard_html()
+
+    logger.info("[System] Health check (JSON): OK")
     return jsonify({
         "message": "Whisper ASR Webservice is working",
         "status": "healthy",
         "app": config.APP_NAME,
-        "version": config.VERSION
+        "version": config.VERSION,
+        "dashboard": f"{request.host_url}dashboard"
     })
 
 
@@ -76,7 +63,7 @@ def status():
       - System
     summary: Retrieve detailed system state.
     description: |
-      Returns the current application version, loaded ASR model identity, and 
+      Returns the current application version, loaded ASR model identity, and
       hardware engine status.
     produces:
       - application/json
@@ -102,14 +89,29 @@ def status():
               example: "loaded"
     """
     # pylint: disable=no-member
-    model_status = "loaded" if model_manager.WHISPER else "failed"
-    logger.info("[System] Status check: model=%s, version=%s",
-                model_status, config.VERSION)
-    return jsonify({
-        "version": config.VERSION,
-        "model": config.MODEL_ID,
-        "status": model_status
-    })
+    stats = dashboard.get_status_data()
+    logger.debug("[System] Status check: %d active, %d queued",
+                 stats["active_sessions"], stats["queued_sessions"])
+    return jsonify(stats)
+
+
+@bp.route('/dashboard', methods=['GET'])
+def render_dashboard():
+    """
+    Service Monitoring Dashboard
+    ---
+    tags:
+      - System
+    summary: Visual diagnostics interface.
+    description: |
+      Interactive Material Design dashboard for real-time service monitoring.
+    produces:
+      - text/html
+    responses:
+      200:
+        description: Dashboard HTML page.
+    """
+    return dashboard.get_dashboard_html()
 
 
 @bp.route('/admin', methods=['GET', 'POST'])
@@ -252,55 +254,82 @@ def detect_language():
       503:
         description: Inference engine unavailable or still warming up.
     """
-    start_time = time.time()
-    logger.info("[LD] Starting language detection request...")
-
-    if model_manager.WHISPER is None:
-        return "Model not loaded. Check server logs.", 503
-
-    # Acquire priority lock (pauses ongoing ASR tasks)
-    model_manager.request_priority()
     temp_path, clean_wav = None, None
+    model_manager.increment_active_session()
+    params = _get_all_request_params()
     try:
-        source_path, temp_path = _prepare_source_path()
-        if not source_path:
-            return "No input provided", 400
+        source_path, upload_temp, display_name = _prepare_source_path()
+        if display_name:
+            utils.THREAD_CONTEXT.filename = display_name
 
-        duration = utils.get_audio_duration(source_path)
-        logger.info("[LD] Processing file: %s (Duration: %s)",
-                    os.path.basename(source_path), utils.format_duration(duration))
+        # Capture caller and request info early for dashboard visibility
+        utils.THREAD_CONTEXT.caller_info = {
+            "ip": request.remote_addr,
+            "user_agent": request.headers.get('User-Agent', 'Unknown')
+        }
+        utils.THREAD_CONTEXT.request_json = params or {}
 
-        # Execution Phase (Multi-Zone Voting)
-        # Optimization: Pass the source_path (original video/audio) directly.
-        # language_detection will use FFmpeg to extract segments efficiently.
-        result = language_detection.run_voting_detection(
-            source_path, model_manager)
+        with model_manager.early_task_registration(
+            task_type="Language Detection",
+            stage="Waiting for Priority"
+        ):
 
-        if result and "detected_language" in result:
-            code = result["detected_language"]
-            # Align with ahmetoner/Bazarr: detected_language and language are codes
-            result["detected_language"] = code
-            result["language"] = code
-            result["language_code"] = code
-            # Provide full name in a dedicated field for clarity/user request
-            result["language_name"] = utils.LANGUAGES.get(code, code).lower()
+            # Acquire priority lock (pauses ongoing ASR tasks)
+            model_manager.request_priority()
+            temp_path = upload_temp  # Preserve for finally block
+            if not model_manager.is_engine_initialized():
+                model_manager.cleanup_failed_task()
+                return "Inference engines not initialized. Check server logs.", 503
 
-        _log_detection_result(result, start_time)
-        return jsonify(result)
+            logger.info("[LD] Starting language detection request...")
+            if not source_path:
+                model_manager.cleanup_failed_task()
+                return "No input provided", 400
 
-    except ValueError as err:
-        logger.warning("[LD] Input validation failed: %s", err)
-        return str(err), 400
-    except FileNotFoundError as err:
-        logger.error("Language detection failed (Missing File): %s", err)
-        return str(err), 404
+            duration = utils.get_audio_duration(source_path)
+            utils.THREAD_CONTEXT.total_duration = duration
+            model_manager.update_task_metadata(video_duration=duration)
+            logger.info("[LD] Processing file: %s (Duration: %s)",
+                        os.path.basename(source_path), utils.format_duration(duration))
+
+            # Audio Standardization Phase
+            model_manager.update_task_progress(0, "Standardizing Audio")
+            # We normalize to WAV first to ensure that voting heuristics (RMS scan)
+            # and Preprocessing (UVR) work correctly on video containers.
+            clean_wav, err_resp = _get_clean_wav_or_error(source_path)
+            if err_resp:
+                model_manager.cleanup_failed_task()
+                return err_resp
+
+            # Execution Phase (Multi-Zone Voting)
+            result = language_detection.run_voting_detection(
+                clean_wav, model_manager)
+
+            if result and "detected_language" in result:
+                code = result["detected_language"]
+                # Align with ahmetoner/Bazarr: detected_language and language are codes
+                result["detected_language"] = code
+                result["language"] = code
+                result["language_code"] = code
+                # Provide full name in a dedicated field for clarity/user request
+                result["language_name"] = utils.LANGUAGES.get(code, code).lower()
+
+            logger.info("[LD] Final Response JSON:\n%s", json.dumps(result, indent=2))
+            return jsonify(result)
+
+    except (ValueError, FileNotFoundError) as err:
+        err_status = 400 if isinstance(err, ValueError) else 404
+        logger.warning("[LD] Request failed: %s", err)
+        return str(err), err_status
     except Exception as err:
-        logger.error("Language detection failed (Runtime Error): %s", err)
+        logger.error("Language detection failed: %s", err)
         return f"Error: {str(err)}", 500
     finally:
         # Crucial: Always release lock
         model_manager.release_priority()
         _cleanup_files(temp_path, clean_wav)
+        # Register task completion and reclaim resources if idle
+        model_manager.decrement_active_session()
 
 
 # --- [TRANSCRIPTION ENDPOINTS] ---
@@ -316,7 +345,7 @@ def transcribe():
       - Transcription
     summary: Convert speech to text/subtitles with hardware acceleration.
     description: |
-      Processes media files into high-accuracy SRT or JSON. 
+      Processes media files into high-accuracy SRT or JSON.
       Supports native OpenVINO/CUDA acceleration and inherits full OpenAI compatibility.
       GET requests return 'ready' if the engine is initialized.
 
@@ -396,7 +425,7 @@ def transcribe():
         description: Transcription successfully completed.
         schema:
           type: object
-          required: 
+          required:
             - text
             - segments
             - language
@@ -498,51 +527,84 @@ def _handle_asr_request():
         return resp
 
     params = _get_all_request_params()
+    # Capture caller and request info
+    utils.THREAD_CONTEXT.caller_info = {
+        "ip": request.remote_addr,
+        "user_agent": request.headers.get('User-Agent', 'Unknown')
+    }
+    utils.THREAD_CONTEXT.request_json = params or {}
+
     request_start_time = time.time()
     preprocess_start = time.time()
-
     temp_path, clean_wav = None, None
     try:
-        source_path, temp_path = _prepare_source_path()
-        if not source_path:
-            return "No valid audio source or file provided.", 400
+        with model_manager.early_task_registration(
+            task_type="Transcription",
+            stage="Waiting for Priority"
+        ):
+            source_path, upload_temp, display_name = _prepare_source_path()
+            if display_name:
+                utils.THREAD_CONTEXT.filename = display_name
+                model_manager.update_task_metadata(filename=display_name)
 
-        logger.info("[ASR] Processing file: %s (Duration: %s)",
-                    os.path.basename(source_path),
-                    utils.format_duration(utils.get_audio_duration(source_path)))
+            temp_path = upload_temp  # Preserve for finally block
+            if not source_path:
+                model_manager.cleanup_failed_task()
+                return "No valid audio source or file provided.", 400
 
-        # Dynamic Language Detection
-        model_manager.wait_for_priority()
-        lang = _detect_language_if_needed(params.get('language'), source_path)
+            duration = utils.get_audio_duration(source_path)
+            utils.THREAD_CONTEXT.total_duration = duration
+            model_manager.update_task_metadata(video_duration=duration)
+            logger.info("[ASR] Processing file: %s (Duration: %s)",
+                        os.path.basename(source_path),
+                        utils.format_duration(duration))
 
-        # Audio Standardization Phase
-        clean_wav, err_resp = _get_clean_wav_or_error(source_path)
-        if err_resp:
-            return err_resp
+            # Dynamic Language Detection
+            model_manager.wait_for_priority()
+            lang = _detect_language_if_needed(params.get('language'), source_path)
 
-        stats = {'preprocess_dur': time.time() - preprocess_start}
+            # Audio Standardization Phase
+            model_manager.update_task_progress(0, "Standardizing Audio")
+            clean_wav, err_resp = _get_clean_wav_or_error(source_path)
+            if err_resp:
+                model_manager.cleanup_failed_task()
+                return err_resp
 
-        # ASR Inference Phase
-        stats['transcribe_dur'] = time.time()
-        result = model_manager.run_transcription(
-            clean_wav, lang, params.get('task', 'transcribe'),
-            params.get('batch_size', config.DEFAULT_BATCH_SIZE))
-        stats['transcribe_dur'] = time.time() - stats['transcribe_dur']
+            stats = {'preprocess_dur': time.time() - preprocess_start}
 
-        # Post-Processing & Stats
-        _calculate_and_log_stats(result, stats, request_start_time)
+            # ASR Inference Phase
+            stats['transcribe_dur'] = time.time()
+            result = model_manager.run_transcription(
+                clean_wav, lang, params.get('task', 'transcribe'),
+                params.get('batch_size', config.DEFAULT_BATCH_SIZE))
+            stats['transcribe_dur'] = time.time() - stats['transcribe_dur']
 
-        # Output Generation
-        base_name = os.path.splitext(os.path.basename(source_path))[0] \
-            if source_path else "transcription"
-        return _format_transcription_response(
-            result, params.get('output_format', 'srt'), filename=base_name)
+            # Output Generation
+            return _build_asr_response(result, params, stats, source_path, request_start_time)
 
     except Exception as err:
+        model_manager.cleanup_failed_task()
         return _handle_transcription_error(err)
 
     finally:
         _cleanup_files(temp_path, clean_wav)
+
+
+def _init_asr_context():
+    """Resolve source and set thread-local logging context."""
+    source_path, upload_temp, display_name = _prepare_source_path()
+    if display_name:
+        utils.THREAD_CONTEXT.filename = display_name
+    return source_path, upload_temp
+
+
+def _build_asr_response(result, params, stats, source_path, start_time):
+    """Refactored response builder to reduce locals in main handler."""
+    _calculate_and_log_stats(result, stats, start_time)
+    base_name = os.path.splitext(os.path.basename(source_path))[0] \
+        if source_path else "transcription"
+    return _format_transcription_response(
+        result, params.get('output_format', 'srt'), filename=base_name)
 
 
 def _calculate_and_log_stats(result, stats, request_start_time):
@@ -629,10 +691,10 @@ def _check_transcribe_preconditions():
     """Verify engine readiness before accepting heavy workloads."""
     # pylint: disable=no-member
     if request.method == 'GET':
-        m_status = "ready" if model_manager.WHISPER else "not_ready"
+        m_status = "ready" if model_manager.is_engine_initialized() else "not_ready"
         return Response(m_status, mimetype='text/plain'), True
 
-    if model_manager.WHISPER is None:
+    if not model_manager.is_engine_initialized():
         return ("Model not loaded. Service is warming up or failed to start.", 503), True
 
     return None, False
@@ -640,6 +702,17 @@ def _check_transcribe_preconditions():
 
 def _format_transcription_response(result, output_format, filename="transcription"):
     """Encode the final result into the requested delivery format."""
+
+    # Generate a loggable preview (JSON summary) for all output formats
+    # This ensures the user sees the metadata and a snippet of segments in the logs
+    log_result = result.copy()
+    if 'segments' in log_result:
+        actual_count = len(result.get('segments', []))
+        log_result['segments'] = log_result['segments'][:3]
+        if actual_count > 3:
+            log_result['segments_info'] = f"Truncated from {actual_count} to 3 for logging"
+
+    logger.info("[ASR] Final Result (JSON Preview):\n%s", json.dumps(log_result, indent=2))
 
     # 1. JSON Responses
     if output_format == 'json':
@@ -687,18 +760,18 @@ def _prepare_source_path():
     if raw_path:
         p = _resolve_local_path(raw_path)
         if p:
-            return p, None
+            return p, None, os.path.basename(p)
 
     # 2. Upload Processing (Standard Whisper Behavior / Fallback)
-    tmp_path, temp_path = _handle_upload()
+    tmp_path, temp_path, original_filename = _handle_upload()
     if tmp_path:
-        return tmp_path, temp_path
+        return tmp_path, temp_path, original_filename
 
     if raw_path:
         raise ValueError(
             f"Path not accessible: {raw_path} (Volumes unmapped and no audio data attached)")
 
-    return None, None
+    return None, None, None
 
 
 def _get_raw_path():
@@ -733,16 +806,17 @@ def _handle_upload():
     """Handle binary file upload."""
     audio_file = request.files.get('audio_file') or request.files.get('file')
     if not audio_file:
-        return None, None
+        return None, None, None
 
-    logger.info("[System] Ingesting remote data: %s", audio_file.filename)
+    original_filename = audio_file.filename or "uploaded_file"
+    logger.info("[System] Ingesting remote data: %s", original_filename)
     tmp_path = None
     try:
         # SAFETY: Ensure we're at the beginning of the binary stream
         if hasattr(audio_file.stream, 'seek'):
             try:
                 audio_file.stream.seek(0)
-            except Exception: # pylint: disable=broad-exception-caught
+            except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
         # Save to temporary storage with extension hint
@@ -783,13 +857,13 @@ def _handle_upload():
                 "Input file is corrupted (contains only null bytes).")
 
         logger.info("[System] Remote source ingestion successful: %d bytes (Streamed)", f_size)
-        return tmp_path, tmp_path
+        return tmp_path, tmp_path, original_filename
     except Exception as e:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise e
 
-    return None, None
+    return None, None, None
 
 
 def _get_all_request_params():
@@ -904,3 +978,31 @@ def _log_request_stats(stats):
         utils.format_duration(stats['post_dur']),
         stats.get('segment_count', 0)
     )
+
+
+@bp.route('/settings', methods=['POST'])
+def update_settings():
+    """Update service settings."""
+    data = request.json
+    if not data:
+        return "Missing JSON body", 400
+    from . import telemetry_manager
+    telemetry_manager.update_retention(
+        telemetry_hours=data.get('telemetry_retention_hours'),
+        log_days=data.get('log_retention_days')
+    )
+    return jsonify({"status": "success"})
+
+
+@bp.route('/logs/download')
+def download_logs():
+    """Download the persistent system log file."""
+    from . import logging_setup
+    from flask import send_file
+    if os.path.exists(logging_setup.LOG_FILE):
+        return send_file(
+            logging_setup.LOG_FILE,
+            as_attachment=True,
+            download_name="whisper_pro.log"
+        )
+    return "Log file not found", 404

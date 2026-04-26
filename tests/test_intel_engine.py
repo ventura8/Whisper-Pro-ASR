@@ -1,5 +1,6 @@
 """Tests for modules/intel_engine.py using mocks."""
 # pylint: disable=protected-access, import-error, no-member, reimported, wrong-import-order, wrong-import-position
+from modules import intel_engine
 import sys
 from unittest import mock
 import numpy as np
@@ -9,7 +10,6 @@ import pytest
 import importlib
 mock_genai = mock.MagicMock()
 sys.modules['openvino_genai'] = mock_genai
-from modules import intel_engine
 importlib.reload(intel_engine)
 
 
@@ -190,7 +190,7 @@ class TestIntelWhisperEngine:
             "Config error")
 
         with mock.patch("openvino_genai.WhisperGenerationConfig") as mock_gen_config_cls:
-            mock_conf = mock_gen_config_cls.return_value # pylint: disable=unused-variable
+            mock_conf = mock_gen_config_cls.return_value  # pylint: disable=unused-variable
             mock_result = mock.MagicMock()
             engine.pipeline.generate.return_value = mock_result
 

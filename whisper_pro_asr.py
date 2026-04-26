@@ -6,18 +6,60 @@ It manages dynamic hardware context resolution (Intel NPU vs NVIDIA GPU),
 orchesTrates the Flask application lifecycle, and triggers eager AI 
 model loading to ensure zero-latency first requests.
 """
+from modules import config, logging_setup, model_manager, routes, utils
+from flask import Flask, request  # pylint: disable=import-error
+from flasgger import Swagger  # pylint: disable=import-error
 import os
 import sys
 import logging
 import importlib
 import time
-
-from flasgger import Swagger  # pylint: disable=import-error
-from flask import Flask, request  # pylint: disable=import-error
-
-from modules import config, logging_setup, model_manager, routes, utils
+try:
+    import ctranslate2
+except ImportError:
+    ctranslate2 = None
 
 # --- [DYNAMIC HARDWARE CONTEXT LOADER] ---
+
+
+def _setup_boot_logger():
+    """Initialize a thread-safe logger for the bootstrap phase."""
+    boot_logger = logging.getLogger("Bootstrap")
+    if not boot_logger.handlers:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+        boot_logger.addHandler(sh)
+        boot_logger.setLevel(logging.INFO)
+        boot_logger.propagate = False
+    return boot_logger
+
+
+def _detect_hardware():
+    """Probe system environment for available hardware acceleration."""
+    def env_map(key):
+        return os.environ.get(key, "AUTO").upper()
+
+    req_asr = env_map("ASR_DEVICE")
+    req_prep = env_map("ASR_PREPROCESS_DEVICE")
+
+    # Priority 1: User-defined hardware overrides
+    if "CUDA" in [req_asr, req_prep]:
+        return True, "Explicit CUDA override"
+    if any(d in ["NPU", "GPU", "CPU"] for d in [req_asr, req_prep]):
+        return False, f"Explicit Intel/Generic override ({req_asr}/{req_prep})"
+
+    # Priority 2: Automated hardware-assisted probing
+    if os.path.exists("/proc/driver/nvidia/version"):
+        return True, "Detected NVIDIA Silicon (/proc)"
+
+    try:
+        # Use a lightweight probe via ctranslate2 if available in base path
+        if ctranslate2 and ctranslate2.get_cuda_device_count() > 0:
+            return True, f"Detected {ctranslate2.get_cuda_device_count()} NVIDIA GPU(s) (Probe)"
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+    return False, "Assuming Intel/CPU Silicon"
 
 
 def _initialize_hardware_path():
@@ -41,49 +83,11 @@ def _initialize_hardware_path():
                          context_reason, target_lib)
 
 
-def _detect_hardware():
-    """Probe system environment for available hardware acceleration."""
-    def env_map(key):
-        return os.environ.get(key, "AUTO").upper()
-
-    req_asr = env_map("ASR_DEVICE")
-    req_prep = env_map("ASR_PREPROCESS_DEVICE")
-
-    # Priority 1: User-defined hardware overrides
-    if "CUDA" in [req_asr, req_prep]:
-        return True, "Explicit CUDA override"
-    if any(d in ["NPU", "GPU", "CPU"] for d in [req_asr, req_prep]):
-        return False, f"Explicit Intel/Generic override ({req_asr}/{req_prep})"
-
-    # Priority 2: Automated hardware-assisted probing
-    if os.path.exists("/proc/driver/nvidia/version"):
-        return True, "Detected NVIDIA Silicon (/proc)"
-
-    try:
-        # Use a lightweight probe via ctranslate2 if available in base path
-        import ctranslate2 # pylint: disable=import-outside-toplevel, import-error
-        if ctranslate2.get_cuda_device_count() > 0:
-            return True, f"Detected {ctranslate2.get_cuda_device_count()} NVIDIA GPU(s) (Probe)"
-    except Exception: # pylint: disable=broad-exception-caught
-        pass
-
-    return False, "Assuming Intel/CPU Silicon"
-
-
-def _setup_boot_logger():
-    """Initialize a thread-safe logger for the bootstrap phase."""
-    boot_logger = logging.getLogger("Bootstrap")
-    if not boot_logger.handlers:
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-        boot_logger.addHandler(sh)
-        boot_logger.setLevel(logging.INFO)
-        boot_logger.propagate = False
-    return boot_logger
-
-
-# Execute path patching before any heavy AI modules are initialized
+# Execute path patching BEFORE any other imports to ensure library priority
 _initialize_hardware_path()
+
+# pylint: disable=wrong-import-position
+
 
 # pylint: disable=wrong-import-position
 
@@ -184,17 +188,19 @@ def create_app():
         except Exception as e:  # pylint: disable=broad-exception-caught
             body_log = f" | Metadata Error: {str(e)}"
 
-        logger.info(">>> %s %s [Source: %s]%s",
-                    request.method, request.path, client_ip, body_log)
+        log_func = logger.debug if request.path in ["/status", "/"] else logger.info
+        log_func(">>> %s %s [Source: %s]%s",
+                 request.method, request.path, client_ip, body_log)
 
     @flask_app.after_request
     def log_request_done(response):
         """Finalize telemetry and inject CORS permits."""
         duration = time.time() - getattr(request, 'start_time', time.time())
 
-        logger.info("<<< %s %s [%d] | Latency: %s",
-                    request.method, request.path, response.status_code,
-                    utils.format_duration(duration))
+        log_func = logger.debug if request.path in ["/status", "/"] else logger.info
+        log_func("<<< %s %s [%d] | Latency: %s",
+                 request.method, request.path, response.status_code,
+                 utils.format_duration(duration))
 
         # Modern CORS policy
         response.headers.add('Access-Control-Allow-Origin', '*')

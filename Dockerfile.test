@@ -1,8 +1,7 @@
-FROM python:3.11-slim
+# Stage 1: Base - Install dependencies and cache them
+FROM python:3.11-slim AS base
 
 USER root
-
-# Force unbuffered logging for progress bars
 ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
@@ -19,9 +18,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 WORKDIR /app
 
-# Copy the source code
+# Stage 2: Lint - Run static analysis (Cached by Docker)
+FROM base AS lint
 COPY . .
-RUN chmod +x tests/run_suite.sh
+RUN yamllint -c .yamllint . && \
+    python3 -m autopep8 --diff --exit-code --recursive --max-line-length 100 modules tests whisper_pro_asr.py scripts && \
+    python3 -m pylint modules tests whisper_pro_asr.py --recursive=y
+
+# Stage 3: Test - Final image for running integration tests
+FROM base AS test
+COPY . .
+RUN sed -i 's/\r$//' tests/run_suite.sh && chmod +x tests/run_suite.sh
 
 # Default command
 CMD ["/bin/bash", "tests/run_suite.sh"]

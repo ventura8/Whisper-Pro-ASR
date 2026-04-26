@@ -2,6 +2,8 @@
 import sys
 from unittest import mock
 import pytest
+import modules.preprocessing as prep_module
+import modules.vad as vad_module
 
 # Create universal mocks for ML dependencies
 # This prevents different test files from conflicting and avoids
@@ -31,12 +33,34 @@ mock_torch.full = lambda size, _v, **kwargs: mock_tensor_with_shape(*size)
 # Pytest fixtures for test isolation
 
 
+@pytest.fixture
+def client():
+    """Flask test client with full orchestration mocks."""
+    from whisper_pro_asr import app
+    with mock.patch('modules.dashboard.psutil') as mock_psu, \
+            mock.patch('modules.dashboard._PROCESS_OBJ') as mock_proc:
+
+        mock_psu.cpu_percent.return_value = 10.0
+        mock_psu.cpu_count.return_value = 8
+        from argparse import Namespace
+        mock_psu.virtual_memory.return_value = Namespace(
+            percent=50.0,
+            used=8 * (1024**3),
+            total=16 * (1024**3)
+        )
+
+        mock_proc.memory_info.return_value = Namespace(rss=1 * (1024**3))
+        mock_proc.cpu_percent.return_value = 5.0
+
+        app.config['TESTING'] = True
+        with app.test_client() as test_client:
+            yield test_client
+
+
 @pytest.fixture(autouse=True)
 def reset_module_state():
     """Reset module-level state between tests to prevent test pollution."""
-    # pylint: disable=import-outside-toplevel, protected-access
-    import modules.preprocessing as prep_module
-    import modules.vad as vad_module
+    # pylint: disable=protected-access
 
     # Force reset module state before test
     prep_module._INSTANCE = None
@@ -44,6 +68,7 @@ def reset_module_state():
     prep_module.ort = None
     vad_module._MODEL = None
     vad_module._UTILS = None
+    # dash_module._PROCESS_OBJ = None
 
     yield
 
@@ -97,7 +122,17 @@ mock_ctranslate2.get_cuda_device_count = mock.MagicMock(return_value=0)
 sys.modules['ctranslate2'] = mock_ctranslate2
 
 # Utility mocks
-sys.modules['psutil'] = mock.MagicMock()
+mock_psutil = mock.MagicMock()
+mock_process = mock.MagicMock()
+mock_psutil.cpu_percent.return_value = 10.0
+mock_psutil.cpu_count.return_value = 8
+mock_psutil.virtual_memory.return_value.percent = 50.0
+mock_psutil.virtual_memory.return_value.used = 8 * (1024**3)
+mock_psutil.virtual_memory.return_value.total = 16 * (1024**3)
+mock_process.cpu_percent.return_value = 10.0
+mock_process.memory_info.return_value = mock.MagicMock(rss=100 * 1024 * 1024)
+mock_psutil.Process.return_value = mock_process
+sys.modules['psutil'] = mock_psutil
 sys.modules['tqdm'] = mock.MagicMock()
 sys.modules['pydub'] = mock.MagicMock()
 sys.modules['pydub.AudioSegment'] = mock.MagicMock()

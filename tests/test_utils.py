@@ -42,9 +42,10 @@ def test_convert_to_wav_subprocess_error():
         with mock.patch("os.path.exists", return_value=True):
             with mock.patch("os.path.getsize", return_value=123):
                 with mock.patch("os.remove") as mock_remove:
-                    res = utils.convert_to_wav("input.mp3")
-                    assert res is None
-                    mock_remove.assert_called()
+                    with mock.patch("modules.config.get_temp_dir", return_value="/tmp"):
+                        res = utils.convert_to_wav("input.mp3")
+                        assert res is None
+                        mock_remove.assert_called()
 
 
 def test_convert_to_wav_generic_error():
@@ -53,9 +54,10 @@ def test_convert_to_wav_generic_error():
         with mock.patch("os.path.exists", return_value=True):
             with mock.patch("os.path.getsize", return_value=123):
                 with mock.patch("os.remove") as mock_remove:
-                    res = utils.convert_to_wav("input.mp3")
-                    assert res is None
-                    mock_remove.assert_called()
+                    with mock.patch("modules.config.get_temp_dir", return_value="/tmp"):
+                        res = utils.convert_to_wav("input.mp3")
+                        assert res is None
+                        mock_remove.assert_called()
 
 
 def test_get_audio_duration_success():
@@ -203,6 +205,7 @@ def test_convert_to_wav_logging_coverage():
                         # Just ensure it runs without error and exercises the logging block
                         utils.convert_to_wav("input.mp3")
 
+
 class TestUtilsEdgeCases:
     """Uncovered edge cases in utils.py."""
 
@@ -223,8 +226,9 @@ class TestUtilsEdgeCases:
                 with mock.patch("os.path.exists", return_value=True):
                     with mock.patch("os.path.getsize", return_value=123):
                         with mock.patch("os.remove", side_effect=Exception("Perm error")):
-                            # Should catch the exception on remove and return None
-                            assert utils.convert_to_wav("in.mp3") is None
+                            with mock.patch("modules.config.get_temp_dir", return_value="/tmp"):
+                                # Should catch the exception on remove and return None
+                                assert utils.convert_to_wav("in.mp3") is None
 
     def test_parse_ffmpeg_progress_invalid_line(self):
         """Test _parse_ffmpeg_progress handles malformed status lines."""
@@ -250,7 +254,8 @@ class TestUtilsEdgeCases:
         """Test generate_tsv handles exceptions inside the segment loop."""
         res = {"segments": [None]}
         tsv = utils.generate_tsv(res)
-        assert "start\tend\ttext" in tsv # Header only
+        assert "start\tend\ttext" in tsv  # Header only
+
 
 def test_convert_to_wav_uses_temp_dir():
     """Test that convert_to_wav uses config.get_temp_dir."""

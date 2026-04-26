@@ -10,10 +10,31 @@ import os
 import tempfile
 import subprocess
 import logging
+import threading
+import contextlib
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from . import config
 
+# Global thread-local storage for request context (e.g. filename tracking)
+THREAD_CONTEXT = threading.local()
+
 logger = logging.getLogger(__name__)
+
+# --- [GLOBAL CONCURRENCY CONTROL] ---
+# Semaphore to limit CPU-bound tasks (ASR, UVR on CPU, FFmpeg)
+_CPU_LOCK = threading.Semaphore(config.CPU_PARALLEL_LIMIT)
+
+
+@contextlib.contextmanager
+def cpu_lock_ctx():
+    """Context manager for CPU-heavy tasks to prevent core over-subscription."""
+    with _CPU_LOCK:
+        yield
+
 
 # --- [FFMPEG STANDARDS] ---
 # Broadcast-grade audio normalization settings
@@ -62,12 +83,12 @@ def convert_to_wav(source_path):
         logger.info("[Prep] Normalization sequence completed successfully.")
         return output_path
 
-    except Exception as err: # pylint: disable=broad-exception-caught
+    except Exception as err:  # pylint: disable=broad-exception-caught
         logger.error("[Prep] Media standardization failed: %s", err)
         if os.path.exists(output_path):
             try:
                 os.remove(output_path)
-            except Exception: # pylint: disable=broad-exception-caught
+            except Exception:  # pylint: disable=broad-exception-caught
                 pass
         return None
 
@@ -75,7 +96,7 @@ def convert_to_wav(source_path):
 def _run_ffmpeg_standardization(source_path, output_path, duration):
     """Execute FFmpeg command with progress tracking."""
     command = [
-        "ffmpeg", 
+        "ffmpeg",
         "-threads", str(config.FFMPEG_THREADS),
         "-thread_queue_size", "2048",
         "-y",
@@ -288,11 +309,48 @@ LANGUAGES = {
     "ln": "Lingala", "ha": "Hausa", "ba": "Bashkir", "jw": "Javanese", "su": "Sundanese"
 }
 
+
+def secure_remove(file_path):
+    """Safely remove a file if it exists, ignoring errors."""
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
+
+
 def clear_gpu_cache():
     """Trigger explicit hardware cache reclamation if CUDA is present."""
     try:
-        import torch  # pylint: disable=import-outside-toplevel, import-error
-        if torch.cuda.is_available():
+        if torch and torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception:
         pass
+
+
+def get_pretty_model_name(model_path):
+    """Convert technical model identifiers to human-readable names."""
+    if not model_path:
+        return "Unknown Engine"
+
+    name = str(model_path).rsplit('/', maxsplit=1)[-1]
+
+    # Common mappings
+    mappings = {
+        "faster-whisper-large-v3": "Whisper Large v3",
+        "faster-whisper-medium": "Whisper Medium",
+        "faster-whisper-small": "Whisper Small",
+        "faster-whisper-base": "Whisper Base",
+        "faster-whisper-tiny": "Whisper Tiny",
+        "UVR-MDX-NET-Inst_HQ_3.onnx": "Vocal Isolation HQ",
+        "UVR-MDX-NET-Voc_FT.onnx": "Vocal Isolation FT",
+        "silero_vad.onnx": "Silero VAD",
+        "whisper": "Whisper Engine"
+    }
+
+    for key, pretty in mappings.items():
+        if key in name:
+            return pretty
+
+    # Cleanup path and return
+    return name.replace('.onnx', '').replace('_', ' ').title()

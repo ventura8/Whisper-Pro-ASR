@@ -1,87 +1,107 @@
 # Technical Architecture
- 
+
+Whisper Pro v1.0.4 implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX).
+
 ## 🧬 Module Ecosystem
- 
+
 | Component | Responsibility |
 |:---|:---|
-| `config.py` | Centralized environment management and application constants. |
-| `logging_setup.py` | Orchestrates structured logging, hardware banners, and transformer filter stacks. |
-| `model_manager.py` | Manages Faster-Whisper lifecycles, VAD integration, and priority task scheduling. |
-| `preprocessing.py` | UVR/MDX-NET isolation engine with optimized ONNX/OpenVINO backend patching. |
+| `config.py` | Centralized hardware detection (CUDA/NPU/iGPU) and unit pool initialization. |
+| `logging_setup.py` | Orchestrates hardware banners and thread-local context filtering. |
+| `model_manager.py` | Manages the **Unit Pool**, model instance lifecycles, and **Re-entrant Hardware Locks**. |
+| `preprocessing.py` | Vocal isolation engine with unit-specific context pinning. |
 | `routes.py` | Flask API layer implementing RESTful endpoints and OpenAI-compatible aliases. |
-| `language_detection.py` | Dynamic single-chunk identification with automated duration-based scaling. |
-| `utils.py` | Managed FFmpeg normalization and millisecond-accurate SRT generation. |
-| `vad.py` | Silero Voice Activity Detection (VAD) for signal trimming and silence suppression. |
- 
+| `language_detection.py` | Multi-zone strategic sampling with **Global VAD** and batch inference. |
+| `utils.py` | Managed FFmpeg normalization and **16kHz WAV Standardization**. |
+| `vad.py` | Silero Voice Activity Detection (VAD) optimized for batch in-memory buffers. |
+
+### 🧩 Hardware Compatibility Matrix
+| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
+| :--- | :---: | :---: | :---: | :---: |
+| **Media Standardization** | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+
 ---
- 
+
 ## 🏎 Processing Pipelines
- 
+
 ### Transcription Flow (/asr)
-1. **Ingress**: Media is received and analyzed for duration/metadata via `ffprobe`.
-2. **Pre-Detection**: If the source language is unknown, the engine performs **Optimized Language ID** using source media segments *before* full-file processing.
-3. **Standardization**: FFmpeg converts the source stream to **16kHz MONO WAV** with `-loudnorm` filtering, utilizing the project's global audio standard.
-4. **UVR Isolation (Optional)**: If enabled, the signal is passed through the MDX-NET isolator to remove background noise/music.
-5. **VAD Alignment**: Silero identifies active speech regions to prevent hallucinations in silent periods.
-6. **Inference**: The `model_manager` executes batched Faster-Whisper generation with real-time speed telemetry.
-7. **Finalization**: Subtitles are generated and a millisecond-precision SRT or structured JSON is returned.
- 
+```mermaid
+graph TD
+    A["Source Media"] --> STD["Standardization: 16kHz WAV"]
+    STD -->|Check| L{"Lang Given?"}
+    L -->|No| LD["Optimized Language ID"]
+    L -->|Yes| PRE["Preprocessing (UVR)"]
+    LD --> PRE
+    
+    subgraph CORE ["Heterogeneous Engine Pool"]
+    PRE -->|16kHz Mono| C{"Isolation?"}
+    C -->|Enabled| D["UVR Separation (Re-entrant Lock)"]
+    C -->|Disabled| E["Standard Signal"]
+    
+    D --> VAD{"Single-Pass VAD"}
+    VAD -->|Isolated Silent| E
+    VAD -->|Isolated Speech| F["Processing Signal"]
+    E --> F
+    
+    F --> G["Faster-Whisper Inference"]
+    G -->|Heterogeneous Parallel| H{"Unit Pool"}
+    H -->|NVIDIA| I["CUDA Acceleration"]
+    H -->|Intel| J["CPU (NPU-Pinned Prep)"]
+    I --> K["Final Assembly"]
+    J --> K
+    end
+```
+
 ### Priority Detection Flow (/detect-language)
-1. **Dynamic Scaling**: The engine calculates an optimal chunk size (minimum 5 minutes, 5% of total duration) to ensure representative audio capture.
-2. **Optimized Extraction**: FFmpeg extracts this single chunk directly from the source media, bypassing full-file normalization.
-3. **Single-Pass Inference**: A high-confidence inference pass is performed on the extracted chunk (with optional UVR isolation).
-4. **ID**: The most probable language is selected and returned with detailed probability metadata.
- 
+```mermaid
+graph TD
+    START["Detection Request"] --> STD["Standardization: 16kHz WAV"]
+    STD --> SAMPLING["Strategic Sampling: 3-15 Zones"]
+    SAMPLING --> MONTAGE["Batch Montage: FFmpeg Concat"]
+    
+    subgraph BATCH ["Consolidated Batch Pipeline"]
+    MONTAGE --> ISOLATE["UVR Isolation (Single Pass)"]
+    ISOLATE --> VAD["Global VAD Scan (One Pass)"]
+    VAD --> BATCH_INF["Batch Inference Session"]
+    
+    subgraph LOOP ["In-Memory Slicing"]
+    BATCH_INF --> SLICE["NumPy 30s Slice"]
+    SLICE --> SPEECH{"Has Speech?"}
+    SPEECH -->|Yes| ID["Whisper Identification (No VAD)"]
+    SPEECH -->|No| NEXT["Next Slice"]
+    ID --> NEXT
+    end
+    
+    NEXT -->|All Done| VOTE["Squared Weighting Vote"]
+    VOTE --> RETURN
+    end
+```
+
 ---
- 
-## 🔒 Concurrency & Pre-emption
- 
-Whisper Pro implements a sophisticated **Priority Scheduling** system to manage shared hardware assets (NPU/GPU):
- 
-- **Task Serialization**: transcription requests are managed via a sequential queue to ensure stable memory pressure.
-- **Priority Signal**: When a `/detect-language` request arrives, it sets a global `_PAUSE_REQUESTED` event.
-- **Yielding Mechanism**:
-    1. The active ASR loop checks for the pause event at the end of every segment.
-    2. The ASR thread releases its model lock and hardware assets.
-    3. The high-priority Detection task acquires the **Sequential Priority Lock** and utilizes the hardware.
-    4. Upon completion, the Detection task releases assets and signals the `_RESUME_EVENT`.
-    5. The paused ASR thread re-acquires its lock and restores the inference state.
- 
+
+## 🔒 Granular Resource Orchestration
+
+### 1. Re-entrant Hardware Locks
+The system implements a **Thread-Local Re-entrant Locking Pattern** via `model_lock_ctx()`. This allows a high-level task (like a full transcription request) to "claim" a hardware unit once and share it across all internal sub-stages:
+1.  **Vocal Isolation (UVR)**
+2.  **Language Identification (Whisper)**
+3.  **ASR Transcription (Whisper)**
+
+This prevents deadlocks where a task might release a unit between stages and be unable to reclaim it due to high queue volume.
+
+### 2. SSD Write Protection (Deferred Persistence)
+To prevent hardware wear on SSD-based deployments, the system utilizes a **Dual-Path Persistence Engine**:
+- **Transient State**: Telemetry snapshots and real-time logs are stored in `STATE_DIR` (RAM-disk).
+- **Persistent Audit**: Task history is managed in a RAM cache and only flushed to the physical `task_history.json` on the SSD every 10 tasks or 1 hour.
+
 ---
- 
-## 🚀 Hardware Tuning & Optimizations
- 
-### OpenVINO (Intel Silicon)
-- **Static Reshaping**: When targeting Intel NPU, the computational graph is reshaped into static dimensions to avoid runtime re-compilation.
-- **Persistent Cache**: Compiled model blobs are cached in `OV_CACHE_DIR`, reducing startup time from minutes to seconds.
-- **Performance Hints**: The engine dynamically toggles between `LATENCY` (single-request) and `THROUGHPUT` (batch) hints based on `ASR_BATCH_SIZE`.
- 
-### CUDA (NVIDIA Silicon)
-- **CUDNN Tuning**: Leverages standard NVIDIA optimizations for high-speed half-precision (FP16/BF16) inference.
-- **Batching**: Optimized for multi-segment parallel processing to saturate GPU compute cores.
- 
-### Runtime Patching
-The service applies a series of recursive monkey-patches to **ONNX Runtime** and **audio-separator** to:
-- Enforce strict thread limits (avoiding system-wide CPU starvation).
-- Prioritize specific execution providers (OpenVINO vs CUDA) without environment pollution.
-- Capture sub-segment progress telemetry for real-time Flask updates.
- 
----
- 
-## 💾 SSD Write Optimization
- 
-To ensure longevity on SSD-backed hosts (common in Docker environments), Whisper Pro implements a **Transient RAM-Bypass** strategy:
- 
-- **Centralized Temp Store**: All high-frequency write operations (FFmpeg re-encoding, file uploads, UVR stems) are redirected to a single `WHISPER_TEMP_DIR`.
-- **tmpfs Integration**: By mounting this directory as `tmpfs` (RAM-disk), the service eliminates physical SSD wear for transient files.
-- **Dynamic Overflow Protection**: The engine monitors available space in the temp directory. If a file (e.g., a 4h+ movie) exceeds available RAM-disk space, the engine automatically falls back to the system's physical disk to ensure processing completes.
-- **Transient Preprocessing**: Unlike model blobs which remain in persistent cache, intermediate UVR stems are stored in the temp directory and purged immediately after use.
- 
----
- 
+
 ## 🏛 Hardware Interface & Host Dependencies
- 
-To maintain high performance without compromising security, Whisper Pro separates the **AI Runtime** (inside the container) from the **Hardware Drivers** (on the Host):
- 
-- **Intel NPU/GPU**: Leverages the official `/dev/dri` and `/dev/accel` nodes. These are typically standard Linux device files and can be passed through via `devices:` mapping.
-- **NVIDIA CUDA**: While the container includes CUDA 12.8 libraries, it requires the **NVIDIA Container Toolkit on the host. This toolkit handles the "injection" of host-specific `.so` driver files into the container namespace during startup, ensuring perfect alignment between the container's math operations and the host's physical GPU.
+
+- **Intel NPU/GPU**: Leverages `/dev/dri` and `/dev/accel` nodes.
+- **NVIDIA CUDA**: Requires the **NVIDIA Container Toolkit** on the host.
+- **SSD Optimization**: All transient I/O is redirected to a RAM-backed `tmpfs` volume to prevent physical wear.
+- **Standardization Layer**: All incoming media (MKV, AVI, MP4, etc.) is standardized to 16kHz Mono WAV before entering the pipeline, ensuring consistent results across all formats.

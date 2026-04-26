@@ -1,9 +1,18 @@
 """Tests for modules/logging_setup.py"""
-# pylint: disable=import-outside-toplevel, attribute-defined-outside-init
-# pylint: disable=consider-using-from-import
 import os
 import logging
+import importlib
 from unittest import mock
+from modules.logging_setup import (
+    IgnoreSpecificWarnings,
+    log_banner,
+    _get_device_properties,
+    LOGGERS_TO_FILTER,
+    _get_real_model_name,
+    _unique_device_props,
+    _banner_config_lines
+)
+from modules import logging_setup, config
 
 
 class TestIgnoreSpecificWarnings:
@@ -12,7 +21,6 @@ class TestIgnoreSpecificWarnings:
     def setup_method(self):
         """Set up test fixtures."""
         # Import the filter class
-        from modules.logging_setup import IgnoreSpecificWarnings
         self.filter = IgnoreSpecificWarnings()
 
     def _create_record(self, message):
@@ -74,7 +82,6 @@ class TestIgnoreSpecificWarnings:
 
     def test_ignore_warnings_repr(self):
         """Cover line 52."""
-        from modules.logging_setup import IgnoreSpecificWarnings
         assert repr(IgnoreSpecificWarnings()) == "IgnoreSpecificWarnings()"
 
 
@@ -84,7 +91,6 @@ class TestLogBanner:
     def test_log_banner_logs_version(self):
         """Test that banner includes version name."""
         with mock.patch("modules.logging_setup.logger") as mock_logger:
-            from modules.logging_setup import log_banner
             log_banner()
 
             # Collect all logged messages, handle lazy formatting
@@ -110,7 +116,6 @@ class TestLogBanner:
             with mock.patch("modules.logging_setup.os.listdir") as mock_listdir:
                 mock_listdir.return_value = ["dummy_file"]
                 with mock.patch("modules.logging_setup.logger") as mock_logger:
-                    from modules.logging_setup import log_banner
                     log_banner()
 
                     logged_messages = []
@@ -132,7 +137,6 @@ class TestLogBanner:
         with mock.patch("modules.logging_setup.os.path.exists") as mock_exists:
             mock_exists.return_value = False
             with mock.patch("modules.logging_setup.logger") as mock_logger:
-                from modules.logging_setup import log_banner
                 log_banner()
 
                 logged_messages = []
@@ -152,7 +156,6 @@ class TestLogBanner:
     def test_log_banner_shows_configuration(self):
         """Test banner shows configuration section."""
         with mock.patch("modules.logging_setup.logger") as mock_logger:
-            from modules.logging_setup import log_banner
             log_banner()
 
             logged_messages = []
@@ -195,7 +198,6 @@ class TestLogBanner:
             mock_conf.ENABLE_VOCAL_SEPARATION = True
 
             with mock.patch("modules.logging_setup.logger") as mock_logger:
-                from modules.logging_setup import log_banner
                 log_banner()
 
                 logged_messages = []
@@ -220,8 +222,7 @@ class TestGetDeviceProperties:
 
     def test_get_device_properties_no_openvino(self):
         """Test _get_device_properties when OpenVINO is not available."""
-        with mock.patch.dict("sys.modules", {"openvino": None}):
-            from modules.logging_setup import _get_device_properties
+        with mock.patch("modules.logging_setup.Core", None):
             device_name, info = _get_device_properties("NPU")
             assert device_name == "NPU"
             assert not info
@@ -239,9 +240,8 @@ class TestGetDeviceProperties:
         }.get(prop, None)
 
         mock_ov = mock.MagicMock()
-        mock_ov.Core.return_value = mock_core
-        with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
-            from modules.logging_setup import _get_device_properties
+        mock_ov.return_value = mock_core
+        with mock.patch("modules.logging_setup.Core", mock_ov):
             device_name, info = _get_device_properties("NPU")
             assert device_name == "Intel(R) AI Boost"
             # Labels: Architecture, Driver Version, Uuid
@@ -259,10 +259,8 @@ class TestGetDeviceProperties:
         mock_core.get_property.side_effect = Exception("No property")
 
         mock_ov = mock.MagicMock()
-        mock_ov.Core.return_value = mock_core
-
-        with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
-            from modules.logging_setup import _get_device_properties
+        mock_ov.return_value = mock_core
+        with mock.patch("modules.logging_setup.Core", mock_ov):
             name, _ = _get_device_properties("GPU")
             assert name == "GPU.0"
 
@@ -278,9 +276,8 @@ class TestGetDeviceProperties:
         }.get(prop, None)
 
         mock_ov = mock.MagicMock()
-        mock_ov.Core.return_value = mock_core
-        with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
-            from modules.logging_setup import _get_device_properties
+        mock_ov.return_value = mock_core
+        with mock.patch("modules.logging_setup.Core", mock_ov):
             _, info = _get_device_properties("NPU")
             # Labels: Range For Streams, Backend Is Ready
             assert any(
@@ -295,9 +292,8 @@ class TestGetDeviceProperties:
         mock_core.get_property.side_effect = Exception("Property not found")
 
         mock_ov = mock.MagicMock()
-        mock_ov.Core.return_value = mock_core
-        with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
-            from modules.logging_setup import _get_device_properties
+        mock_ov.return_value = mock_core
+        with mock.patch("modules.logging_setup.Core", mock_ov):
             device_name, info = _get_device_properties("NPU")
             assert device_name == "NPU"
             assert not info
@@ -316,9 +312,8 @@ class TestGetDeviceProperties:
         }.get(prop, None)
 
         mock_ov = mock.MagicMock()
-        mock_ov.Core.return_value = mock_core
-        with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
-            from modules.logging_setup import _get_device_properties
+        mock_ov.return_value = mock_core
+        with mock.patch("modules.logging_setup.Core", mock_ov):
             _, info = _get_device_properties("NPU")
             # Only DEVICE_ARCH should show, others are skipped
             assert any("Arch" in line for line in info)
@@ -342,9 +337,8 @@ class TestGetDeviceProperties:
         mock_core.get_property.side_effect = prop_getter
 
         mock_ov = mock.MagicMock()
-        mock_ov.Core.return_value = mock_core
-        with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
-            from modules.logging_setup import _get_device_properties
+        mock_ov.return_value = mock_core
+        with mock.patch("modules.logging_setup.Core", mock_ov):
             device_name, info = _get_device_properties("NPU")
             assert device_name == "Intel NPU"
             # DEVICE_ARCH should show, FAILING_PROP should silently fail
@@ -370,7 +364,6 @@ class TestGetDeviceProperties:
                 mock_conf.FFMPEG_THREADS = 2
                 mock_conf.ENABLE_VOCAL_SEPARATION = True
 
-                from modules.logging_setup import log_banner
                 log_banner()
 
                 logged_messages = []
@@ -391,8 +384,6 @@ class TestGetDeviceProperties:
     def test_log_level_info_by_default(self):
         """Test that log level is INFO when DEBUG is false."""
         with mock.patch.dict(os.environ, {"DEBUG": "false"}, clear=True):
-            import importlib
-            import modules.logging_setup as logging_setup
             importlib.reload(logging_setup)
 
             assert logging_setup.LOG_LEVEL == logging.INFO
@@ -400,18 +391,14 @@ class TestGetDeviceProperties:
     def test_log_level_debug_when_debug_mode(self):
         """Test that log level is DEBUG when DEBUG is true."""
         with mock.patch.dict(os.environ, {"DEBUG": "true"}):
-            import importlib
             # Need to reload config first since logging_setup imports it
-            import modules.config as config_module
-            importlib.reload(config_module)
-            import modules.logging_setup as logging_setup
+            importlib.reload(config)
             importlib.reload(logging_setup)
 
             assert logging_setup.LOG_LEVEL == logging.DEBUG
 
     def test_loggers_to_filter_list(self):
         """Test that LOGGERS_TO_FILTER contains expected loggers."""
-        from modules.logging_setup import LOGGERS_TO_FILTER
 
         assert "transformers" in LOGGERS_TO_FILTER
         assert "optimum" in LOGGERS_TO_FILTER
@@ -424,31 +411,25 @@ class TestHardwareInfo:
 
     def test_get_real_model_name_intel_baked(self):
         """Cover lines 161-162."""
-        from modules import config
         with mock.patch("modules.config.ASR_ENGINE", "INTEL-WHISPER"):
             with mock.patch("modules.config.MODEL_ID", config.OV_MODEL_BAKED):
-                from modules.logging_setup import _get_real_model_name
                 name = _get_real_model_name()
                 assert "OpenVINO" in name
 
     def test_get_real_model_name_faster_baked(self):
         """Cover line 166."""
-        from modules import config
         with mock.patch("modules.config.MODEL_ID", config.SYS_WHISPER_PATH):
-            from modules.logging_setup import _get_real_model_name
             name = _get_real_model_name()
             assert "Systran" in name
 
     def test_unique_device_props(self):
         """Cover lines 229-230."""
-        from modules.logging_setup import _unique_device_props
         props = ["A", "B", "A", "C"]
         res = _unique_device_props(props[:2], props[2:])
         assert res == ["A", "B", "C"]
 
     def test_banner_config_lines_intel(self):
         """Cover line 238, 267-269."""
-        from modules.logging_setup import _banner_config_lines
         with mock.patch("modules.config.ASR_ENGINE", "INTEL-WHISPER"):
             with mock.patch("modules.config.DEVICE", "GPU"):
                 cfg = {

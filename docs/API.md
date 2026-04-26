@@ -3,18 +3,23 @@
 ## Endpoints
 
 ### `GET /`
-Health check. Returns `"Whisper ASR API is running"`.
+Health check. Returns JSON with service identity.
 
 ### `GET /status`
-Returns model status and version.
+Returns hardware pool status, active sessions, and version.
 
 ### `POST /detect-language`
-Detect audio language with **High Priority**.
-
-> [!NOTE]
-> This endpoint uses the **Priority-Based Queueing** system. If a transcription is currently running, this request will safely pause the transcription, perform detection in ~1-2 seconds, and then resume the transcription automatically.
+Detect audio language with **High Priority**. Supports all media containers (MKV, AVI, MP4, etc.) via 16kHz WAV standardization.
 
 **Parameters**: `audio_file` (upload) OR `local_path` (server path)
+
+**Success Response (JSON)**:
+| Field | Type | Description |
+|:---|:---|:---|
+| `detected_language` | string | ISO 639-1 code (e.g. `en`) |
+| `language_name` | string | Full English name (e.g. `english`) |
+| `confidence` | float | 0.0 to 1.0 confidence score |
+| `voting_details` | dict | Weights for all detected candidates |
 
 ```bash
 curl -X POST -F "audio_file=@movie.mp4" http://localhost:9000/detect-language
@@ -33,6 +38,10 @@ Transcribe audio to SRT/JSON.
 | `output` | string | `srt` | `srt` or `json` |
 | `batch_size` | int | config | Override batch size |
 
+**Error Codes**:
+*   `400`: Malformed request or media format standardization failed.
+*   `503`: Inference engine unavailable or warming up.
+
 ```bash
 # Local file (fast)
 curl -X POST "http://localhost:9000/asr?local_path=/movies/avatar.mkv&language=en"
@@ -45,3 +54,8 @@ curl -X POST -F "audio_file=@video.mp4" http://localhost:9000/asr
 1. Settings → Providers → Whisper
 2. Endpoint: `http://<IP>:9000`
 3. Read Timeout: `36000` (for long movies)
+
+## Subtitle Edit Integration
+1. Video → Audio-to-text (Whisper)
+2. Provider: `OpenAI / Custom`
+3. URL: `http://<IP>:9000/v1/audio/transcriptions`

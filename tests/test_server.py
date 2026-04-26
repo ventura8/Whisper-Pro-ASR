@@ -3,7 +3,8 @@ import os
 import sys
 from io import BytesIO
 # pylint: disable=no-member, protected-access, redefined-outer-name
-# pylint: disable=reimported, import-outside-toplevel
+# pylint: disable=reimported
+import logging
 from unittest import mock
 
 import whisper_pro_asr
@@ -37,8 +38,6 @@ def test_patch_path_auto_nvidia():
 
 def test_on_import_onnx_exceptions():
     """Test that the server handles onnxruntime import errors gracefully."""
-    import logging
-    import whisper_pro_asr
     # The module should have proper exception handling
     # Check that logger is set up and module loads without crash
     logger = logging.getLogger(__name__)

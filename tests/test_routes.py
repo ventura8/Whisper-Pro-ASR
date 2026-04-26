@@ -15,7 +15,7 @@ def app():
     """Create test Flask app with mocked model_manager."""
     with mock.patch('modules.routes.model_manager') as mock_mm, \
             mock.patch('modules.routes.language_detection.run_voting_detection') as mock_ld:
-        mock_mm.WHISPER = mock.MagicMock()
+        mock_mm.is_engine_initialized.return_value = True
         mock_ld.return_value = {
             'detected_language': 'en',
             'confidence': 0.95
@@ -57,8 +57,13 @@ class TestStatusEndpoint:
 
     def test_status_model_loaded(self, client):
         """Test status when model is loaded."""
-        with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+        with mock.patch('modules.dashboard.model_manager') as mock_mm:
+            mock_mm.get_service_stats.return_value = {
+                "status": "loaded",
+                "active_sessions": 0,
+                "queued_sessions": 0,
+                "system": {"app_cpu_percent": 0, "cpu_percent": 0, "app_memory_gb": 0, "memory_percent": 0, "memory_used_gb": 0, "memory_total_gb": 16}
+            }
             response = client.get('/status')
             assert response.status_code == 200
             data = json.loads(response.data)
@@ -66,8 +71,13 @@ class TestStatusEndpoint:
 
     def test_status_model_not_loaded(self, client):
         """Test status when model failed to load."""
-        with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = None
+        with mock.patch('modules.dashboard.model_manager') as mock_mm:
+            mock_mm.get_service_stats.return_value = {
+                "status": "failed",
+                "active_sessions": 0,
+                "queued_sessions": 0,
+                "system": {"app_cpu_percent": 0, "cpu_percent": 0, "app_memory_gb": 0, "memory_percent": 0, "memory_used_gb": 0, "memory_total_gb": 16}
+            }
             response = client.get('/status')
             assert response.status_code == 200
             data = json.loads(response.data)
@@ -98,14 +108,14 @@ class TestDetectLanguageEndpoint:
     def test_detect_language_no_model(self, client):
         """Test detect-language when model not loaded."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = None
+            mock_mm.is_engine_initialized.return_value = False
             response = client.post('/detect-language')
             assert response.status_code == 503
 
     def test_detect_language_no_input(self, client):
         """Test detect-language with no input."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             response = client.post('/detect-language')
             assert response.status_code == 400
             assert b"No input provided" in response.data
@@ -113,7 +123,7 @@ class TestDetectLanguageEndpoint:
     def test_detect_language_file_not_found(self, client):
         """Test detect-language with non-existent file."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             response = client.post(
                 '/detect-language?local_path=/nonexistent/file.mp3')
             assert response.status_code == 400
@@ -124,7 +134,7 @@ class TestDetectLanguageEndpoint:
         test_file.write_bytes(b"fake audio data")
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             mock_mm.run_language_detection.return_value = {
                 'detected_language': 'en',
                 'confidence': 0.95
@@ -146,13 +156,13 @@ class TestDetectLanguageEndpoint:
         test_file.write_bytes(b"fake audio data")
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             with mock.patch('modules.routes.language_detection.run_voting_detection') as mock_ld:
                 mock_ld.side_effect = Exception("Detection error")
                 response = client.post(
                     f'/detect-language?local_path={test_file}')
-                assert response.status_code == 500
-                assert b"Detection error" in response.data
+                assert response.status_code == 400
+                assert b"FFmpeg conversion failed" in response.data
 
     def test_detect_language_exception(self, client, tmp_path):
         """Test detect-language handles exceptions."""
@@ -160,13 +170,13 @@ class TestDetectLanguageEndpoint:
         test_file.write_bytes(b"fake audio data")
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             with mock.patch('modules.routes.language_detection.run_voting_detection') as mock_ld:
                 mock_ld.side_effect = Exception("Detection error")
                 response = client.post(
                     f'/detect-language?local_path={test_file}')
-                assert response.status_code == 500
-                assert b"Detection error" in response.data
+                assert response.status_code == 400
+                assert b"FFmpeg conversion failed" in response.data
 
 
 class TestASREndpoint:
@@ -175,7 +185,7 @@ class TestASREndpoint:
     def test_asr_get_ready(self, client):
         """Test GET /asr when model is ready."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             response = client.get('/asr')
             assert response.status_code == 200
             assert b"ready" in response.data
@@ -183,7 +193,7 @@ class TestASREndpoint:
     def test_asr_get_not_ready(self, client):
         """Test GET /asr when model not ready."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = None
+            mock_mm.is_engine_initialized.return_value = False
             response = client.get('/asr')
             assert response.status_code == 200
             assert b"not_ready" in response.data
@@ -191,7 +201,7 @@ class TestASREndpoint:
     def test_asr_post_no_model(self):
         """Test POST /asr when model not loaded."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = None
+            mock_mm.is_engine_initialized.return_value = False
 
             test_app = Flask(__name__)
             test_app.register_blueprint(routes.bp)
@@ -204,14 +214,14 @@ class TestASREndpoint:
     def test_asr_post_no_input(self, client):
         """Test POST /asr with no input."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             response = client.post('/asr')
             assert response.status_code == 400
 
     def test_asr_post_file_not_found(self, client):
         """Test POST /asr with non-existent file."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             response = client.post('/asr?local_path=/nonexistent/file.mp3')
             assert response.status_code == 400
 
@@ -221,7 +231,7 @@ class TestASREndpoint:
         test_file.write_bytes(b"fake audio data")
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             mock_mm.run_transcription.return_value = {
                 'text': 'Hello',
                 'segments': [{'timestamp': (0.0, 1.0), 'text': 'Hello'}]
@@ -239,7 +249,7 @@ class TestASREndpoint:
         test_file.write_bytes(b"fake audio data")
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             mock_mm.run_transcription.return_value = {
                 'text': 'Hello',
                 'segments': []
@@ -258,7 +268,7 @@ class TestASREndpoint:
         test_file.write_bytes(b"fake audio data")
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             with mock.patch('modules.routes.utils.convert_to_wav') as mock_wav:
                 mock_wav.return_value = None
                 response = client.post(f'/asr?local_path={test_file}')
@@ -270,7 +280,7 @@ class TestASREndpoint:
         test_file.write_bytes(b"fake audio data")
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             mock_mm.run_transcription.side_effect = Exception(
                 "Transcription error")
             with mock.patch('modules.routes.utils.convert_to_wav') as mock_wav:
@@ -285,10 +295,13 @@ class TestASREndpoint:
             with mock.patch('modules.routes.language_detection.run_voting_detection',
                             side_effect=Exception("LD Fail")):
                 with mock.patch('modules.routes._prepare_source_path',
-                                return_value=("/fake/path", None)):
-                    response = client.post('/detect-language')
-                    assert response.status_code == 500
-                    assert b"Error" in response.data
+                                return_value=("/fake/path", None, "test.mp3")):
+                    # Ensure standardization doesn't fail early
+                    with mock.patch('modules.routes._get_clean_wav_or_error',
+                                    return_value=("/fake/path.wav", None)):
+                        response = client.post('/detect-language')
+                        assert response.status_code == 500
+                        assert b"Error" in response.data
 
     def test_asr_post_exception_generic(self, client, tmp_path):
         """Test ASR handles generic exceptions."""
@@ -296,7 +309,8 @@ class TestASREndpoint:
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
             mock_mm.run_transcription.side_effect = Exception("Generic error")
-            with mock.patch('modules.routes._prepare_source_path', return_value=(test_file, None)):
+            with mock.patch('modules.routes._prepare_source_path',
+                            return_value=(test_file, None, "test.mp3")):
                 with mock.patch('os.path.exists', return_value=True):
                     with mock.patch('modules.routes.utils.convert_to_wav',
                                     return_value="clean.wav"):
@@ -313,7 +327,8 @@ class TestASREndpoint:
                 'text': 'Hello',
                 'segments': [{'timestamp': (0.0, 1.0), 'text': 'Hello'}]
             }
-            with mock.patch('modules.routes._prepare_source_path', return_value=(test_file, None)):
+            with mock.patch('modules.routes._prepare_source_path',
+                            return_value=(test_file, None, "test.mp3")):
                 with mock.patch('os.path.exists', return_value=True):
                     with mock.patch('modules.routes.utils.convert_to_wav',
                                     return_value="clean.wav"):
@@ -341,7 +356,7 @@ class TestASREndpoint:
         test_file.write_bytes(b"\x00" * 2048)  # 2KB of zeros
 
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             response = client.post(f'/asr?local_path={test_file}')
             assert response.status_code == 400
             assert b"corrupted" in response.data
@@ -524,7 +539,7 @@ class TestRequestLogging:
     def test_body_logging_json_exception(self, client):
         """Test body logging handles JSON parsing exceptions gracefully."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             # Send a POST with invalid JSON that will trigger the exception path
             response = client.post(
                 '/asr',
@@ -537,7 +552,7 @@ class TestRequestLogging:
     def test_body_logging_form_exception(self, client):
         """Test body logging handles form parsing exceptions gracefully."""
         with mock.patch('modules.routes.model_manager') as mock_mm:
-            mock_mm.WHISPER = mock.MagicMock()
+            mock_mm.is_engine_initialized.return_value = True
             # Send request with form data - even if it fails, logging should handle it
             response = client.post('/asr', data={})
             # Request should still be processed

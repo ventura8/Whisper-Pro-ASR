@@ -7,11 +7,20 @@ and builds the interactive hardware-diagnostic banner displayed at startup.
 import os
 import logging
 import sys
-from . import config
+from logging.handlers import TimedRotatingFileHandler
+from . import config, utils
+try:
+    from openvino import Core
+except ImportError:
+    Core = None
+
+# Thread-safe global log buffer for dashboard visibility
+# Key: thread_id, Value: list of strings
+TASK_LOGS = {}
 
 # --- [GLOBAL LOGGING CONFIGURATION] ---
 LOG_LEVEL = logging.DEBUG if config.DEBUG_MODE else logging.INFO
-logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(message)s',
+logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s %(task_ctx)s %(message)s',
                     force=True, stream=sys.stdout)
 
 # Suppress noisy library-level logging for transformers and optimum
@@ -22,6 +31,27 @@ try:
     optimum.utils.logging.set_verbosity_error()
 except ImportError:  # pragma: no cover
     pass
+
+
+class ContextualFilter(logging.Filter):
+    """
+    Injects thread-local context (e.g. filename) into every log record.
+    """
+
+    def filter(self, record):
+        """Inject filename and step info into log record."""
+        filename = getattr(utils.THREAD_CONTEXT, 'filename', 'System')
+        step_info = getattr(utils.THREAD_CONTEXT, 'step_info', None)
+
+        # Preserve full filename as requested by the user
+        ctx = f"[{filename}]"
+        if step_info:
+            ctx += f" {step_info}"
+        record.task_ctx = ctx
+        return True
+
+    def __repr__(self):
+        return "ContextualFilter()"
 
 
 class IgnoreSpecificWarnings(logging.Filter):
@@ -52,9 +82,73 @@ class IgnoreSpecificWarnings(logging.Filter):
         return "IgnoreSpecificWarnings()"
 
 
+class WerkzeugStatusFilter(logging.Filter):
+    """
+    Demotes repetitive /status polling access logs to DEBUG level.
+    """
+
+    def filter(self, record):
+        """Change log level for /status requests."""
+        msg = record.getMessage()
+        if "GET /status " in msg:
+            # If not in debug mode, just drop the record entirely to stop spam
+            if logging.getLogger().level > logging.DEBUG:
+                return False
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+        return True
+
+    def __repr__(self):
+        return "WerkzeugStatusFilter()"
+
+
+class LogBufferHandler(logging.Handler):
+    """
+    Captures log records into a global thread-keyed buffer for dashboard visibility.
+    """
+
+    def emit(self, record):
+        try:
+            import threading
+            thread_id = threading.get_ident()
+            # We only store logs if a registry entry exists for this thread
+            if thread_id in TASK_LOGS:
+                msg = self.format(record)
+                TASK_LOGS[thread_id].append(msg)
+                # No truncation: capturing all logs for the duration of the task.
+                # Note: Memory is automatically reclaimed when the task finishes.
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
 # Apply filters to the root logger and specific third-party modules
+log_buffer = LogBufferHandler()
+log_buffer.setFormatter(logging.Formatter('%(asctime)s %(message)s', datefmt='%H:%M:%S'))
+
 for handler in logging.root.handlers:
+    handler.addFilter(ContextualFilter())
     handler.addFilter(IgnoreSpecificWarnings())
+    handler.addFilter(WerkzeugStatusFilter())
+
+logging.root.addHandler(log_buffer)
+
+# --- [PERSISTENT FILE LOGGING] ---
+LOG_FILE = os.path.join(config.OV_CACHE_DIR, "whisper_pro.log")
+try:
+    os.makedirs(config.OV_CACHE_DIR, exist_ok=True)
+    # Retention is configurable via environment, defaults to 7 days
+    retention_days = int(os.environ.get("LOG_RETENTION_DAYS", 7))
+    file_handler = TimedRotatingFileHandler(
+        LOG_FILE, when="D", interval=1, backupCount=retention_days, encoding="utf-8"
+    )
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(task_ctx)s [%(levelname)s] %(message)s'
+    ))
+    file_handler.addFilter(ContextualFilter())
+    file_handler.addFilter(IgnoreSpecificWarnings())
+    logging.root.addHandler(file_handler)
+except Exception as e:  # pylint: disable=broad-exception-caught
+    print(f"Failed to initialize file logging: {e}")
 
 LOGGERS_TO_FILTER = [
     "transformers",
@@ -67,6 +161,8 @@ LOGGERS_TO_FILTER = [
 for logger_name in LOGGERS_TO_FILTER:
     _logger = logging.getLogger(logger_name)
     _logger.addFilter(IgnoreSpecificWarnings())
+    if logger_name == "werkzeug":
+        _logger.addFilter(WerkzeugStatusFilter())
     _logger.propagate = True
 
 logger = logging.getLogger(__name__)
@@ -121,7 +217,8 @@ def _get_device_properties(device_alias):
     device_full_name = device_alias
     info_lines = []
     try:
-        from openvino import Core  # pylint: disable=import-outside-toplevel, import-error
+        if Core is None:
+            return device_full_name, []
         core = Core()
 
         # Resolve alias to physical device ID (e.g. 'GPU' -> 'GPU.0')
@@ -135,7 +232,7 @@ def _get_device_properties(device_alias):
                     break
 
         if not real_device:
-            return None, []
+            return device_full_name, []
 
         # Get Descriptive Name
         try:
