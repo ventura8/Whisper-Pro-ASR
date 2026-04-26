@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 # pylint: disable=invalid-name
 

@@ -9,7 +9,7 @@
 | `model_manager.py` | Manages Faster-Whisper lifecycles, VAD integration, and priority task scheduling. |
 | `preprocessing.py` | UVR/MDX-NET isolation engine with optimized ONNX/OpenVINO backend patching. |
 | `routes.py` | Flask API layer implementing RESTful endpoints and OpenAI-compatible aliases. |
-| `language_detection.py` | Multi-zone probabilistic identification with squared confidence weighting. |
+| `language_detection.py` | Dynamic single-chunk identification with automated duration-based scaling. |
 | `utils.py` | Managed FFmpeg normalization and millisecond-accurate SRT generation. |
 | `vad.py` | Silero Voice Activity Detection (VAD) for signal trimming and silence suppression. |
  
@@ -27,10 +27,10 @@
 7. **Finalization**: Subtitles are generated and a millisecond-precision SRT or structured JSON is returned.
  
 ### Priority Detection Flow (/detect-language)
-1. **Optimized Segmentation**: The engine uses FFmpeg to extract small **16kHz Mono segments** directly from the source media (`-ss` / `-t`), bypassing the need for full-file normalization.
-2. **Inference**: Parallel one-token scans are performed across these normalized segments.
-3. **Consensus**: Probabilities are aggregated using **Squared Confidence Weighting** to favors "peaks" over noise.
-4. **ID**: The most probable language is selected and returned with a globally averaged confidence score.
+1. **Dynamic Scaling**: The engine calculates an optimal chunk size (minimum 5 minutes, 5% of total duration) to ensure representative audio capture.
+2. **Optimized Extraction**: FFmpeg extracts this single chunk directly from the source media, bypassing full-file normalization.
+3. **Single-Pass Inference**: A high-confidence inference pass is performed on the extracted chunk (with optional UVR isolation).
+4. **ID**: The most probable language is selected and returned with detailed probability metadata.
  
 ---
  
