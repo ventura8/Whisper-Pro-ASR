@@ -31,7 +31,7 @@
 - **Advanced Preprocessing Stack**: Integrated **UVR/MDX-NET** (Vocal Isolation) with hardware acceleration and dedicated thread pooling (`ASR_PREPROCESS_THREADS`).
 - **OpenAI Compatible**: Native support for `/v1/audio/transcriptions` and `/v1/audio/translations` OpenAI API format.
 - **Swagger Documentation**: Interactive API testing available at `/docs`.
-- **Smart Voting Detection**: Robust language ID using probability aggregation with **Squared Confidence Weighting**. This prioritizes high-confidence segments to eliminate false positives in multilingual or noisy content. Density scales with file length (up to 25 samples).
+- **Probabilistic Language ID**: Robust identification using **Iterative Signal Scanning** and **Weighted Voting**. The system automatically skips silent segments and aggregates high-confidence samples to ensure accuracy for all media lengths.
 
 - **Sequential Priority Queue**: Multiple high-priority requests (Language Detection) are automatically queued and processed one-by-one, ensuring hardware stability.
 - **Deadlock-Free Yielding**: Ongoing transcription threads release hardware model locks during priority wait periods, allowing metadata tasks to pre-empt decoding instantly.
@@ -96,6 +96,14 @@ docker build -t whisper-npu-test -f Dockerfile.test .
 docker run --rm whisper-npu-test
 ```
 *Note: The test suite enforces 90%+ code coverage for all critical modules.*
+
+## Release Notes v1.0.4
+- **FIX**: Resolved "nn" (Nynorsk) language hallucination on silent or non-speech audio segments.
+- **FEAT**: Implemented **Iterative Signal Scanning** for language detection. If a chunk is silent, the engine automatically skips to the next segment (up to 5 attempts).
+- **FEAT**: Enhanced **Dynamic Chunk Sizing**. Samples now scale linearly: 8 minutes for 1h content, 20 minutes for 4h content.
+- **FEAT**: Implemented **Multi-Segment Voting**. If confidence is below 80%, the engine scans up to 5 segments and aggregates probabilities to determine the winner.
+- **FEAT**: Added **Fail-Safe VAD Logic**. If isolated vocals are silent, the engine automatically falls back to the original audio segment to ensure no speech is missed.
+- **STAB**: Integrated pre-inference VAD checks to ensure language identification is only performed on valid speech.
 
 ## Release Notes v1.0.1
 - **FIX**: Automatically clean up legacy storage leaks from version 1.0.0 in the preprocessing cache at startup.

@@ -383,6 +383,18 @@ def run_language_detection(audio_path, _batch_size=None):
         raise RuntimeError("Model not loaded.")
 
     try:
+        # Pre-check for speech to avoid hallucinations on silence
+        speech_ts = vad.get_speech_timestamps_from_path(audio_path)
+        if not speech_ts:
+            logger.info("[ASR] No speech detected in input. Returning default 'en'.")
+            return {
+                "detected_language": "en",
+                "language": "en",
+                "language_code": "en",
+                "confidence": 0.0,
+                "all_probabilities": {"en": 0.0}
+            }
+
         with model_lock_ctx():
             out = WHISPER.transcribe(
                 audio_path,

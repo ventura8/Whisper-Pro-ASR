@@ -71,9 +71,10 @@ services:
 ### Advanced Intelligence
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
 - **Studio-Grade Vocal Isolation**: Integrated **UVR/MDX-NET** engine for removal of background noise, music, and ambient artifacts prior to processing.
-- **Probabilistic Language ID**: Utilizes **Dynamic Single-Chunk Extraction** for robust identification across all media lengths.
-- **Dynamic Chunking**: Scales the identification sample (minimum 5 minutes) based on total media duration, ensuring high accuracy for movies and long-form content.
-- **Smart Signal Sampling**: Optional iterative search logic to pinpoint active speech in complex media files with extended periods of silence.
+- **Probabilistic Language ID**: Utilizes **Dynamic Linear-Scaled Sampling** for robust identification across all media lengths.
+- **Dynamic Chunking**: Scales the identification sample (8m for 1h, 20m for 4h) based on total media duration, ensuring high accuracy for movies and long-form content.
+- **Iterative Signal Scanning**: Intelligent retry logic that skips silent or non-speech segments to pinpoint active dialogue in complex media.
+- **Fail-Safe VAD Logic**: Secondary VAD check on original audio if vocal isolation is too aggressive and removes the speech signal.
 
 ### Production Ready
 - **OpenAI Standard API**: Drop-in compatible with the OpenAI whisper specification, allowing immediate integration with existing clients.
@@ -89,10 +90,24 @@ services:
 #### Flow: Language Identification (/detect-language)
 ```mermaid
 graph TD
-    A[Source Media] -->|Dynamic Chunk| LD[Single-Pass Extraction]
-    LD -->|Optional| UVR_LD["UVR Isolator (Memory Chunk)"]
-    UVR_LD -->|Inference Pass| SOFTMAX[Softmax Probabilities]
-    SOFTMAX --> LANG[Final Language ID]
+    A[Source Media] -->|Dynamic Chunk| EXT[Extraction & Normalization]
+    EXT --> VAD{VAD Gating}
+    VAD -->|Silent| NEXT{Attempts < 5?}
+    VAD -->|Speech| INF[Model Inference]
+    
+    subgraph Fail-Safe VAD
+    VAD -->|Isolated Silent| RAW[Check Raw Audio]
+    RAW -->|Speech Found| INF
+    end
+
+    INF --> CONF{Confidence >= 80%?}
+    CONF -->|Low| VOTE[Weighted Voting Pool] --> NEXT
+    CONF -->|High| FINAL[Instant Return]
+    
+    NEXT -->|Yes| SKIP[Skip Segment] --> EXT
+    NEXT -->|No| AGG[Aggregate Votes] --> FINAL
+    
+    FINAL --> LANG[Final Language ID]
 ```
 
 #### Flow: Automated Speech Recognition (/asr)
@@ -153,10 +168,16 @@ sequenceDiagram
     Client->>Flask: POST /detect-language
     Flask->>Manager: Acquire System Lock
     Note over Manager: Global yielding of batch tasks
-    Manager->>Flask: Extract Dynamic Chunk
-    Manager->>XPU: Inference Pass (Single Pass)
-    XPU-->>Manager: Probability Map
-    Manager-->>Flask: High-Confidence ID (Optimized)
+    loop Iterative Scan (Max 5)
+        Manager->>Flask: Extract Dynamic Chunk
+        Manager->>Manager: VAD Gating (Isolated/Raw)
+        opt Speech Found
+            Manager->>XPU: Inference Pass
+            XPU-->>Manager: Probabilities
+            Note over Manager: Stop early if Confidence >= 80%
+        end
+    end
+    Manager-->>Flask: Weighted Decision (Voting)
     Flask-->>Client: 200 OK (JSON)
     end
 ```
@@ -195,6 +216,8 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | **Preprocessing** | | |
 | `ENABLE_VOCAL_SEPARATION`| `true` | Toggles UVR background removal engine for translate/transcribe. |
 | `ENABLE_LD_PREPROCESSING`| `true` | Toggles UVR background removal engine for language detection. |
+| `LD_VAD_THRESHOLD` | `0.3` | Aggressiveness of VAD during language identification (0.0 to 1.0). |
+| `LD_MIN_CONFIDENCE_THRESHOLD` | `0.8` | Confidence required to stop scanning more segments (0.0 to 1.0). |
 | `SMART_SAMPLING_SEARCH` | `false` | Enables localized signal searching in sparse audio. |
 
 ---
@@ -257,6 +280,8 @@ services:
       # Vocal Separation Logic Toggles
       - ENABLE_VOCAL_SEPARATION=true
       - ENABLE_LD_PREPROCESSING=true
+      - LD_VAD_THRESHOLD=0.3
+      - LD_MIN_CONFIDENCE_THRESHOLD=0.8
       - SMART_SAMPLING_SEARCH=false
  
       # --- [RESOURCE ALLOCATION] ---

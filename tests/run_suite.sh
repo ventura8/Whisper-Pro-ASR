@@ -22,7 +22,7 @@ fi
 echo ""
 echo "--- Running Pytest with Coverage ---"
 # We output XML (for PR display) and terminal report
-python3 -m pytest --cov=modules --cov=whisper_pro_asr --cov-report=xml:coverage.xml --cov-report=term-missing | tee coverage_output.txt
+python3 -m pytest --cov=modules --cov=whisper_pro_asr --cov-report=xml:coverage.xml --cov-report=term-missing --junitxml=pytest.xml | tee coverage_output.txt
 
 echo ""
 echo "--- Verifying Per-File Coverage (Threshold: 90%) ---"

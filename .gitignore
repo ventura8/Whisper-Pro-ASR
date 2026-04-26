@@ -41,5 +41,6 @@ shim_snippet.py
 coverage.xml
 coverage.md
 coverage_output.txt
+pytest.xml
 report.xml
 htmlcov/
