@@ -15,13 +15,11 @@ Deploy instantly using standard `docker-compose.yml`:
 
 ```yaml
 services:
-  whisper-asr:
+  whisper-pro-asr:
     image: ventura8/whisper-pro-asr:latest
-    container_name: whisper-asr
+    container_name: whisper-pro-asr
     ports:
       - "9000:9000"
-    volumes:
-      - ./model_cache:/app/model_cache
     restart: unless-stopped
 
     # 1. Intel Silicon (NPU/GPU)
@@ -39,6 +37,22 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [ gpu ]
+    
+    environment:
+      # --- [SSD WRITE PROTECTION] ---
+      - WHISPER_TEMP_DIR=/tmp/whisper
+
+    tmpfs:
+      - /tmp/whisper:size=2G
+
+    volumes:
+      # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
+      - ./model_cache:/app/model_cache
+      # Recommended: Map your media volumes to enable instant (0-copy) local processing
+      # The service will prioritize reading these files directly over network uploads.
+      - /path/to/my/media:/media
+      - /mnt/nas/tv:/tv
+      - /mnt/nas/movies:/movies
 ```
 
 1. Save the configuration.
@@ -57,8 +71,8 @@ services:
 ### Advanced Intelligence
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
 - **Studio-Grade Vocal Isolation**: Integrated **UVR/MDX-NET** engine for removal of background noise, music, and ambient artifacts prior to processing.
-- **Probabilistic Language ID**: Utilizes **Squared Confidence Weighting** across strategic audio zones for robust identification.
-- **Chunked-Bypass Extraction**: Bypasses full-file normalization for metadata tasks by extracting context zones directly from source media containers using FFmpeg.
+- **Probabilistic Language ID**: Utilizes **Dynamic Single-Chunk Extraction** for robust identification across all media lengths.
+- **Dynamic Chunking**: Scales the identification sample (minimum 5 minutes) based on total media duration, ensuring high accuracy for movies and long-form content.
 - **Smart Signal Sampling**: Optional iterative search logic to pinpoint active speech in complex media files with extended periods of silence.
 
 ### Production Ready
@@ -75,11 +89,10 @@ services:
 #### Flow: Language Identification (/detect-language)
 ```mermaid
 graph TD
-    A[Source Media] -->|FFmpeg Chunks| LD[Multi-Zone Extraction]
-    LD -->|Optional| UVR_LD["UVR Isolator (Memory Chunks)"]
-    UVR_LD -->|Sampling Scans| SOFTMAX[Softmax Probabilities]
-    SOFTMAX -->|Voting Consensus| WINNER{Majority Winner}
-    WINNER -->|Squared Weighting| LANG[Final Language ID]
+    A[Source Media] -->|Dynamic Chunk| LD[Single-Pass Extraction]
+    LD -->|Optional| UVR_LD["UVR Isolator (Memory Chunk)"]
+    UVR_LD -->|Inference Pass| SOFTMAX[Softmax Probabilities]
+    SOFTMAX --> LANG[Final Language ID]
 ```
 
 #### Flow: Automated Speech Recognition (/asr)
@@ -140,9 +153,9 @@ sequenceDiagram
     Client->>Flask: POST /detect-language
     Flask->>Manager: Acquire System Lock
     Note over Manager: Global yielding of batch tasks
-    Manager->>Flask: Extract FFmpeg Chunks
-    Manager->>XPU: Inference Scans (Single Worker)
-    XPU-->>Manager: Accuracy Map
+    Manager->>Flask: Extract Dynamic Chunk
+    Manager->>XPU: Inference Pass (Single Pass)
+    XPU-->>Manager: Probability Map
     Manager-->>Flask: High-Confidence ID (Optimized)
     Flask-->>Client: 200 OK (JSON)
     end
