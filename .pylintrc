@@ -1,0 +1,32 @@
+[MASTER]
+ignore=CVS
+ignore-patterns=
+persistent=yes
+load-plugins=
+jobs=0
+unsafe-load-any-extension=no
+
+[MESSAGES CONTROL]
+disable=
+
+[REPORTS]
+output-format=text
+reports=no
+evaluation=10.0 - ((float(5 * error + warning + refactor + convention) / statement) * 10)
+
+[FORMAT]
+max-line-length=140
+indent-string='    '
+
+[BASIC]
+good-names=i,j,k,ex,Run,_,fp,id,ip,e,v
+
+[DESIGN]
+max-args=10
+max-locals=20
+max-branches=20
+max-statements=140
+max-parents=7
+max-attributes=15
+max-bool-expr=5
+max-module-lines=500

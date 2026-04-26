@@ -1,1 +1,3 @@
-# Test package
+"""
+Whisper Pro ASR Test Suite
+"""
