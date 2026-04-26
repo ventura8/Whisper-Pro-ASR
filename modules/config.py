@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 # pylint: disable=invalid-name
 
@@ -336,6 +336,16 @@ FFMPEG_HWACCEL = os.environ.get("FFMPEG_HWACCEL", "auto")
 # Options: "loudnorm" (Broadcast standard, slower) or "dynaudnorm" (Dynamic, faster)
 FFMPEG_FILTER = os.environ.get("FFMPEG_FILTER", "dynaudnorm")
 
+# --- [CONCURRENCY & PARALLELISM] ---
+# Limits for parallel tasks on specialized hardware (GPU/NPU)
+# 1 is recommended for stability; increase only if VRAM allows.
+def get_parallel_limit(device):
+    """Determine parallel task limit based on device type."""
+    if device in ["CUDA", "GPU", "NPU"]:
+        return int(os.environ.get("ASR_PARALLEL_LIMIT_ACCEL", 1))
+    return int(os.environ.get("ASR_PARALLEL_LIMIT_CPU", 4))
+
+
 # --- [LANGUAGE DETECTION] ---
 # Enable iterative scanning for quiet or long-intro files
 SMART_SAMPLING_SEARCH = os.environ.get(
@@ -343,6 +353,10 @@ SMART_SAMPLING_SEARCH = os.environ.get(
 # Enable vocal isolation during language detection (improves identification accuracy)
 ENABLE_LD_PREPROCESSING = os.environ.get(
     "ENABLE_LD_PREPROCESSING", "false").lower() == "true"
+# Aggressiveness of VAD during language detection (0.0 to 1.0)
+LD_VAD_THRESHOLD = float(os.environ.get("LD_VAD_THRESHOLD", 0.3))
+# Minimum confidence required to stop scanning more segments (0.0 to 1.0)
+LD_MIN_CONFIDENCE_THRESHOLD = float(os.environ.get("LD_MIN_CONFIDENCE_THRESHOLD", 0.8))
 
 # --- [HALLUCINATION FILTERING] ---
 # Known "silence" or "credit" hallucination phrases for removal during post-processing

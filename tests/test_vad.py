@@ -101,3 +101,38 @@ def test_get_speech_timestamps_from_path_decode_error(mock_fw_vad):
 
     results = vad.get_speech_timestamps_from_path("test.wav")
     assert results == []
+
+
+def test_get_speech_timestamps_from_path_with_offset(mock_fw_vad):
+    """Test get_speech_timestamps_from_path with seeking and shifting."""
+    mock_get_ts, _, _ = mock_fw_vad
+    mock_get_ts.return_value = [{'start': 16000, 'end': 32000}]  # 1.0s -> 2.0s relative
+
+    # Mock decode_audio to avoid ffmpeg call
+    with mock.patch("modules.vad.decode_audio", return_value="offset_audio"):
+        # Call with offset 100.0
+        results = vad.get_speech_timestamps_from_path("test.wav", start_offset=100.0)
+
+        # Should be shifted by 100.0
+        assert results == [{'start': 101.0, 'end': 102.0}]
+
+
+def test_decode_audio_with_offset_ffmpeg(mock_fw_vad):
+    """Test decode_audio uses ffmpeg when offset is provided."""
+    _, mock_decode, _ = mock_fw_vad
+    mock_decode.return_value = "ffmpeg_decoded_audio"
+
+    with mock.patch("subprocess.run") as mock_run:
+        with mock.patch("tempfile.NamedTemporaryFile") as mock_tmp:
+            mock_tmp.return_value.__enter__.return_value.name = "tmp.wav"
+
+            result = vad.decode_audio("test.wav", start_offset=10.0, duration=5.0)
+
+            assert result == "ffmpeg_decoded_audio"
+            mock_run.assert_called_once()
+            # Verify ffmpeg was called with -ss 10.0 and -t 5.0
+            cmd = mock_run.call_args[0][0]
+            assert "-ss" in cmd
+            assert "10.0" in cmd
+            assert "-t" in cmd
+            assert "5.0" in cmd

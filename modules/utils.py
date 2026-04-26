@@ -288,6 +288,15 @@ LANGUAGES = {
     "ln": "Lingala", "ha": "Hausa", "ba": "Bashkir", "jw": "Javanese", "su": "Sundanese"
 }
 
+def secure_remove(file_path):
+    """Safely remove a file if it exists, ignoring errors."""
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
+
+
 def clear_gpu_cache():
     """Trigger explicit hardware cache reclamation if CUDA is present."""
     try:

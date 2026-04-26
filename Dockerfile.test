@@ -21,7 +21,7 @@ WORKDIR /app
 
 # Copy the source code
 COPY . .
-RUN chmod +x tests/run_suite.sh
+RUN sed -i 's/\r$//' tests/run_suite.sh && chmod +x tests/run_suite.sh
 
 # Default command
 CMD ["/bin/bash", "tests/run_suite.sh"]

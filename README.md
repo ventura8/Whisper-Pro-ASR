@@ -70,10 +70,14 @@ services:
 
 ### Advanced Intelligence
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
-- **Studio-Grade Vocal Isolation**: Integrated **UVR/MDX-NET** engine for removal of background noise, music, and ambient artifacts prior to processing.
-- **Probabilistic Language ID**: Utilizes **Dynamic Single-Chunk Extraction** for robust identification across all media lengths.
-- **Dynamic Chunking**: Scales the identification sample (minimum 5 minutes) based on total media duration, ensuring high accuracy for movies and long-form content.
-- **Smart Signal Sampling**: Optional iterative search logic to pinpoint active speech in complex media files with extended periods of silence.
+- **Strategic Uniform Sampling**: Distributes up to 5 non-overlapping samples across the entire media duration to ensure representative language identification for long-form content.
+- **Entropy-Adaptive Smart Search**: Automatically recovers from silent zones by scanning strides for high-energy signal regions, ensuring detection is based on valid speech.
+- **Parallel Preprocessing Pipeline**: Decouples extraction and isolation from the inference cycle, preparing all detection zones simultaneously with an **Early Exit Optimization** for sub-second latency.
+- **Fail-Safe Dual-Path VAD**: Intelligent logic that verifies speech presence and signal confidence (80% threshold) on both isolated and raw audio, selecting the optimal path automatically.
+- **Confusion-Matrix Tie Breaking**: Resolves linguistic ambiguities between similar pairs (e.g., NO/NN) with a weighted bias, eliminating common identification hallucinations.
+- **Unified Session Orchestration**: Integrated task and queue tracking ensures that hardware resources are only reclaimed when the system is fully idle (zero active or waiting tasks), eliminating redundant model loading.
+- **Proactive Resource Reclamation**: Automatically offloads heavy models and clears hardware caches (CUDA/NPU) only when the queue is empty.
+- **Weighted Multi-Segment Voting**: Aggregates probabilities from multiple zones with confidence-weighted averaging for industrial-strength accuracy.
 
 ### Production Ready
 - **OpenAI Standard API**: Drop-in compatible with the OpenAI whisper specification, allowing immediate integration with existing clients.
@@ -89,10 +93,33 @@ services:
 #### Flow: Language Identification (/detect-language)
 ```mermaid
 graph TD
-    A[Source Media] -->|Dynamic Chunk| LD[Single-Pass Extraction]
-    LD -->|Optional| UVR_LD["UVR Isolator (Memory Chunk)"]
-    UVR_LD -->|Inference Pass| SOFTMAX[Softmax Probabilities]
-    SOFTMAX --> LANG[Final Language ID]
+    A[Source Media] -->|Calculate Stride| STR[Stride & Zones Defined]
+    STR -->|Concurrent Execution| PREP[Parallel Prep Pool]
+    
+    subgraph Parallel Preprocessing Pipeline
+    PREP -->|Zone 1| Z1[Extract & Isolate]
+    PREP -->|Zone N| ZN[Extract & Isolate]
+    Z1 -->|Local Scan| SS[Smart Search Entropy Check]
+    ZN -->|Local Scan| SS
+    end
+
+    SS -->|Prepared Assets| VAD{Dual-Path VAD}
+    VAD -->|Speech| INF[Model Inference]
+    VAD -->|Silent| NEXT{Next Prepared Zone?}
+    
+    subgraph Signal Integrity Audit
+    VAD -->|Isolated Silent| RAW[Verify Raw Audio]
+    RAW -->|Speech Found| INF
+    end
+
+    INF --> CONF{Confidence >= 80%?}
+    CONF -->|Low| VOTE[Weighted Voting Pool] --> NEXT
+    CONF -->|High| TIE[Confusion Tie-Breaker]
+    
+    NEXT -->|Yes| VAD
+    NEXT -->|No| AGG[Aggregate Pool] --> TIE
+    
+    TIE --> FINAL[Final Language ID]
 ```
 
 #### Flow: Automated Speech Recognition (/asr)
@@ -107,8 +134,12 @@ graph TD
     PRE -->|16kHz Mono| C{Isolation?}
     C -->|Enabled| D[UVR Full-Stream Separation]
     C -->|Disabled| E[Standard Signal]
-    D --> F[Isolated Vocals]
+    
+    D --> VAD{Dual-Path VAD}
+    VAD -->|Isolated Silent| E
+    VAD -->|Isolated Speech| F[Processing Signal]
     E --> F
+    
     F --> G[Whisper Inference]
     G -->|Priority Yielding| H{Queue Lock?}
     H -->|Active| I[Halt & Yield Hardware]
@@ -131,11 +162,13 @@ sequenceDiagram
     Client->>Flask: POST /asr
     Flask->>Manager: Enqueue Session
     opt Language Missing
-        Manager->>XPU: Detect Language (Source Chunks)
+        Manager->>XPU: Detect Language (Strategic Sampling)
     end
     Manager->>Flask: Normalize Full Media
     opt Vocal Separation
         Manager->>XPU: UVR Isolation (VRAM)
+        Manager->>Manager: Dual-Path VAD Verification
+        Note over Manager: Fallback to Raw if Isolated is Silent
     end
     loop Inference Cycle
         Manager->>XPU: Whisper Batch
@@ -153,10 +186,16 @@ sequenceDiagram
     Client->>Flask: POST /detect-language
     Flask->>Manager: Acquire System Lock
     Note over Manager: Global yielding of batch tasks
-    Manager->>Flask: Extract Dynamic Chunk
-    Manager->>XPU: Inference Pass (Single Pass)
-    XPU-->>Manager: Probability Map
-    Manager-->>Flask: High-Confidence ID (Optimized)
+    loop Strategic Sampling
+        Manager->>Flask: Extract Non-Overlapping Zone
+        Manager->>Manager: Dual-Path VAD (Isolated/Raw)
+        opt Speech Found
+            Manager->>XPU: Inference Pass
+            XPU-->>Manager: Probabilities
+            Note over Manager: Early Exit if Confidence >= 80%
+        end
+    end
+    Manager-->>Flask: Weighted Decision (Voting)
     Flask-->>Client: 200 OK (JSON)
     end
 ```
@@ -195,7 +234,11 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | **Preprocessing** | | |
 | `ENABLE_VOCAL_SEPARATION`| `true` | Toggles UVR background removal engine for translate/transcribe. |
 | `ENABLE_LD_PREPROCESSING`| `true` | Toggles UVR background removal engine for language detection. |
-| `SMART_SAMPLING_SEARCH` | `false` | Enables localized signal searching in sparse audio. |
+| `LD_VAD_THRESHOLD` | `0.3` | Aggressiveness of VAD during language identification (0.0 to 1.0). |
+| `LD_MIN_CONFIDENCE_THRESHOLD` | `0.8` | Confidence required to stop scanning more segments (0.0 to 1.0). |
+| `SMART_SAMPLING_SEARCH` | `true` | Enables localized entropy-based signal searching in sparse audio. |
+| `ASR_PARALLEL_LIMIT_ACCEL` | `1` | Max concurrent tasks on GPU/NPU (Default: 1 for stability). |
+| `ASR_PARALLEL_LIMIT_CPU` | `4` | Max concurrent tasks on CPU (Default: 4). |
 
 ---
 
@@ -257,6 +300,8 @@ services:
       # Vocal Separation Logic Toggles
       - ENABLE_VOCAL_SEPARATION=true
       - ENABLE_LD_PREPROCESSING=true
+      - LD_VAD_THRESHOLD=0.3
+      - LD_MIN_CONFIDENCE_THRESHOLD=0.8
       - SMART_SAMPLING_SEARCH=false
  
       # --- [RESOURCE ALLOCATION] ---

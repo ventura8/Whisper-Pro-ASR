@@ -258,6 +258,7 @@ def detect_language():
     if model_manager.WHISPER is None:
         return "Model not loaded. Check server logs.", 503
 
+    model_manager.increment_active_session()
     # Acquire priority lock (pauses ongoing ASR tasks)
     model_manager.request_priority()
     temp_path, clean_wav = None, None
@@ -301,6 +302,8 @@ def detect_language():
         # Crucial: Always release lock
         model_manager.release_priority()
         _cleanup_files(temp_path, clean_wav)
+        # Register task completion and reclaim resources if idle
+        model_manager.decrement_active_session()
 
 
 # --- [TRANSCRIPTION ENDPOINTS] ---

@@ -4,8 +4,10 @@ Voice Activity Detection (VAD) via Silero (Unified C++ implementation)
 This module provides high-precision speech/silence segmentation using the 
 Silero VAD model via the optimized faster-whisper backend.
 """
-# pylint: disable=broad-exception-caught, invalid-name
 import logging
+import tempfile
+import subprocess
+from . import config
 
 # Import the optimized functions from faster-whisper
 try:
@@ -19,13 +21,29 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def decode_audio(audio_path):
+def decode_audio(audio_path, start_offset=None, duration=None):
     """
-    Optimized audio decoding and 16kHz mono resampling using ffmpeg (via faster-whisper).
+    Optimized audio decoding and 16kHz mono resampling using ffmpeg.
+    Supports seeking to specific offsets and limiting duration.
     """
     if fw_decode_audio is None:
         raise ImportError("faster-whisper audio utilities not found.")
-    return fw_decode_audio(audio_path, sampling_rate=16000)
+
+    if start_offset is None and duration is None:
+        return fw_decode_audio(audio_path, sampling_rate=16000)
+
+    # If seeking is required, we use a manual ffmpeg call via temp file
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True, dir=config.get_temp_dir()) as tmp:
+        cmd = ["ffmpeg", "-threads", "1", "-y"]
+        if start_offset:
+            cmd += ["-ss", str(start_offset)]
+        if duration:
+            cmd += ["-t", str(duration)]
+        cmd += ["-i", audio_path, "-f", "wav", "-ar", "16000", "-ac", "1", tmp.name]
+
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        return fw_decode_audio(tmp.name, sampling_rate=16000)
 
 
 def get_speech_timestamps(audio, threshold=0.35,
@@ -56,17 +74,28 @@ def get_speech_timestamps(audio, threshold=0.35,
              'end': round(ts['end'] / 16000, 3)}
             for ts in speech_ts
         ]
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("[VAD] Unified segment analysis failed: %s", e)
         return []
 
 
-def get_speech_timestamps_from_path(audio_path, threshold=0.35,
-                                    min_silence_duration_ms=500, speech_pad_ms=500):
+def get_speech_timestamps_from_path(audio_path, threshold=0.35, **kwargs):
     """ Helper to run VAD directly on a file path. """
+    # kwargs can contain: min_silence_duration_ms, speech_pad_ms, start_offset, duration
+    min_silence = kwargs.get('min_silence_duration_ms', 500)
+    speech_pad = kwargs.get('speech_pad_ms', 500)
+    start_offset = kwargs.get('start_offset')
+    duration = kwargs.get('duration')
+
     try:
-        audio = decode_audio(audio_path)
-        return get_speech_timestamps(audio, threshold, min_silence_duration_ms, speech_pad_ms)
-    except Exception as e:
+        audio = decode_audio(audio_path, start_offset=start_offset, duration=duration)
+        results = get_speech_timestamps(audio, threshold, min_silence, speech_pad)
+        # If we had an offset, we must shift the results back to the original timeline
+        if start_offset:
+            for ts in results:
+                ts['start'] += start_offset
+                ts['end'] += start_offset
+        return results
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("[VAD] File decoding failed: %s", e)
         return []

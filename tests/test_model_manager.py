@@ -53,16 +53,61 @@ class TestModuleGlobals:
         from modules import model_manager
         assert hasattr(model_manager, 'WHISPER')
         assert hasattr(model_manager, 'SEPARATOR')
-        assert hasattr(model_manager, 'THREAD_DATA')
-
-    def test_threading_primitives_exist(self):
-        """Test threading primitives are defined."""
-        from modules import model_manager
-        assert hasattr(model_manager, '_MODEL_LOCK')
-        assert hasattr(model_manager, '_TRANSCRIBING_LOCK')
+        assert hasattr(model_manager, '_ACTIVE_SESSIONS')
         assert hasattr(model_manager, '_PRIORITY_LOCK')
         assert hasattr(model_manager, '_PAUSE_REQUESTED')
         assert hasattr(model_manager, '_RESUME_EVENT')
+
+
+class TestResourceManagement:
+    """Test suite for resource management and session tracking."""
+
+    def test_session_helpers_increment_decrement(self):
+        """Test increment_active_session and decrement_active_session."""
+        from modules import model_manager
+
+        # Reset state
+        model_manager._ACTIVE_SESSIONS = 0
+
+        model_manager.increment_active_session()
+        assert model_manager._ACTIVE_SESSIONS == 1
+
+        # Mock offload to avoid real side effects
+        with mock.patch("modules.model_manager._check_and_offload_resources") as mock_off:
+            model_manager.decrement_active_session()
+            assert model_manager._ACTIVE_SESSIONS == 0
+            mock_off.assert_called_once()
+
+    def test_check_and_offload_resources_active_sessions(self):
+        """Test offload is skipped if sessions are active."""
+        from modules import model_manager
+        model_manager._ACTIVE_SESSIONS = 1
+
+        with mock.patch("modules.preprocessing.get_manager") as mock_gm:
+            model_manager._check_and_offload_resources()
+            mock_gm.assert_not_called()
+
+    def test_check_and_offload_resources_idle(self):
+        """Test offload happens when idle."""
+        from modules import model_manager
+        model_manager._ACTIVE_SESSIONS = 0
+
+        with mock.patch("modules.preprocessing.get_manager") as mock_gm:
+            mock_mgr = mock.MagicMock()
+            mock_gm.return_value = mock_mgr
+
+            model_manager._check_and_offload_resources()
+            mock_mgr.offload.assert_called_once()
+
+    def test_check_and_offload_resources_queued(self):
+        """Test offload is skipped if tasks are queued."""
+        from modules import model_manager
+        model_manager._ACTIVE_SESSIONS = 0
+        model_manager._QUEUED_SESSIONS = 1
+
+        with mock.patch("modules.preprocessing.get_manager") as mock_gm:
+            model_manager._check_and_offload_resources()
+            mock_gm.assert_not_called()
 
 
 class TestLoadModel:
@@ -157,6 +202,85 @@ class TestRequestPriority:
 
         assert model_manager._PRIORITY_REQUESTS == 0
 
+    def test_request_priority_sequential_lock(self):
+        """Test that multiple priority requests are serialized."""
+        from modules import model_manager
+        import threading
+        import time
+
+        # Force deterministic limit for test
+        original_seq_lock = model_manager._PRIORITY_SEQUENTIAL_LOCK
+        model_manager._PRIORITY_SEQUENTIAL_LOCK = threading.Semaphore(1)
+
+        try:
+            # Reset state
+            model_manager._PRIORITY_REQUESTS = 0
+            model_manager._QUEUED_SESSIONS = 0
+
+            # Start a thread that holds the sequential lock
+            def hold_lock():
+                model_manager.request_priority()
+                time.sleep(0.4)
+                model_manager.release_priority()
+
+            t1 = threading.Thread(target=hold_lock)
+            t1.start()
+
+            time.sleep(0.1)
+            # Second request should be queued if we try to acquire it
+            def try_lock():
+                model_manager.request_priority()
+                model_manager.release_priority()
+
+            t2 = threading.Thread(target=try_lock)
+            t2.daemon = True
+            t2.start()
+
+            time.sleep(0.2)
+            assert model_manager._QUEUED_SESSIONS >= 1
+
+            t1.join()
+            t2.join()
+            assert model_manager._QUEUED_SESSIONS == 0
+        finally:
+            model_manager._PRIORITY_SEQUENTIAL_LOCK = original_seq_lock
+
+
+class TestWaitPriority:
+    """Test suite for pre-emption check-point."""
+
+    def test_wait_for_priority_pauses(self):
+        """Test that wait_for_priority blocks when a pause is requested."""
+        from modules import model_manager
+        import threading
+        import time
+
+        model_manager._PAUSE_REQUESTED.set()
+        model_manager._RESUME_EVENT.clear()
+        model_manager._QUEUED_SESSIONS = 0
+
+        wait_started = threading.Event()
+        wait_finished = threading.Event()
+
+        def do_wait():
+            wait_started.set()
+            model_manager.wait_for_priority()
+            wait_finished.set()
+
+        t = threading.Thread(target=do_wait)
+        t.start()
+
+        wait_started.wait()
+        time.sleep(0.2)
+        # If it finished, then it didn't wait
+        assert not wait_finished.is_set()
+        assert model_manager._QUEUED_SESSIONS >= 1
+
+        model_manager._RESUME_EVENT.set()
+        t.join(timeout=1.0)
+        assert wait_finished.is_set()
+        assert model_manager._QUEUED_SESSIONS == 0
+
 
 class TestModelLockCtx:
     """Test model_lock_ctx context manager."""
@@ -165,12 +289,12 @@ class TestModelLockCtx:
         """Test context manager acquires and releases lock."""
         from modules.model_manager import model_lock_ctx, _MODEL_LOCK
 
-        assert not _MODEL_LOCK.locked()
-
+        initial_value = _MODEL_LOCK._value
         with model_lock_ctx():
-            assert _MODEL_LOCK.locked()
+            # For Semaphore, value decreases when acquired
+            assert _MODEL_LOCK._value == initial_value - 1
 
-        assert not _MODEL_LOCK.locked()
+        assert _MODEL_LOCK._value == initial_value
 
 
 class TestRunTranscription:
@@ -258,6 +382,24 @@ class TestRunTranscription:
         finally:
             model_manager.WHISPER = original_whisper
 
+    def test_run_transcription_session_tracking_on_failure(self):
+        """Test session count is decremented even on failure."""
+        from modules import model_manager
+        mock_whisper = mock.MagicMock()
+        mock_whisper.transcribe.side_effect = Exception("Transcribe failed")
+
+        original_whisper = model_manager.WHISPER
+        model_manager.WHISPER = mock_whisper
+        model_manager._ACTIVE_SESSIONS = 0
+
+        try:
+            with pytest.raises(Exception, match="Transcribe failed"):
+                model_manager.run_transcription("fail.wav")
+
+            assert model_manager._ACTIVE_SESSIONS == 0
+        finally:
+            model_manager.WHISPER = original_whisper
+
 
 class TestRunLanguageDetection:
     """Test run_language_detection function."""
@@ -283,16 +425,19 @@ class TestRunLanguageDetection:
         mock_info = mock.MagicMock()
         mock_info.language = "fr"
         mock_info.language_probability = 0.88
+        mock_info.all_language_probs = {"fr": 0.88}
         mock_whisper.transcribe.return_value = (iter([]), mock_info)
 
         original_whisper = model_manager.WHISPER
         model_manager.WHISPER = mock_whisper
 
         try:
-            result = model_manager.run_language_detection("/fake/path.wav")
+            with mock.patch("modules.vad.get_speech_timestamps_from_path") as mock_vad:
+                mock_vad.return_value = [{'start': 0, 'end': 1}]
+                result = model_manager.run_language_detection("/fake/path.wav")
 
-            assert result['detected_language'] == "fr"
-            assert result['confidence'] == 0.88
+                assert result['detected_language'] == "fr"
+                assert result['confidence'] == 0.88
         finally:
             model_manager.WHISPER = original_whisper
 
@@ -307,10 +452,12 @@ class TestRunLanguageDetection:
         model_manager.WHISPER = mock_whisper
 
         try:
-            result = model_manager.run_language_detection("/fake/path.wav")
+            with mock.patch("modules.vad.get_speech_timestamps_from_path") as mock_vad:
+                mock_vad.return_value = [{'start': 0, 'end': 1}]
+                result = model_manager.run_language_detection("/fake/path.wav")
 
-            assert result['detected_language'] == "en"
-            assert result['confidence'] == 0.0
+                assert result['detected_language'] == "en"
+                assert result['confidence'] == 0.0
         finally:
             model_manager.WHISPER = original_whisper
 
@@ -517,3 +664,69 @@ class TestModelManagerEdgeCases:
         with mock.patch("modules.model_manager.logger") as mock_logger:
             _post_process_vad(None, "x.wav")
             mock_logger.error.assert_called()
+    def test_run_transcription_dual_path_fallback(self):
+        """Verify that ASR falls back to original audio if isolated output is silent."""
+        from modules import model_manager
+        mock_whisper = mock.MagicMock()
+        mock_info = mock.MagicMock(duration=1.0, language="en", language_probability=0.99)
+        mock_whisper.transcribe.return_value = (iter([]), mock_info)
+
+        with mock.patch("modules.model_manager.WHISPER", mock_whisper):
+            with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", True):
+                with mock.patch("modules.preprocessing.get_manager") as mock_gm:
+                    mock_pm = mock.MagicMock()
+                    mock_pm.process_audio_file.return_value = "/tmp/silent_vocals.wav"
+                    mock_gm.return_value = mock_pm
+
+                    with mock.patch("modules.vad.get_speech_timestamps_from_path") as mock_vad:
+                        # Isolated path returns silence
+                        mock_vad.return_value = []
+
+                        with mock.patch("os.path.exists", return_value=True):
+                            with mock.patch("os.remove"):
+                                with mock.patch("modules.model_manager._log_audio_diagnostics"):
+                                    model_manager.run_transcription("original.wav")
+
+                                    # Verify Whisper was called with ORIGINAL path
+                                    mock_whisper.transcribe.assert_called_once()
+                                    args = mock_whisper.transcribe.call_args[0]
+                                    assert args[0] == "original.wav"
+    def test_run_transcription_confidence_fallback(self):
+        """Verify that ASR falls back to original if isolated confidence is low."""
+        from modules import model_manager
+        mock_whisper = mock.MagicMock()
+        mock_info = mock.MagicMock(duration=1.0, language="en", language_probability=0.99)
+        mock_whisper.transcribe.return_value = (iter([]), mock_info)
+
+        with mock.patch("modules.model_manager.WHISPER", mock_whisper):
+            with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", True):
+                with mock.patch("modules.preprocessing.get_manager") as mock_gm:
+                    mock_pm = mock.MagicMock()
+                    mock_pm.process_audio_file.return_value = "/tmp/isolated.wav"
+                    mock_gm.return_value = mock_pm
+
+                    with mock.patch("modules.vad.get_speech_timestamps_from_path") as mock_vad:
+                        mock_vad.return_value = [{'start': 0, 'end': 1}]
+
+                        # First call (iso): 0.4 confidence
+                        # Second call (raw): 0.9 confidence
+                        mock_ld_path = "modules.model_manager._run_language_detection_core"
+                        with mock.patch(mock_ld_path) as mock_ld:
+                            mock_ld.side_effect = [
+                                {"confidence": 0.4},
+                                {"confidence": 0.9}
+                            ]
+
+                            with mock.patch("os.path.exists", return_value=True):
+                                with mock.patch("modules.utils.secure_remove"):
+                                    model_manager.run_transcription("original.wav")
+
+                                    # Verify it used original.wav for transcription
+                                    # transcription call is inside run_transcription
+                                    mock_whisper.transcribe.assert_called()
+                                    # find the transcription call
+                                    # _run_language_detection_core calls WHISPER.transcribe too.
+                                    # Actually, I mocked _run_language_detection_core directly.
+                                    # WHISPER.transcribe should be called once for transcription.
+                                    args = mock_whisper.transcribe.call_args[0]
+                                    assert args[0] == "original.wav"

@@ -9,7 +9,7 @@
 | `model_manager.py` | Manages Faster-Whisper lifecycles, VAD integration, and priority task scheduling. |
 | `preprocessing.py` | UVR/MDX-NET isolation engine with optimized ONNX/OpenVINO backend patching. |
 | `routes.py` | Flask API layer implementing RESTful endpoints and OpenAI-compatible aliases. |
-| `language_detection.py` | Dynamic single-chunk identification with automated duration-based scaling. |
+| `language_detection.py` | Multi-zone strategic sampling with confidence-weighted voting and dual-path VAD. |
 | `utils.py` | Managed FFmpeg normalization and millisecond-accurate SRT generation. |
 | `vad.py` | Silero Voice Activity Detection (VAD) for signal trimming and silence suppression. |
  
@@ -19,18 +19,19 @@
  
 ### Transcription Flow (/asr)
 1. **Ingress**: Media is received and analyzed for duration/metadata via `ffprobe`.
-2. **Pre-Detection**: If the source language is unknown, the engine performs **Optimized Language ID** using source media segments *before* full-file processing.
+2. **Pre-Detection**: If the source language is unknown, the engine performs **Optimized Language ID**. It utilizes **Parallel Preprocessing** to prepare up to 5 strategic zones simultaneously, reducing latency.
 3. **Standardization**: FFmpeg converts the source stream to **16kHz MONO WAV** with `-loudnorm` filtering, utilizing the project's global audio standard.
 4. **UVR Isolation (Optional)**: If enabled, the signal is passed through the MDX-NET isolator to remove background noise/music.
-5. **VAD Alignment**: Silero identifies active speech regions to prevent hallucinations in silent periods.
-6. **Inference**: The `model_manager` executes batched Faster-Whisper generation with real-time speed telemetry.
-7. **Finalization**: Subtitles are generated and a millisecond-precision SRT or structured JSON is returned.
+5. **Signal Quality Audit**: Silero identifies active speech. If isolation is silent OR yields low confidence (<80%), the engine audits the raw signal and selects the path with higher confidence.
+6. **Tie-Breaker Layer**: Before finalizing detection, the engine resolves ambiguities between similar languages (e.g., Norwegian vs. Nynorsk) using a **Confusion-Matrix Bias**.
+7. **Inference**: The `model_manager` executes batched Faster-Whisper generation with real-time speed telemetry.
+8. **Finalization**: Subtitles are generated and a millisecond-precision SRT or structured JSON is returned.
  
 ### Priority Detection Flow (/detect-language)
-1. **Dynamic Scaling**: The engine calculates an optimal chunk size (minimum 5 minutes, 5% of total duration) to ensure representative audio capture.
-2. **Optimized Extraction**: FFmpeg extracts this single chunk directly from the source media, bypassing full-file normalization.
-3. **Single-Pass Inference**: A high-confidence inference pass is performed on the extracted chunk (with optional UVR isolation).
-4. **ID**: The most probable language is selected and returned with detailed probability metadata.
+1. **Strategic Sampling**: The engine divides the media into up to 5 non-overlapping zones across the entire duration for maximum spatial representation.
+2. **Unified Extraction**: Optimized FFmpeg commands extract strategic samples directly, bypassing full-file normalization.
+3. **Dual-Path VAD**: Each zone is verified for speech on both isolated and raw audio paths to prevent false negatives in sparse media.
+4. **Weighted Inference**: Probabilities from all zones are aggregated using confidence-weighted averaging to ensure a robust final identification.
  
 ---
  
@@ -46,6 +47,12 @@ Whisper Pro implements a sophisticated **Priority Scheduling** system to manage 
     3. The high-priority Detection task acquires the **Sequential Priority Lock** and utilizes the hardware.
     4. Upon completion, the Detection task releases assets and signals the `_RESUME_EVENT`.
     5. The paused ASR thread re-acquires its lock and restores the inference state.
+
+### Unified Session Orchestration
+To ensure stability across concurrent operations, the system tracks all active and queued tasks via global counters:
+- **Synchronization**: Every request (ASR or Detection) increments `_ACTIVE_SESSIONS` on entry and decrements it on exit.
+- **Queue Tracking**: Requests waiting for hardware locks (NPU/GPU) or priority pre-emption are tracked via `_QUEUED_SESSIONS`.
+- **Proactive Reclamation**: Immediately after both active and queued counters hit zero, the system triggers a **Resource Offload** cycle. This ensures that heavy AI models remain in memory as long as there is pending work, eliminating initialization overhead for back-to-back requests.
  
 ---
  
