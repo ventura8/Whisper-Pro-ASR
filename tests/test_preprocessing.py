@@ -657,3 +657,217 @@ class TestPreprocessingCoverageBoost:
             preprocessing.apply_onnx_optimizations()
             res = mock_ort.get_available_providers()
             assert res == ["CPUExecutionProvider"]
+
+class TestPreprocessingTempDir:
+    """Tests for temp directory usage in preprocessing."""
+
+    def test_init_separator_warmup_uses_temp_dir(self):
+        """Test that warmup dummy file is created in TEMP_DIR."""
+        manager = PreprocessingManager()
+        manager.separator = mock.MagicMock()
+        with mock.patch("modules.preprocessing.Separator"):
+            with mock.patch("modules.preprocessing.config") as cfg:
+                cfg.TEMP_DIR = "/tmp/whisper"
+                cfg.PREPROCESS_THREADS = 4
+                cfg.OV_CACHE_DIR = "/tmp"
+                # Mock file operations
+                with mock.patch("modules.preprocessing.sf.write") as mock_write:
+                    with mock.patch("os.remove"):
+                        manager._perform_warmup()
+                        # Verify sf.write was called with a path in /tmp/whisper
+                        args, _ = mock_write.call_args
+                        assert args[0].startswith("/tmp/whisper")
+                        assert "warmup" in args[0]
+
+    def test_process_audio_segment_uses_temp_dir(self):
+        """Test that process_audio_segment uses get_temp_dir for mkstemp."""
+        manager = PreprocessingManager()
+        with mock.patch("modules.preprocessing.config") as cfg:
+            cfg.ENABLE_VOCAL_SEPARATION = True
+            cfg.get_temp_dir.return_value = "/tmp/whisper"
+
+            mock_sep = mock.MagicMock()
+            mock_sep.separate.return_value = ["vocal.wav"]
+            manager.separator = mock_sep
+
+            segment = np.ones(16000, dtype=np.float32) * 0.1
+            with mock.patch("tempfile.mkstemp", return_value=(1, "temp.wav")) as mock_mkstemp:
+                with mock.patch("os.close"):
+                    with mock.patch("modules.preprocessing.sf.write"):
+                        with mock.patch("modules.preprocessing.sf.read",
+                                        return_value=(segment, 16000)):
+                            with mock.patch("os.remove"):
+                                with mock.patch("os.path.exists", return_value=True):
+                                    manager.process_audio_segment(segment)
+                                    # Verify mkstemp was called
+                                    assert mock_mkstemp.called
+                                    # Verify it used the correct directory
+                                    _, kwargs = mock_mkstemp.call_args
+                                    assert kwargs["dir"] == "/tmp/whisper"
+
+
+class TestPreprocessingCoverageFinal:
+    """Final set of tests to hit 90%+."""
+
+    def test_purge_stale_cache_legacy_support(self):
+        """Test that _purge_stale_cache cleans up legacy v1.0.0 directories."""
+        with mock.patch('modules.preprocessing.config') as mock_config:
+            mock_config.PREPROCESSING_CACHE_DIR = "/tmp/new_cache"
+            mock_config.OV_CACHE_DIR = "/tmp/persistent"
+            mock_config.PREPROCESS_DEVICE = "CPU"
+
+            mock_file1 = mock.MagicMock()
+            mock_file1.is_file.return_value = True
+            mock_file1.exists.return_value = True
+            mock_file1.name = "upload_test.wav"
+
+            mock_file2 = mock.MagicMock()
+            mock_file2.is_file.return_value = True
+            mock_file2.exists.return_value = True
+
+            with mock.patch.object(preprocessing, 'Path') as mock_path_cls:
+                mock_new_cache = mock.MagicMock()
+                mock_new_cache.iterdir.return_value = [mock_file1]
+
+                mock_persistent = mock.MagicMock()
+                mock_legacy = mock.MagicMock()
+                mock_legacy.exists.return_value = True
+                mock_legacy.is_dir.return_value = True
+                mock_legacy.iterdir.return_value = [mock_file2]
+                mock_persistent.__truediv__.return_value = mock_legacy
+
+                def path_side_effect(arg):
+                    arg_str = str(arg)
+                    if "new_cache" in arg_str:
+                        return mock_new_cache
+                    if "persistent" in arg_str:
+                        return mock_persistent
+                    return mock.MagicMock()
+
+                mock_path_cls.side_effect = path_side_effect
+
+                # Call directly
+                PreprocessingManager._purge_stale_cache()
+
+                # Verify unlinks - focus on legacy rmdir which implies inner loop success
+                assert mock_legacy.rmdir.called
+
+    def test_purge_persistent_temp(self):
+        """Test that _purge_stale_cache cleans up persistent temp fallback."""
+        with mock.patch('modules.preprocessing.config') as mock_config:
+            mock_config.PREPROCESSING_CACHE_DIR = "/tmp/none"
+            mock_config.OV_CACHE_DIR = "/tmp/none2"
+            mock_config.PERSISTENT_TEMP_DIR = "/tmp/persistent_temp"
+
+            mock_file = mock.MagicMock()
+            mock_file.is_file.return_value = True
+            mock_file.name = "upload_leak.tmp"
+
+            with mock.patch.object(preprocessing, 'Path') as mock_path_cls:
+                mock_pt = mock.MagicMock()
+                mock_pt.exists.return_value = True
+                mock_pt.is_dir.return_value = True
+                mock_pt.iterdir.return_value = [mock_file]
+
+                def path_side_effect(arg):
+                    if "persistent_temp" in str(arg):
+                        return mock_pt
+                    return mock.MagicMock()
+
+                mock_path_cls.side_effect = path_side_effect
+
+                PreprocessingManager._purge_stale_cache()
+                assert mock_file.unlink.called
+
+    def test_process_audio_file_segmented_flow(self):
+        """Test process_audio_file with segmentation path."""
+        with mock.patch('modules.preprocessing.config') as mock_config:
+            mock_config.ENABLE_VOCAL_SEPARATION = True
+            mock_config.VOCAL_SEPARATION_SEGMENT_DURATION = 1 # 1 second
+            mock_config.get_temp_dir.return_value = "/tmp"
+            mock_config.PREPROCESS_DEVICE = "CPU"
+            mock_config.WHISPER_TEMP_DIR = "/tmp"
+            mock_config.PREPROCESSING_CACHE_DIR = "/tmp/cache"
+
+            manager = PreprocessingManager()
+            manager.separator = mock.MagicMock()
+            manager.separator.separate.return_value = ["output_(Vocals)_test.wav"]
+            # 2 seconds of audio @ 16kHz
+            with mock.patch("modules.preprocessing.utils.get_audio_duration",
+                            return_value=2.0):
+                with mock.patch("modules.preprocessing.sf.info") as mock_info:
+                    mock_info.return_value = mock.MagicMock(frames=32000,
+                                                            samplerate=16000)
+                    with mock.patch("modules.preprocessing.sf.SoundFile") as mock_sf:
+                        # Mock the writer context manager
+                        mock_writer = mock.MagicMock()
+                        mock_writer.samplerate = 16000
+                        mock_sf.return_value.__enter__.return_value = mock_writer
+
+                        with mock.patch("modules.preprocessing.sf.read",
+                                        return_value=(np.zeros((16000, 1)), 16000)):
+                            with mock.patch("modules.preprocessing.sf.write"):
+                                with mock.patch("tempfile.mkstemp",
+                                                return_value=(1, "temp.wav")):
+                                    with mock.patch("os.close"):
+                                        with mock.patch("os.path.exists",
+                                                        return_value=True):
+                                            with mock.patch("os.remove"):
+                                                res = manager.process_audio_file("dummy.wav")
+                                                assert res == "temp.wav"
+                                                # Should have processed 2 segments
+                                                assert manager.separator.separate.call_count == 2
+
+    def test_isolate_and_write_segment_exception_path(self):
+        """Test _isolate_and_write_segment exception handling."""
+        with mock.patch('modules.preprocessing.config') as mock_config:
+            mock_config.get_temp_dir.return_value = "/tmp"
+            manager = PreprocessingManager()
+            manager.separator = mock.MagicMock(side_effect=Exception("Fatal Error"))
+
+            mock_writer = mock.MagicMock()
+            mock_writer.samplerate = 16000
+
+            with mock.patch("modules.preprocessing.sf.read",
+                            return_value=(np.zeros((16000, 1)), 16000)):
+                with mock.patch("modules.preprocessing.sf.write"):
+                    with mock.patch("tempfile.mkstemp",
+                                    return_value=(1, "temp.wav")):
+                        with mock.patch("os.close"):
+                            with mock.patch("os.path.exists",
+                                            return_value=True):
+                                with mock.patch("os.remove"):
+                                    # Should catch and write original audio
+                                    # pylint: disable=protected-access
+                                    manager._isolate_and_write_segment(
+                                        mock_writer, "in.wav", 0, 16000)
+                                    mock_writer.write.assert_called_once()
+
+    def test_offload_logic_cuda(self):
+        """Test model offloading and resource cleanup."""
+        with mock.patch('modules.preprocessing.config'):
+            manager = PreprocessingManager()
+            manager.separator = mock.MagicMock()
+
+            with mock.patch('modules.preprocessing.torch.cuda.is_available', return_value=True):
+                with mock.patch('modules.preprocessing.torch.cuda.empty_cache') as mock_empty:
+                    with mock.patch('modules.preprocessing.gc.collect') as mock_gc:
+                        manager.offload()
+                        assert manager.separator is None
+                        mock_empty.assert_called_once()
+                        mock_gc.assert_called_once()
+
+    def test_ensure_models_loaded_exception(self):
+        """Test ensure_models_loaded error handling path."""
+        with mock.patch('modules.preprocessing.config') as mock_config:
+            mock_config.ENABLE_VOCAL_SEPARATION = True
+            mock_config.ENABLE_LD_PREPROCESSING = False
+            mock_config.PREPROCESS_DEVICE = "CPU"
+            mock_config.PREPROCESSING_CACHE_DIR = "/tmp"
+
+            manager = PreprocessingManager()
+            manager._init_separator = mock.MagicMock(side_effect=Exception("Load fail"))
+
+            # Should catch and log error without crashing
+            manager.ensure_models_loaded()
+            manager._init_separator.assert_called_once()

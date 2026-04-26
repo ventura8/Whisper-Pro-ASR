@@ -62,6 +62,18 @@ services:
       # Core limit for Media Normalization (0 = auto-detect system-wide)
       - FFMPEG_THREADS=4
 
+      # --- [SSD WRITE PROTECTION] ---
+      # Redirect all transient processing files (uploads, FFmpeg output,
+      # UVR stems) to RAM-backed storage. Eliminates SSD write wear.
+      - WHISPER_TEMP_DIR=/tmp/whisper
+      # Minimum free space (MB) in TEMP_DIR before falling back to disk.
+      # Increase for very large media libraries (4h+ movies).
+      # - WHISPER_TEMP_MIN_FREE_MB=512
+
+    # RAM-backed temp storage for transient processing files (SSD protection)
+    tmpfs:
+      - /tmp/whisper:size=2G
+
     volumes:
       # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
       - ./model_cache:/app/model_cache

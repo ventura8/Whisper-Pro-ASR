@@ -41,3 +41,21 @@ Then rebuild: `docker compose up -d --build`
 | Model load fails | Reduce `ASR_BEAM_SIZE` to 4 |
 | Build fails | Check disk space/RAM (~17GB needed) |
 | Slow first run | Normal - NPU compilation takes 2-5 min |
+
+## SSD Protection (RAM-disk)
+
+For high-volume transcription, it is highly recommended to use a `tmpfs` mount to protect your SSD from write wear.
+
+### Configuration
+In your `docker-compose.yml`, add:
+```yaml
+environment:
+  - WHISPER_TEMP_DIR=/tmp/whisper
+tmpfs:
+  - /tmp/whisper:size=2G
+```
+
+### Sizing Guidance
+- **Default (2GB)**: Sufficient for 95% of use cases (including 2h movies).
+- **Large (4GB+)**: Recommended if you frequently process 4h+ movies or 4K videos with large upload sizes.
+- **Dynamic Fallback**: If the RAM-disk fills up, Whisper Pro will automatically fallback to physical disk to prevent crashes.

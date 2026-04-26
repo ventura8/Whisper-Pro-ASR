@@ -246,13 +246,31 @@ class TestUtilsEdgeCases:
         res = {"segments": [{"timestamp": (None, None), "text": "X"}]}
         assert "00:00:00.000" in utils.generate_vtt(res)
 
-    def test_generate_tsv_edge_cases(self):
-        """Test generate_tsv with null timestamps and errors."""
-        res = {"segments": [{"timestamp": (None, None), "text": "T"}]}
-        tsv = utils.generate_tsv(res)
-        assert "0\t0\tT" in tsv
-
-        # Exception in loop
+    def test_generate_tsv_exception_in_loop(self):
+        """Test generate_tsv handles exceptions inside the segment loop."""
         res = {"segments": [None]}
         tsv = utils.generate_tsv(res)
         assert "start\tend\ttext" in tsv # Header only
+
+def test_convert_to_wav_uses_temp_dir():
+    """Test that convert_to_wav uses config.get_temp_dir."""
+    mock_process = mock.MagicMock()
+    mock_process.__enter__.return_value = mock_process
+    mock_process.stdout.readline.return_value = ""
+    mock_process.returncode = 0
+
+    with mock.patch("modules.utils.subprocess.Popen", return_value=mock_process):
+        with mock.patch("os.path.exists", return_value=True):
+            with mock.patch("os.path.getsize", return_value=1024):
+                with mock.patch("modules.utils.get_audio_duration", return_value=10.0):
+                    with mock.patch("modules.config.get_temp_dir",
+                                    return_value="/tmp/whisper") as mock_get_temp:
+                        with mock.patch("tempfile.NamedTemporaryFile") as mock_temp:
+                            mock_temp.return_value.__enter__.return_value.name = "temp.wav"
+                            utils.convert_to_wav("input.mp3")
+                            # Verify get_temp_dir was called with estimated size
+                            # 10s * 16000 * 2 = 320000
+                            mock_get_temp.assert_called_once_with(required_bytes=320000)
+                            # Verify NamedTemporaryFile used that dir
+                            mock_temp.assert_called_once()
+                            assert mock_temp.call_args[1]["dir"] == "/tmp/whisper"

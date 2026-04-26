@@ -126,6 +126,10 @@ def apply_onnx_optimizations():
                         sess_options.inter_op_num_threads = thread_count
                         sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
+                        # Optimization: Memory management for concurrent sessions
+                        sess_options.enable_mem_reuse = True
+                        sess_options.enable_mem_pattern = True
+
                         # Only log once to avoid clutter
                         if not getattr(PreprocessingManager, "_logged_threads", False):
                             logger.info(
@@ -240,27 +244,59 @@ class PreprocessingManager:
 
     @staticmethod
     def _purge_stale_cache():
-        """Remove orphaned files from the preprocessing cache at startup.
-
-        At boot time, no requests are active, so any files remaining in
-        CACHE_DIR are guaranteed leftovers from a previous run (e.g. stems
-        leaked by v1.0.0). This ensures a clean slate on every restart.
-        """
+        """Remove orphaned files from the preprocessing cache at startup."""
         purged = 0
         try:
-            for entry in CACHE_DIR.iterdir():
-                if entry.is_file():
-                    try:
-                        entry.unlink()
-                        purged += 1
-                    except Exception:  # pylint: disable=broad-exception-caught
-                        pass
+            # 1. Cleanup current transient cache (tmpfs)
+            purged += PreprocessingManager._purge_dir(CACHE_DIR)
+
+            # 2. Cleanup legacy persistent cache (ssd/hdd leftover from v1.0.0)
+            legacy_dir = Path(config.OV_CACHE_DIR) / "preprocessing"
+            purged += PreprocessingManager._purge_dir(legacy_dir, remove_dir=True)
+
+            # 3. Cleanup persistent temp fallback (ssd/hdd leftovers)
+            persistent_temp = Path(config.PERSISTENT_TEMP_DIR)
+            purged += PreprocessingManager._purge_dir(persistent_temp, prefix="upload_")
+
             if purged:
                 logger.info(
                     "[System] Startup cleanup: Purged %d orphaned "
-                    "file(s) from preprocessing cache.", purged)
+                    "file(s) from caches.", purged)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
+
+    @staticmethod
+    def _purge_dir(dir_path, prefix=None, remove_dir=False):
+        """Helper to purge files in a directory."""
+        purged = 0
+        if not dir_path.exists() or not dir_path.is_dir():
+            return 0
+
+        for entry in dir_path.iterdir():
+            if entry.is_file():
+                if prefix and not entry.name.startswith(prefix):
+                    continue
+                try:
+                    entry.unlink()
+                    purged += 1
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
+        if remove_dir:
+            try:
+                dir_path.rmdir()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        return purged
+
+    def offload(self):
+        """Release UVR isolation models from RAM/VRAM."""
+        with self._lock:
+            if self.separator:
+                logger.info("[System] Offloading UVR isolation engine from memory...")
+                self.separator = None
+                utils.clear_gpu_cache()
+                gc.collect()
 
     def ensure_models_loaded(self):
         """
@@ -287,7 +323,7 @@ class PreprocessingManager:
                      config.PREPROCESS_DEVICE_NAME)
 
         # Create a 1-second synthetic white noise signal
-        dummy_path = os.path.join("/tmp", f"warmup_{uuid.uuid4().hex}.wav")
+        dummy_path = os.path.join(config.TEMP_DIR, f"warmup_{uuid.uuid4().hex}.wav")
         try:
             sample_rate = 44100
             duration = 1.0
@@ -462,7 +498,8 @@ class PreprocessingManager:
         )
 
         # Create a temporary file for the assembled output
-        tmp_fd, final_out_path = tempfile.mkstemp(suffix=".wav")
+        tmp_fd, final_out_path = tempfile.mkstemp(suffix=".wav",
+                                                    dir=config.get_temp_dir())
         os.close(tmp_fd)
 
         try:
@@ -501,7 +538,8 @@ class PreprocessingManager:
         if segment_data.shape[1] > 1:
             segment_data = np.mean(segment_data, axis=1)
 
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav",
+                                             dir=config.get_temp_dir())
         os.close(tmp_fd)
         sf.write(tmp_path, segment_data, sr)
 
@@ -582,8 +620,9 @@ class PreprocessingManager:
         output_files = []
         try:
             self._init_separator()
-            tmp_id = uuid.uuid4().hex
-            in_path = os.path.join(str(CACHE_DIR), f"segment_in_{tmp_id}.wav")
+            tmp_fd, in_path = tempfile.mkstemp(suffix=".wav",
+                                               dir=config.get_temp_dir())
+            os.close(tmp_fd)
             sf.write(in_path, segment, sr, subtype='PCM_16')
 
             if yield_cb:
@@ -635,13 +674,3 @@ class PreprocessingManager:
                 data = padded
 
         return data
-
-    def offload(self):
-        """Release isolation engine assets to free hardware resources."""
-        if self.separator:
-            logger.info("[System] Offloading UVR engine...")
-            del self.separator
-            self.separator = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            gc.collect()

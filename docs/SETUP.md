@@ -42,6 +42,9 @@ volumes:
   - /mnt/nas/tv:/tv
 ```
 
+## SSD Protection
+If running on an SSD, consider adding a `tmpfs` mount to minimize write wear. See `docs/TUNING.md` for details.
+
 ## Verify
 ```bash
 docker compose logs -f

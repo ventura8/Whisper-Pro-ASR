@@ -354,7 +354,8 @@ def run_voting_detection(clean_wav, model_manager):
         segment_path = None
 
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as segment_tmp:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False,
+                                             dir=config.get_temp_dir()) as segment_tmp:
                 segment_path = segment_tmp.name
 
             logger.info("[LD] Extraction: Sample %d/%d (Seek: %s)",
