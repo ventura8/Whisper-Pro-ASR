@@ -50,7 +50,11 @@ def convert_to_wav(source_path):
     logger.info("[Prep] Stream analysis: %s (%s)",
                 os.path.basename(source_path), format_duration(duration))
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+    # Estimate output size: 16kHz * 2 bytes (16-bit) * 1 channel * duration
+    estimated_bytes = int(duration * 16000 * 2) if duration > 0 else 0
+    temp_dir = config.get_temp_dir(required_bytes=estimated_bytes)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False,
+                                     dir=temp_dir) as temp_wav:
         output_path = temp_wav.name
 
     try:
@@ -283,3 +287,12 @@ LANGUAGES = {
     "tl": "Tagalog", "mg": "Malagasy", "as": "Assamese", "tt": "Tatar", "haw": "Hawaiian",
     "ln": "Lingala", "ha": "Hausa", "ba": "Bashkir", "jw": "Javanese", "su": "Sundanese"
 }
+
+def clear_gpu_cache():
+    """Trigger explicit hardware cache reclamation if CUDA is present."""
+    try:
+        import torch  # pylint: disable=import-outside-toplevel, import-error
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass

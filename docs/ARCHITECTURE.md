@@ -68,6 +68,17 @@ The service applies a series of recursive monkey-patches to **ONNX Runtime** and
  
 ---
  
+## 💾 SSD Write Optimization
+ 
+To ensure longevity on SSD-backed hosts (common in Docker environments), Whisper Pro implements a **Transient RAM-Bypass** strategy:
+ 
+- **Centralized Temp Store**: All high-frequency write operations (FFmpeg re-encoding, file uploads, UVR stems) are redirected to a single `WHISPER_TEMP_DIR`.
+- **tmpfs Integration**: By mounting this directory as `tmpfs` (RAM-disk), the service eliminates physical SSD wear for transient files.
+- **Dynamic Overflow Protection**: The engine monitors available space in the temp directory. If a file (e.g., a 4h+ movie) exceeds available RAM-disk space, the engine automatically falls back to the system's physical disk to ensure processing completes.
+- **Transient Preprocessing**: Unlike model blobs which remain in persistent cache, intermediate UVR stems are stored in the temp directory and purged immediately after use.
+ 
+---
+ 
 ## 🏛 Hardware Interface & Host Dependencies
  
 To maintain high performance without compromising security, Whisper Pro separates the **AI Runtime** (inside the container) from the **Hardware Drivers** (on the Host):

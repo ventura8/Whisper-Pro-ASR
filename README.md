@@ -176,6 +176,9 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | `ASR_THREADS` | `4` | CPU core allocation for inference orchestration. |
 | `ASR_PREPROCESS_THREADS` | `4` | CPU core allocation for UVR/ONNX preprocessing. |
 | `FFMPEG_THREADS` | `0` | FFmpeg core limit (`0` for system-wide auto-detect). |
+| **SSD Protection** | | |
+| `WHISPER_TEMP_DIR`| `/tmp/whisper`| Redirects transient I/O (uploads, WAVs, stems) to this path. |
+| `WHISPER_TEMP_MIN_FREE_MB` | `512` | Fallback threshold to disk if RAM-disk is full. |
 | **Preprocessing** | | |
 | `ENABLE_VOCAL_SEPARATION`| `true` | Toggles UVR background removal engine for translate/transcribe. |
 | `ENABLE_LD_PREPROCESSING`| `true` | Toggles UVR background removal engine for language detection. |
@@ -250,7 +253,13 @@ services:
       - ASR_PREPROCESS_THREADS=4
       # Core limit for Media Normalization (0 = auto-detect system-wide)
       - FFMPEG_THREADS=4
- 
+
+      # --- [SSD WRITE PROTECTION] ---
+      - WHISPER_TEMP_DIR=/tmp/whisper
+
+    tmpfs:
+      - /tmp/whisper:size=2G
+
     volumes:
       # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
       - ./model_cache:/app/model_cache

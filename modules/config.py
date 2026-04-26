@@ -6,13 +6,15 @@ model path resolution for both Whisper and UVR/MDX-NET engines.
 """
 import os
 import logging
+import shutil
+import tempfile
 
 # Set up early logger for configuration phase
 logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 # pylint: disable=invalid-name
 
@@ -198,7 +200,64 @@ INITIAL_STEPS_RATIO = 2.8
 # Path for compiled OpenVINO blobs and model downloads
 LOCAL_CACHE = "./model_cache"
 OV_CACHE_DIR = os.environ.get("OV_CACHE_DIR", LOCAL_CACHE)
-PREPROCESSING_CACHE_DIR = os.path.join(OV_CACHE_DIR, "preprocessing")
+
+# --- [SSD WRITE WEAR OPTIMIZATION] ---
+# All transient processing files (FFmpeg output, uploads, UVR stems) are written
+# here. Mount this as tmpfs in Docker to eliminate SSD write wear entirely.
+# Default: system temp directory (e.g. /tmp)
+TEMP_DIR = os.environ.get("WHISPER_TEMP_DIR", tempfile.gettempdir())
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+# Minimum free space (bytes) required in TEMP_DIR before falling back to
+# persistent storage. This prevents tmpfs overflow when processing very large files.
+TEMP_DIR_MIN_FREE_BYTES = int(os.environ.get(
+    "WHISPER_TEMP_MIN_FREE_MB", 512)) * 1024 * 1024
+
+# PERSISTENT_TEMP_DIR points to the persistent volume (SSD/HDD).
+# Used as a fallback for files too large for tmpfs.
+PERSISTENT_TEMP_DIR = os.path.join(OV_CACHE_DIR, "temp")
+os.makedirs(PERSISTENT_TEMP_DIR, exist_ok=True)
+
+
+def get_temp_dir(required_bytes=0):
+    """Return the best temp directory for transient file I/O.
+
+    Checks available space in the configured TEMP_DIR. If the remaining
+    space is below TEMP_DIR_MIN_FREE_BYTES (or below *required_bytes*),
+    falls back to the OS default temp directory to prevent tmpfs overflow.
+
+    Args:
+        required_bytes: Estimated size of the file about to be written.
+                        Pass 0 to use the global minimum threshold only.
+
+    Returns:
+        Path to the directory that should be used for the temp file.
+    """
+    threshold = max(TEMP_DIR_MIN_FREE_BYTES, required_bytes)
+    try:
+        free = shutil.disk_usage(TEMP_DIR).free
+        if free >= threshold:
+            return TEMP_DIR
+        logger.debug(
+            "[System] TEMP_DIR low on space (%dMB free, need %dMB). "
+            "Falling back to system temp.",
+            free // (1024 * 1024), threshold // (1024 * 1024))
+    except OSError:
+        pass
+    return PERSISTENT_TEMP_DIR
+
+
+# UVR stems are transient (cleaned up per-request), so they belong in
+# TEMP_DIR (or persistent fallback) rather than the root OV_CACHE_DIR.
+def get_preprocessing_cache_dir():
+    """Resolve the preprocessing cache directory dynamically."""
+    base = get_temp_dir()
+    path = os.path.join(base, "preprocessing")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+PREPROCESSING_CACHE_DIR = get_preprocessing_cache_dir()
 
 # --- [MODEL PATH RESOLUTION] ---
 # "Batteries Included" logic: If use has not changed the default model,

@@ -80,4 +80,10 @@ COPY modules/ ./modules/
 COPY scripts/ ./scripts/
 COPY whisper_pro_asr.py .
 
+# Create default temp processing directory
+# Mount as tmpfs in docker-compose for zero SSD writes
+RUN mkdir -p /tmp/whisper && chmod 777 /tmp/whisper
+ENV WHISPER_TEMP_DIR=/tmp/whisper
+
+EXPOSE 9000
 CMD ["python3", "whisper_pro_asr.py"]

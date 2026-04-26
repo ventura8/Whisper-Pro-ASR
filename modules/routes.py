@@ -8,7 +8,6 @@ multi-format transcription.
 # pylint: disable=broad-exception-caught
 import logging
 import os
-import tempfile
 import traceback
 import time
 import uuid
@@ -752,26 +751,38 @@ def _handle_upload():
         if len(ext) > 6:
             ext = ".tmp"
 
-        # Generate unique safe path manually to avoid file handle conflicts
+        # Proactively check for space using Content-Length if available
+        # Default to 0 for unknown size (uses global minimum threshold)
+        expected_size = request.content_length or 0
+        upload_dir = config.get_temp_dir(required_bytes=expected_size)
         tmp_path = os.path.join(
-            tempfile.gettempdir(), f"upload_{uuid.uuid4().hex}{ext}")
+            upload_dir, f"upload_{uuid.uuid4().hex}{ext}")
 
-        # Read into memory to verify content immediately
-        file_data = audio_file.read()
-        f_size = len(file_data)
+        # Stream directly from request to disk (Zero-copy in Python)
+        audio_file.save(tmp_path)
+        f_size = os.path.getsize(tmp_path)
 
         if f_size == 0:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
             raise ValueError("Remote data stream is empty (0 bytes received).")
 
-        # Check for null bytes (corruption/transcoding failure)
-        if f_size > 1024 and all(b == 0 for b in file_data[:1024]):
+        # Validation: Check for null bytes (corruption/transcoding failure)
+        # We only check the first 1k to avoid reading the whole file again
+        is_corrupted = False
+        if f_size > 1024:
+            with open(tmp_path, 'rb') as f:
+                header = f.read(1024)
+                if all(b == 0 for b in header):
+                    is_corrupted = True
+
+        if is_corrupted:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
             raise ValueError(
                 "Input file is corrupted (contains only null bytes).")
 
-        with open(tmp_path, 'wb') as f:
-            f.write(file_data)
-
-        logger.info("[System] Remote source ingestion successful: %d bytes", f_size)
+        logger.info("[System] Remote source ingestion successful: %d bytes (Streamed)", f_size)
         return tmp_path, tmp_path
     except Exception as e:
         if tmp_path and os.path.exists(tmp_path):

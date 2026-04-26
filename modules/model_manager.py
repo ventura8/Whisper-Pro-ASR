@@ -242,6 +242,23 @@ def run_transcription(audio_path, language=None, task='transcribe', _batch_size=
                     logger.warning(
                         "Failed to cleanup intermediate file: %s", cleanup_err)
 
+            # --- [PROACTIVE RAM MANAGEMENT] ---
+            # Trigger garbage collection to release memory from transient numpy arrays
+            import gc
+            gc.collect()
+
+            # Release CUDA/NPU memory if applicable
+            utils.clear_gpu_cache()
+
+            # If this was the last active session, offload the heavy preprocessing models
+            # to return several hundred MBs to the OS/Hardware pool.
+            if _TRANSCRIBING_SESSIONS == 0:
+                try:
+                    from . import preprocessing
+                    preprocessing.get_manager().offload()
+                except Exception: # pylint: disable=broad-exception-caught
+                    pass
+
 
 # --- [INTERNAL HELPER UTILITIES] ---
 

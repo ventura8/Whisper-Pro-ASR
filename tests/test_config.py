@@ -2,6 +2,7 @@
 # pylint: disable=import-outside-toplevel
 import os
 from unittest import mock
+import tempfile
 
 
 class TestConfig:
@@ -117,7 +118,7 @@ class TestConfigEnv:
         """Test app name and version constants."""
         import modules.config as config_module
         assert "Whisper" in config_module.APP_NAME
-        assert config_module.VERSION == "1.0.1"
+        assert config_module.VERSION == "1.0.2"
 
     def test_device_constant_exists(self):
         """Test DEVICE constant exists."""
@@ -265,8 +266,42 @@ class TestConfigHardware:
             importlib.reload(config_module)
             assert config_module.COMPUTE_TYPE == "float32"
 
-    def test_hallucination_phrases_content(self):
-        """Verify hallucination phrases include expected values."""
         import modules.config as config_module
         assert "thank you for watching" in config_module.HALLUCINATION_PHRASES
         assert "vă mulțumim pentru vizionare" in config_module.HALLUCINATION_PHRASES
+
+class TestConfigSSD:
+    """Tests for SSD optimization settings."""
+
+    def test_temp_dir_default(self):
+        """Test TEMP_DIR defaults to system temp."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            import importlib
+            import modules.config as config_module
+            importlib.reload(config_module)
+            assert config_module.TEMP_DIR == tempfile.gettempdir()
+
+    def test_temp_dir_from_env(self):
+        """Test TEMP_DIR from WHISPER_TEMP_DIR env."""
+        with mock.patch.dict(os.environ, {"WHISPER_TEMP_DIR": "/tmp/whisper"}):
+            import importlib
+            import modules.config as config_module
+            with mock.patch("os.makedirs"):
+                importlib.reload(config_module)
+                assert config_module.TEMP_DIR == "/tmp/whisper"
+
+    def test_temp_min_free_default(self):
+        """Test TEMP_DIR_MIN_FREE_BYTES defaults to 512MB."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            import importlib
+            import modules.config as config_module
+            importlib.reload(config_module)
+            assert config_module.TEMP_DIR_MIN_FREE_BYTES == 512 * 1024 * 1024
+
+    def test_temp_min_free_from_env(self):
+        """Test TEMP_DIR_MIN_FREE_BYTES from env."""
+        with mock.patch.dict(os.environ, {"WHISPER_TEMP_MIN_FREE_MB": "100"}):
+            import importlib
+            import modules.config as config_module
+            importlib.reload(config_module)
+            assert config_module.TEMP_DIR_MIN_FREE_BYTES == 100 * 1024 * 1024
