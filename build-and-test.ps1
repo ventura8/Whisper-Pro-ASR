@@ -1,18 +1,24 @@
-# CI-equivalent: build test image, run pylint, run test suite.
-# Run this in PowerShell from the project root (e.g. outside Cursor terminal).
+# CI-equivalent: install linting tools, run YAML/Python lint, build test image, run test suite.
+# Run this in PowerShell from the project root.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
 Set-Location $root
 
-Write-Host "--- Building test image ---"
+Write-Host "`n--- Installing Linting Tools ---"
+python -m pip install pylint yamllint
+
+Write-Host "`n--- YAML Lint ---"
+python -m yamllint -c .yamllint .
+
+Write-Host "`n--- Pylint Lint ---"
+python -m pylint modules tests whisper_pro_asr.py --recursive=y --disable=import-error
+
+Write-Host "`n--- Building Test Image ---"
 docker build -f Dockerfile.test -t whisper-pro-asr-test .
 
-Write-Host "`n--- Pylint ---"
-docker run --rm whisper-pro-asr-test python3 -m pylint modules tests whisper_pro_asr.py --recursive=y
-
-Write-Host "`n--- Test suite ---"
+Write-Host "`n--- Execute Test Suite ---"
 New-Item -ItemType Directory -Force -Path assets | Out-Null
 docker run --rm `
   -e SKIP_LINT=1 `

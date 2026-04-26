@@ -97,6 +97,13 @@ docker run --rm whisper-npu-test
 ```
 *Note: The test suite enforces 90%+ code coverage for all critical modules.*
 
+## Release Notes v1.0.4
+- **FIX**: Resolved "nn" (Nynorsk) language hallucination on silent or non-speech audio segments.
+- **FEAT**: Implemented **Iterative Signal Scanning** for language detection. If a chunk is silent, the engine automatically skips to the next segment (up to 5 attempts).
+- **FEAT**: Enhanced **Dynamic Chunk Sizing**. Samples now scale linearly: 8 minutes for 1h content, 20 minutes for 4h content.
+- **FEAT**: Added **Fail-Safe VAD Logic**. If isolated vocals are silent, the engine automatically falls back to the original audio segment to ensure no speech is missed.
+- **STAB**: Integrated pre-inference VAD checks to ensure language identification is only performed on valid speech.
+
 ## Release Notes v1.0.1
 - **FIX**: Automatically clean up legacy storage leaks from version 1.0.0 in the preprocessing cache at startup.
 - **FIX**: Resolved an issue where temporary vocal and instrumental stems were not properly cleaned up, causing `model_cache/preprocessing` to grow indefinitely.

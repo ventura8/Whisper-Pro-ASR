@@ -40,10 +40,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Linting Tools
+        run: |
+          pip install pylint yamllint
+
       - name: YAML Lint
         run: |
-          pip install yamllint
           yamllint -c .yamllint .
+
+      - name: Pylint Lint
+        run: |
+          python -m pylint modules tests whisper_pro_asr.py --recursive=y --disable=import-error
 
       - name: Build Test Image
         uses: docker/build-push-action@v7
@@ -54,11 +67,6 @@ jobs:
           tags: whisper-pro-asr-test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Run Pylint
-        run: |
-          docker run --rm whisper-pro-asr-test python3 -m pylint \
-            modules tests whisper_pro_asr.py --recursive=y
 
       - name: Execute Test Suite
         run: |

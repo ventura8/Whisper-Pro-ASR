@@ -11,81 +11,132 @@ import tempfile
 import os
 import subprocess
 
-from . import utils, config, preprocessing
+from . import utils, config, preprocessing, vad
 
 logger = logging.getLogger(__name__)
 
 
+def _calculate_chunk_duration(total_duration):
+    """
+    Algorithm for dynamic chunk sizing based on total media duration.
+    - < 1h: 5m to 8m (linear)
+    - 1h to 4h: 8m to 20m (linear)
+    - >= 4h: 20m (capped)
+    """
+    if total_duration < 3600:
+        # 0s -> 300s, 3600s -> 480s
+        return 300 + total_duration * (180 / 3600)
+    if total_duration < 14400:
+        # 3600s -> 480s, 14400s -> 1200s
+        return 480 + (total_duration - 3600) * (720 / 10800)
+    return 1200
+
+
 def run_voting_detection(clean_wav, model_manager):
     """
-    High-level entry point for language detection using a single dynamic-sized chunk.
-    Accounts for long media like 4h movies with a minimum 5-minute sample.
+    High-level entry point for language detection using iterative scanning.
+    Attempts to find a representative audio chunk with active speech.
     """
-    duration = utils.get_audio_duration(clean_wav) or 300
+    total_duration = utils.get_audio_duration(clean_wav) or 300
+    chunk_dur = min(_calculate_chunk_duration(total_duration), total_duration)
 
-    # Dynamic size logic: 5% of duration, minimum 5 minutes (300s)
-    # For a 4h movie (14400s), this is 720s (12 minutes).
-    chunk_duration = max(300, duration * 0.05)
-
-    # Cap and bound checks (don't exceed total duration)
-    chunk_duration = min(chunk_duration, duration)
-
-    # Start detection from the beginning of the media (no offset)
     start_offset = 0
+    max_attempts = 5
+    attempt = 0
+    max_scan_offset = total_duration * 0.5
+    last_result = None
 
-    logger.info("[LD] Extracting single dynamic chunk: Offset %s, Size %s (Total: %s)",
-                utils.format_duration(start_offset),
-                utils.format_duration(chunk_duration),
-                utils.format_duration(duration))
+    while attempt < max_attempts and start_offset < max_scan_offset:
+        attempt += 1
+        logger.info("[LD] Attempt %d/%d at %s", attempt, max_attempts,
+                    utils.format_duration(start_offset))
 
-    processed_path = None
+        result, next_offset = _run_detection_attempt(
+            clean_wav, start_offset, chunk_dur, model_manager
+        )
+
+        if result:
+            # We found speech and a result
+            if result.get('confidence', 0) > 0.4:
+                return _format_detection_result(result.get('all_probabilities', {}), attempt)
+            last_result = result
+
+        if next_offset:
+            start_offset = next_offset
+        else:
+            # If no next_offset provided, we successfully processed this chunk
+            # but maybe confidence was low.
+            return _format_detection_result(last_result.get('all_probabilities', {}), attempt)
+
+    return _format_detection_result(
+        last_result.get('all_probabilities', {}) if last_result else {}, attempt
+    )
+
+
+def _run_detection_attempt(clean_wav, start_offset, chunk_duration, model_manager):
+    """Helper to run a single detection attempt. Returns (result, next_offset)."""
     segment_path = None
-
+    processed_path = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False,
-                                         dir=config.get_temp_dir()) as segment_tmp:
-            segment_path = segment_tmp.name
-
-        # Fast segment extraction & normalization via FFmpeg
-        cmd = [
-            "ffmpeg", "-threads", "1", "-y",
-            "-ss", str(start_offset), "-t", str(chunk_duration),
-            "-i", clean_wav
-        ] + utils.STANDARD_AUDIO_FLAGS + [
-            "-af", utils.STANDARD_NORMALIZATION_FILTERS, segment_path]
-
-        subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, check=True)
-
+        segment_path = _extract_segment(clean_wav, start_offset, chunk_duration)
         detection_path = segment_path
+
         if config.ENABLE_LD_PREPROCESSING:
             pm = preprocessing.get_manager()
             processed_path = pm.process_audio_file(segment_path)
             if processed_path and os.path.exists(processed_path):
                 detection_path = processed_path
 
-        # Perform single inference pass on the extracted chunk
-        result = model_manager.run_language_detection(detection_path)
+        # VAD Check
+        speech_ts = vad.get_speech_timestamps_from_path(
+            detection_path, threshold=config.LD_VAD_THRESHOLD)
 
-        # Format result to match expected schema
-        # We pass 1 as 'segments_processed' to reflect the single chunk approach
-        return _format_detection_result(result.get('all_probabilities', {}), 1)
+        if not speech_ts and processed_path and processed_path != segment_path:
+            logger.info("[LD] Isolated vocals silent. Retrying VAD on original segment...")
+            speech_ts = vad.get_speech_timestamps_from_path(
+                segment_path, threshold=config.LD_VAD_THRESHOLD)
+            if speech_ts:
+                detection_path = segment_path
+
+        if not speech_ts:
+            logger.info("[LD] No speech at %s. Skipping...", utils.format_duration(start_offset))
+            return None, start_offset + chunk_duration
+
+        result = model_manager.run_language_detection(detection_path)
+        return result, None
 
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("[LD] Dynamic chunk detection failed: %s", e)
-        # Fallback to direct detection on the original file if extraction fails
-        return model_manager.run_language_detection(clean_wav)
+        logger.error("[LD] Detection attempt failed: %s", e)
+        return None, start_offset + chunk_duration
     finally:
-        # Cleanup temporary files
-        if segment_path and os.path.exists(segment_path):
+        _cleanup_files([segment_path, processed_path])
+
+
+def _extract_segment(clean_wav, start_offset, chunk_duration):
+    """Extract and normalize a segment using FFmpeg."""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False,
+                                     dir=config.get_temp_dir()) as segment_tmp:
+        segment_path = segment_tmp.name
+
+    cmd = [
+        "ffmpeg", "-threads", "1", "-y",
+        "-ss", str(start_offset), "-t", str(chunk_duration),
+        "-i", clean_wav
+    ] + utils.STANDARD_AUDIO_FLAGS + [
+        "-af", utils.STANDARD_NORMALIZATION_FILTERS, segment_path]
+
+    subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, check=True)
+    return segment_path
+
+
+def _cleanup_files(paths):
+    """Safely remove list of files."""
+    for path in paths:
+        if path and os.path.exists(path):
             try:
-                os.remove(segment_path)
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
-        if processed_path and processed_path != segment_path and os.path.exists(processed_path):
-            try:
-                os.remove(processed_path)
-            except Exception:  # pylint: disable=broad-exception-caught
+                os.remove(path)
+            except OSError:
                 pass
 
 

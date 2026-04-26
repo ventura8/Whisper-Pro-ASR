@@ -283,16 +283,19 @@ class TestRunLanguageDetection:
         mock_info = mock.MagicMock()
         mock_info.language = "fr"
         mock_info.language_probability = 0.88
+        mock_info.all_language_probs = {"fr": 0.88}
         mock_whisper.transcribe.return_value = (iter([]), mock_info)
 
         original_whisper = model_manager.WHISPER
         model_manager.WHISPER = mock_whisper
 
         try:
-            result = model_manager.run_language_detection("/fake/path.wav")
+            with mock.patch("modules.vad.get_speech_timestamps_from_path") as mock_vad:
+                mock_vad.return_value = [{'start': 0, 'end': 1}]
+                result = model_manager.run_language_detection("/fake/path.wav")
 
-            assert result['detected_language'] == "fr"
-            assert result['confidence'] == 0.88
+                assert result['detected_language'] == "fr"
+                assert result['confidence'] == 0.88
         finally:
             model_manager.WHISPER = original_whisper
 
@@ -307,10 +310,12 @@ class TestRunLanguageDetection:
         model_manager.WHISPER = mock_whisper
 
         try:
-            result = model_manager.run_language_detection("/fake/path.wav")
+            with mock.patch("modules.vad.get_speech_timestamps_from_path") as mock_vad:
+                mock_vad.return_value = [{'start': 0, 'end': 1}]
+                result = model_manager.run_language_detection("/fake/path.wav")
 
-            assert result['detected_language'] == "en"
-            assert result['confidence'] == 0.0
+                assert result['detected_language'] == "en"
+                assert result['confidence'] == 0.0
         finally:
             model_manager.WHISPER = original_whisper
 

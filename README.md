@@ -71,9 +71,10 @@ services:
 ### Advanced Intelligence
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
 - **Studio-Grade Vocal Isolation**: Integrated **UVR/MDX-NET** engine for removal of background noise, music, and ambient artifacts prior to processing.
-- **Probabilistic Language ID**: Utilizes **Dynamic Single-Chunk Extraction** for robust identification across all media lengths.
-- **Dynamic Chunking**: Scales the identification sample (minimum 5 minutes) based on total media duration, ensuring high accuracy for movies and long-form content.
-- **Smart Signal Sampling**: Optional iterative search logic to pinpoint active speech in complex media files with extended periods of silence.
+- **Probabilistic Language ID**: Utilizes **Dynamic Linear-Scaled Sampling** for robust identification across all media lengths.
+- **Dynamic Chunking**: Scales the identification sample (8m for 1h, 20m for 4h) based on total media duration, ensuring high accuracy for movies and long-form content.
+- **Iterative Signal Scanning**: Intelligent retry logic that skips silent or non-speech segments to pinpoint active dialogue in complex media.
+- **Fail-Safe VAD Logic**: Secondary VAD check on original audio if vocal isolation is too aggressive and removes the speech signal.
 
 ### Production Ready
 - **OpenAI Standard API**: Drop-in compatible with the OpenAI whisper specification, allowing immediate integration with existing clients.
@@ -195,6 +196,7 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | **Preprocessing** | | |
 | `ENABLE_VOCAL_SEPARATION`| `true` | Toggles UVR background removal engine for translate/transcribe. |
 | `ENABLE_LD_PREPROCESSING`| `true` | Toggles UVR background removal engine for language detection. |
+| `LD_VAD_THRESHOLD` | `0.3` | Aggressiveness of VAD during language identification (0.0 to 1.0). |
 | `SMART_SAMPLING_SEARCH` | `false` | Enables localized signal searching in sparse audio. |
 
 ---
@@ -257,6 +259,7 @@ services:
       # Vocal Separation Logic Toggles
       - ENABLE_VOCAL_SEPARATION=true
       - ENABLE_LD_PREPROCESSING=true
+      - LD_VAD_THRESHOLD=0.3
       - SMART_SAMPLING_SEARCH=false
  
       # --- [RESOURCE ALLOCATION] ---
