@@ -1,0 +1,55 @@
+[MASTER]
+ignore=CVS
+ignore-patterns=
+persistent=yes
+load-plugins=
+jobs=0
+unsafe-load-any-extension=no
+
+[MESSAGES CONTROL]
+disable=
+    import-error,
+    logging-fstring-interpolation,
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    invalid-name,
+    line-too-long,
+    too-many-instance-attributes,
+    too-many-arguments,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    too-many-lines,
+    duplicate-code,
+    global-statement,
+    broad-exception-caught,
+    import-outside-toplevel,
+    unspecified-encoding,
+    global-variable-not-assigned,
+    attribute-defined-outside-init,
+    wrong-import-order,
+    redefined-outer-name,
+    unused-argument
+
+[REPORTS]
+output-format=text
+reports=no
+evaluation=10.0 - ((float(5 * error + warning + refactor + convention) / statement) * 10)
+
+[FORMAT]
+max-line-length=100
+indent-string='    '
+
+[BASIC]
+good-names=i,j,k,ex,Run,_,fp,id,ip,e,v
+
+[DESIGN]
+max-args=10
+max-locals=20
+max-branches=20
+max-statements=100
+max-parents=7
+max-attributes=15
+max-bool-expr=5
+max-module-lines=1500

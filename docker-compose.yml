@@ -11,6 +11,11 @@ services:
     # The application performs automated detection of both Intel and NVIDIA hardware.
     # To enable hardware passthrough, uncomment the appropriate sections below.
 
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+
     # 1. Intel NPU / iGPU / Arc
     # devices:
     #   - /dev/dri:/dev/dri  # Integrated GPU
@@ -55,12 +60,29 @@ services:
       - SMART_SAMPLING_SEARCH=false
 
       # --- [RESOURCE ALLOCATION] ---
-      # Core limit for Whisper ASR logic
+      # Global core limit for the entire service (Default: 4)
+      - CPU_CORE_LIMIT=4
+      # Core limit per Whisper ASR task (Auto-capped by CPU_CORE_LIMIT)
       - ASR_THREADS=4
-      # Core limit for Preprocessing (ONNX Runtime)
+      # Core limit per Preprocessing task (Auto-capped by CPU_CORE_LIMIT)
       - ASR_PREPROCESS_THREADS=4
       # Core limit for Media Normalization (0 = auto-detect system-wide)
       - FFMPEG_THREADS=4
+      # Aggressive RAM/VRAM offloading (Default: true)
+      - AGGRESSIVE_OFFLOAD=true
+      # --- [ACCELERATOR ORCHESTRATION] ---
+      # Control how many physical hardware units are utilized. 
+      # Default: 1 (Safest for multi-service environments). Set to 'ALL' to use everything.
+      - MAX_CUDA_UNITS=1
+      - MAX_GPU_UNITS=1
+      - MAX_NPU_UNITS=1
+      - MAX_CPU_UNITS=1
+
+      # --- [MEDIA PROCESSING] ---
+      # Hardware Acceleration: none (CPU), cuda (NVIDIA), vaapi, qsv (Intel)
+      - FFMPEG_HWACCEL=none
+      # Normalization: dynaudnorm (Standard), loudnorm (Broadcast Quality)
+      - FFMPEG_FILTER=dynaudnorm
 
       # --- [SSD WRITE PROTECTION] ---
       # Redirect all transient processing files (uploads, FFmpeg output,
@@ -77,6 +99,8 @@ services:
     volumes:
       # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
       - ./model_cache:/app/model_cache
+      # Persistent storage for task history, telemetry, and system logs
+      - ./state:/app/data
       # Recommended: Mirror your Bazarr media mappings here for instant (0-copy) local processing
       # If paths match, Whisper Pro reads files directly instead of requiring uploads.
       # - /mnt/nas/media:/media

@@ -48,6 +48,8 @@ services:
     volumes:
       # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
       - ./model_cache:/app/model_cache
+      # Persistent storage for task history, telemetry, and system logs
+      - ./state:/app/data
       # Recommended: Map your media volumes to enable instant (0-copy) local processing
       # The service will prioritize reading these files directly over network uploads.
       - /path/to/my/media:/media
@@ -64,102 +66,50 @@ services:
 ## 🚀 Key Features
 
 ### Precision Architecture
-- **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA** and **Generic CPU** runtimes.
-- **Dynamic Context Switching**: Effortlessly shifts workloads between disparate accelerators (e.g., performing vocal isolation on an Intel iGPU/NPU while transcribing via CPU).
-- **FFmpeg 8.1.0**: Core integration of the latest FFmpeg static builds featuring optimized Huffman coding and intelligent core utilization.
+- **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA**, **Intel OpenVINO**, and **Generic CPU** runtimes.
+- **Re-entrant Hardware Orchestration**: Utilizes a sophisticated thread-local locking system (`model_lock_ctx` in `scheduler.py`) that allows complex pipelines (UVR -> ASR) to share a single hardware claim without deadlocking.
+- **FFmpeg 8.1.0 Integration**: Features optimized hardware-accelerated decoding. All media (MKV, AVI, MP4, etc.) is automatically standardized to **16kHz Mono WAV** using the `utils.py` core before entering the AI pipeline for maximum accuracy.
 
 ### Advanced Intelligence
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
-- **Studio-Grade Vocal Isolation**: Integrated **UVR/MDX-NET** engine for removal of background noise, music, and ambient artifacts prior to processing.
-- **Probabilistic Language ID**: Utilizes **Dynamic Single-Chunk Extraction** for robust identification across all media lengths.
-- **Dynamic Chunking**: Scales the identification sample (minimum 5 minutes) based on total media duration, ensuring high accuracy for movies and long-form content.
-- **Smart Signal Sampling**: Optional iterative search logic to pinpoint active speech in complex media files with extended periods of silence.
+- **Consolidated Batch Montage**: Consolidates multiple sampling targets into a single high-density montage. This allows for a **single-pass UVR isolation** across multiple non-contiguous segments, eliminating repeated model loading overhead.
+- **Global VAD & In-Memory Slicing**: Features a unified Voice Activity Detection scan across the entire montage. segments are then sliced as **NumPy arrays in memory**, eliminating temporary file I/O and reducing VAD overhead by up to 900%.
+- **Deferred Persistence Engine**: Protects SSD longevity by buffering task history and telemetry in RAM, only syncing to physical storage after 10 tasks or 1 hour of activity.
+- **Fail-Safe Dual-Path VAD**: Intelligent logic that verifies speech presence on both isolated and raw audio, selecting the optimal path automatically based on signal clarity.
+- **Confusion-Matrix Tie Breaking**: Resolves linguistic ambiguities between similar pairs (e.g., NO/NN) with a weighted bias, eliminating common identification hallucinations.
+- **Unified Session Orchestration**: Integrated task and queue tracking ensures that hardware resources are only reclaimed when the system is fully idle (zero active or waiting tasks).
+- **Proactive Resource Reclamation**: Automatically offloads heavy models and clears hardware caches (CUDA/NPU) only when the queue is empty.
+- **Weighted Multi-Segment Voting**: Aggregates probabilities from multiple zones with confidence-weighted averaging for industrial-strength accuracy.
+- **Advanced Memory Hygiene**: Implements a "Nuclear Purge" strategy using `malloc_trim` and ctranslate2 cache clearing to ensure idle memory remains below 500MB even after heavy ASR sessions.
+- **On-Demand History Tiering**: Implements a dual-tier storage strategy. The dashboard and RAM are strictly capped at the last 20 tasks for peak performance, while a durable history of up to 1000 tasks is maintained on the persistent SSD volume (`/app/data`).
+- **Persistent Audit Logs**: System logs (`whisper_pro.log`) are redirected to the persistent state volume, ensuring operational records survive container updates and re-deployments.
 
 ### Production Ready
 - **OpenAI Standard API**: Drop-in compatible with the OpenAI whisper specification, allowing immediate integration with existing clients.
 - **Interactive Documentation**: Full OpenAPI/Swagger interface available at `/docs` for testing and endpoint exploration.
-- **Industrial Telemetry**: Real-time progress monitoring, including transcription speed multipliers (e.g., 25.0x), ETA calculation, and detailed hardware state reporting.
+- **Live SRT Streaming**: Features a real-time, auto-scrolling SubRip (SRT) display during processing, providing immediate visual feedback identical to the final output.
+- **Persistent History Dashboard**: Maintains a durable log of all ASR and Language Detection tasks. Completed transcriptions are stored indefinitely and can be downloaded as `.srt` files directly from the dashboard.
+- **Industrial Telemetry**: Real-time progress monitoring, including completion percentages (%), segment counts (`Seg 11 | 01:20 / 05:00`), active processing stages (e.g., UVR Preprocessing, Transcribing), and detailed hardware state reporting.
+- **Granular Performance Auditing**: Every task provides a detailed breakdown of its execution phases, including exact time spent in **Queue**, **Vocal Isolation**, and **AI Inference**.
+- **Material Design Dashboard**: A comprehensive monitoring interface at `/dashboard` (or the root `/` when accessed via browser) featuring live task progress bars, system resource visualization, real-time auto-scrolling logs, and a **Live Refresh** toggle for manual inspection.
 - **Bazarr Optimized**: Purpose-built for high-volume subtitle automation with stable SRT, VTT, and verbose JSON output formats. Fully compatible with `whisper-asr-webservice` API.
 
 ---
 
-## Architecture & Workflows
 
-### Signal Processing Pipeline
-#### Flow: Language Identification (/detect-language)
-```mermaid
-graph TD
-    A[Source Media] -->|Dynamic Chunk| LD[Single-Pass Extraction]
-    LD -->|Optional| UVR_LD["UVR Isolator (Memory Chunk)"]
-    UVR_LD -->|Inference Pass| SOFTMAX[Softmax Probabilities]
-    SOFTMAX --> LANG[Final Language ID]
-```
+### 🧩 Hardware Compatibility Matrix
+| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
+| :--- | :---: | :---: | :---: | :---: |
+| **Media Standardization** | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
 
-#### Flow: Automated Speech Recognition (/asr)
-```mermaid
-graph TD
-    A[Source Media] -->|Check| L{Lang Given?}
-    L -->|No| LD[Optimized Language ID]
-    L -->|Yes| PRE[Full Normalization]
-    LD --> PRE
-    
-    subgraph Engine Core
-    PRE -->|16kHz Mono| C{Isolation?}
-    C -->|Enabled| D[UVR Full-Stream Separation]
-    C -->|Disabled| E[Standard Signal]
-    D --> F[Isolated Vocals]
-    E --> F
-    F --> G[Whisper Inference]
-    G -->|Priority Yielding| H{Queue Lock?}
-    H -->|Active| I[Halt & Yield Hardware]
-    H -->|Idle| J[Batch Processing]
-    I --> J
-    J --> K[SRT/JSON Assembly]
-    end
-```
+### System Architecture
+The service utilizes a **Heterogeneous Model Pool** to orchestrate tasks across NVIDIA GPUs, Intel NPUs, and CPUs simultaneously. For a deep dive into the processing pipelines, resource locking, and hardware acceleration logic, see the [Technical Architecture](docs/ARCHITECTURE.md) documentation.
 
-### System Interaction
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Flask as API Server
-    participant Manager as Task Manager
-    participant XPU as Hardware (NPU/GPU)
-    
-    rect rgb(20, 20, 30)
-    Note over Client, XPU: Scenario A: Batch Transcription (/asr)
-    Client->>Flask: POST /asr
-    Flask->>Manager: Enqueue Session
-    opt Language Missing
-        Manager->>XPU: Detect Language (Source Chunks)
-    end
-    Manager->>Flask: Normalize Full Media
-    opt Vocal Separation
-        Manager->>XPU: UVR Isolation (VRAM)
-    end
-    loop Inference Cycle
-        Manager->>XPU: Whisper Batch
-        XPU-->>Manager: Prediction Data
-        opt Preemption
-            Note right of Manager: Pause for Priority Tasks
-        end
-    end
-    Manager-->>Flask: Compiled Result
-    Flask-->>Client: 200 OK (SRT/JSON)
-    end
-
-    rect rgb(30, 20, 20)
-    Note over Client, XPU: Scenario B: Priority Identification (/detect-language)
-    Client->>Flask: POST /detect-language
-    Flask->>Manager: Acquire System Lock
-    Note over Manager: Global yielding of batch tasks
-    Manager->>Flask: Extract Dynamic Chunk
-    Manager->>XPU: Inference Pass (Single Pass)
-    XPU-->>Manager: Probability Map
-    Manager-->>Flask: High-Confidence ID (Optimized)
-    Flask-->>Client: 200 OK (JSON)
-    end
-```
+> [!TIP]
+> View the [Concurrency & Resource Orchestration](docs/CONCURRENCY.md) guide for details on parallel preprocessing and pre-emption.
 
 ---
 
@@ -186,16 +136,22 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | `OV_PERFORMANCE_HINT` | `LATENCY` | OpenVINO scheduling hint (Latency/Throughput). |
 | `OV_CACHE_DIR` | `./model_cache` | Persistent directory for compiled hardware blobs. |
 | **Parallelism** | | |
-| `ASR_THREADS` | `4` | CPU core allocation for inference orchestration. |
-| `ASR_PREPROCESS_THREADS` | `4` | CPU core allocation for UVR/ONNX preprocessing. |
-| `FFMPEG_THREADS` | `0` | FFmpeg core limit (`0` for system-wide auto-detect). |
+| `ASR_THREADS` | `4` | CPU core allocation for inference (Auto-capped by hardware). |
+| `ASR_PREPROCESS_THREADS` | `4` | CPU core allocation for UVR/ONNX (Auto-capped by hardware). |
 | **SSD Protection** | | |
 | `WHISPER_TEMP_DIR`| `/tmp/whisper`| Redirects transient I/O (uploads, WAVs, stems) to this path. |
 | `WHISPER_TEMP_MIN_FREE_MB` | `512` | Fallback threshold to disk if RAM-disk is full. |
 | **Preprocessing** | | |
 | `ENABLE_VOCAL_SEPARATION`| `true` | Toggles UVR background removal engine for translate/transcribe. |
 | `ENABLE_LD_PREPROCESSING`| `true` | Toggles UVR background removal engine for language detection. |
-| `SMART_SAMPLING_SEARCH` | `false` | Enables localized signal searching in sparse audio. |
+| `LD_VAD_THRESHOLD` | `0.3` | Aggressiveness of VAD during language identification (0.0 to 1.0). |
+| `SMART_SAMPLING_SEARCH` | `true` | Enables localized entropy-based signal searching in sparse audio. |
+| `MAX_CUDA_UNITS` | `1` | Max NVIDIA GPUs to utilize (supports `ALL`, `AUTO`). |
+| `MAX_GPU_UNITS` | `1` | Max Intel GPUs to utilize (supports `ALL`, `AUTO`). |
+| `MAX_NPU_UNITS` | `1` | Max Intel NPUs to utilize (supports `ALL`, `AUTO`). |
+| `MAX_CPU_UNITS` | `1` | Max concurrent multi-core CPU tasks (VAD, FFmpeg, CPU-ASR). |
+| `FFMPEG_HWACCEL` | `none` | FFmpeg hardware acceleration target (`cuda`, `vaapi`, `qsv`). |
+| `FFMPEG_FILTER` | `dynaudnorm` | Normalization filter: `dynaudnorm` (Standard) or `loudnorm` (Broadcast). |
 
 ---
 
@@ -257,6 +213,8 @@ services:
       # Vocal Separation Logic Toggles
       - ENABLE_VOCAL_SEPARATION=true
       - ENABLE_LD_PREPROCESSING=true
+      - LD_VAD_THRESHOLD=0.3
+      - LD_MIN_CONFIDENCE_THRESHOLD=0.8
       - SMART_SAMPLING_SEARCH=false
  
       # --- [RESOURCE ALLOCATION] ---
@@ -266,6 +224,8 @@ services:
       - ASR_PREPROCESS_THREADS=4
       # Core limit for Media Normalization (0 = auto-detect system-wide)
       - FFMPEG_THREADS=4
+      # Max number of physical accelerators to use (default: all)
+      - ASR_MAX_ACCEL_UNITS=1
 
       # --- [SSD WRITE PROTECTION] ---
       - WHISPER_TEMP_DIR=/tmp/whisper
@@ -300,9 +260,12 @@ Main entry point for generating subtitles.
 - **Formats**: `srt` (default), `vtt`, `txt`, `tsv`, `json` (with segments).
 - **Optimization**: Prioritizes local file access if the path exists (via volume mapping), otherwise accepts file uploads.
 
-### 3. Service Analytics
+### 3. Service Analytics & Dashboard
 **GET** `/status`  
 Health-check endpoint returning model metadata, hardware status, and versioning information.
+
+**GET** `/dashboard` (or **GET** `/` via Browser)  
+Interactive Material Design interface for real-time monitoring of task progress, hardware utilization, and application memory.
 
 ---
 
@@ -332,10 +295,13 @@ To use this service with **Bazarr**:
 /
 ├── whisper_pro_asr.py        # Master entry point
 ├── modules/                 # Service Logic
-│   ├── model_manager.py     # Inference & Execution
-│   ├── preprocessing.py     # UVR Isolation Logic
-│   ├── routes.py            # API Implementation
-│   └── ...                  # Utilities & Configuration
+│   ├── api/                 # API Routes (ASR, Detection, System)
+│   ├── inference/           # ML Engine (Model Manager, Scheduler, VAD, UVR)
+│   ├── monitoring/          # Dashboard, Telemetry & Metrics
+│   ├── config.py            # Global Settings
+│   ├── logging_setup.py     # Task-specific Logging
+│   └── utils.py             # System & Audio Utilities
+├── tests/                   # Performance & Unit Test Suites
 ├── Dockerfile               # Packaging Definition
 └── docker-compose.yml       # Orchestration Template
 ```
