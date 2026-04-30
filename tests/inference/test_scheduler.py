@@ -79,6 +79,7 @@ def test_release_priority_clears_flags():
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
+    utils.THREAD_CONTEXT.is_priority = True
     scheduler.release_priority()
 
     assert scheduler.STATE.priority_requests == 0
@@ -127,6 +128,7 @@ def test_multiple_priority_requests_tracked():
 def test_release_priority_doesnt_go_negative():
     """Test that release_priority doesn't make counter negative."""
     scheduler.STATE.priority_requests = 0
+    utils.THREAD_CONTEXT.is_priority = True
     scheduler.release_priority()
     assert scheduler.STATE.priority_requests == 0
 
@@ -153,23 +155,25 @@ def test_get_preemptible_unit():
 
 
 def test_priority_sequential_enforcement():
-    """Test that priority tasks run one at a time."""
-    # 1. Start a priority task manually
+    """Test that priority tasks respect the sequential lock."""
+    # 1. Manually acquire the lock to block the next task
     scheduler.STATE.priority_sequential_lock.acquire()
 
     results = []
 
     def p_task():
-        scheduler.wait_for_priority()
-        results.append("done")
-        scheduler.release_priority()
+        # This will block at the 'with STATE.priority_sequential_lock' inside early_task_registration
+        with scheduler.early_task_registration(is_priority=True):
+            scheduler.wait_for_priority()
+            results.append("done")
+            # release_priority is called automatically by the context finally block
 
     t = threading.Thread(target=p_task)
     t.start()
-
     time.sleep(0.1)
-    assert len(results) == 0  # Blocked on sequential lock
+    assert len(results) == 0  # Should be blocked
 
+    # 2. Release manually to let it proceed
     scheduler.STATE.priority_sequential_lock.release()
-    t.join()
+    t.join(timeout=2.0)
     assert len(results) == 1

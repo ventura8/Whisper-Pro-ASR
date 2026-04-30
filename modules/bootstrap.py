@@ -51,6 +51,12 @@ def initialize_hardware_path():
         # Force reload of onnxruntime if it was somehow already loaded
         if "onnxruntime" in sys.modules:
             importlib.reload(sys.modules["onnxruntime"])
+        # Verify the version being loaded
+        try:
+            ort = importlib.import_module("onnxruntime")
+            boot_logger.info("Successfully loaded ONNX %s from %s", ort.__version__, target_lib)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            boot_logger.warning("Failed to verify ONNX load: %s", e)
 
 
 # CRITICAL: Auto-initialize on import to satisfy PEP8/Pylint order

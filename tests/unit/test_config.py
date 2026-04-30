@@ -96,7 +96,7 @@ class TestConfigEnv:
     def test_app_constants(self):
         """Test app name and version constants."""
         assert "Whisper" in config_module.APP_NAME
-        assert config_module.VERSION == "1.0.4"
+        assert config_module.VERSION == "1.0.5"
 
     def test_device_constant_exists(self):
         """Test DEVICE constant exists."""
@@ -122,7 +122,7 @@ class TestConfigEnv:
         with mock.patch.dict(os.environ, {"CPU_CORE_LIMIT": "64"}, clear=True):
             importlib.reload(config_module)
 
-            # Parallel mode (default: 4) forces FFmpeg to 1
+            # Parallel mode forces FFmpeg to 1 by default to prevent over-provisioning
             assert config_module.FFMPEG_THREADS == 1
 
     def test_ffmpeg_threads_manual_zero(self):

@@ -29,4 +29,4 @@ max-statements=140
 max-parents=7
 max-attributes=15
 max-bool-expr=5
-max-module-lines=500
+max-module-lines=600

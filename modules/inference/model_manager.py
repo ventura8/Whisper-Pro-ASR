@@ -537,7 +537,6 @@ def decrement_active_session():
 
 def wait_for_priority():
     """Handles priority task synchronization."""
-    utils.THREAD_CONTEXT.is_priority = True
     scheduler.wait_for_priority()
 
 

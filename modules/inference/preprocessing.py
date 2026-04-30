@@ -56,9 +56,59 @@ def apply_onnx_optimizations():
             ort = loaded_ort
 
         if getattr(ort.InferenceSession, "_is_patched", False) is not True:
-            logger.debug("Optimization: Patching ONNX...")
-            # pylint: disable=protected-access
-            ort.InferenceSession._is_patched = True
+            logger.debug("Optimization: Deep-patching ONNX InferenceSession...")
+
+            # Save the original constructor
+            original_init = ort.InferenceSession.__init__
+
+            def patched_init(self, model_path, sess_options=None, providers=None,
+                             provider_options=None, **kwargs):
+                """
+                Intercept InferenceSession creation to inject OpenVINO options
+                from the thread context, bypassing library-level limitations.
+                """
+                # Force OpenVINO if requested in thread context
+                ctx_options = getattr(utils.THREAD_CONTEXT, "ov_options", None)
+
+                # Check for CPU fallback override
+                if ctx_options and "device_type" in ctx_options and \
+                   (not providers or providers == ["CPUExecutionProvider"]):
+                    logger.info("[System] Intercepted CPU fallback - Forcing OpenVINOProvider")
+                    providers = ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
+
+                # Inject options if OpenVINO is being used
+                if ctx_options and providers and "OpenVINOExecutionProvider" in providers:
+                    logger.info("[System] Injecting OpenVINO options into session: %s", ctx_options)
+                    if not provider_options:
+                        provider_options = [{}] * len(providers)
+
+                    for i, p_name in enumerate(providers):
+                        if p_name != "OpenVINOExecutionProvider":
+                            continue
+                        if i < len(provider_options):
+                            if not isinstance(provider_options[i], dict):
+                                provider_options[i] = {}
+                            provider_options[i].update(ctx_options)
+                        else:
+                            provider_options.append(ctx_options)
+
+                return original_init(self, model_path, sess_options,
+                                     providers, provider_options, **kwargs)
+
+            # Apply the patch
+            ort.InferenceSession.__init__ = patched_init
+            ort.InferenceSession._is_patched = True  # pylint: disable=protected-access
+
+        # Also patch audio-separator class if available to prevent internal CPU fallback flags
+        try:
+            from audio_separator.separator import Separator as S  # pylint: disable=import-outside-toplevel
+            if getattr(S, "_is_patched", False) is not True:  # pylint: disable=protected-access
+                logger.debug("Optimization: Patching Separator class detection logic...")
+                S.check_onnxruntime = lambda self: None
+                S._is_patched = True  # pylint: disable=protected-access
+        except ImportError:
+            pass
+
     except Exception as patch_err:  # pylint: disable=broad-exception-caught
         logger.warning("[System] Failed to apply ONNX optimizations: %s", patch_err)
 
@@ -113,6 +163,10 @@ class PreprocessingManager:
             logger.debug("Active ORT Version: %s | Providers: %s", ort.__version__, available_providers)
             target_providers, target_options = self._resolve_providers(available_providers)
 
+            # Check if we are successfully using an accelerator
+            is_accelerated = any(p in ["CUDAExecutionProvider", "OpenVINOExecutionProvider"]
+                                 for p in target_providers)
+
             self.separator = separator_class(
                 output_dir=str(CACHE_DIR),
                 model_file_dir=config.UVR_MODEL_DIR,
@@ -121,11 +175,32 @@ class PreprocessingManager:
                 log_level=logging.INFO
             )
 
-            # Injection of hardware pinning (Matching 'test' branch architecture)
+            # Injection of hardware pinning
+            # Note: 0.41.1 doesn't support provider_options in the constructor,
+            # so we rely on our deep InferenceSession patch and thread context.
             self.separator.onnx_execution_provider = target_providers
-            self.separator.onnx_provider_options = target_options
 
-            self.separator.load_model(config.VOCAL_SEPARATION_MODEL)
+            # Save options for the session patcher to find during load_model()
+            # Only set if we are actually using OpenVINO (i.e. options contain device_type)
+            if target_options and "device_type" in target_options[0]:
+                utils.THREAD_CONTEXT.ov_options = target_options[0]
+            else:
+                utils.THREAD_CONTEXT.ov_options = None
+
+            # Force override internal state if we know we have an accelerator.
+            if is_accelerated:
+                logger.debug("[System] Forcing hardware_acceleration_enabled for %s", unit_name)
+                self.separator.hardware_acceleration_enabled = True
+
+            try:
+                self.separator.load_model(config.VOCAL_SEPARATION_MODEL)
+            except Exception as e:
+                logger.error("[System] Failed to load UVR model: %s", e)
+                self.separator = None
+                raise
+            finally:
+                # Clear context to avoid affecting subsequent ONNX sessions (e.g. VAD)
+                utils.THREAD_CONTEXT.ov_options = None
             return self.separator
 
     def _resolve_providers(self, available):
@@ -133,21 +208,38 @@ class PreprocessingManager:
         providers = ["CPUExecutionProvider"]
         options = [{}]
 
-        if self._device_type == "CUDA":
+        if self._device_type == "CUDA" and "CUDAExecutionProvider" in available:
+            dev_idx = int(self._device_id.split(":")[-1]) if ":" in self._device_id else 0
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            options = [{"device_id": str(dev_idx)}, {}]
+        elif self._device_type in ["GPU", "NPU", "OpenVINO"] and "OpenVINOExecutionProvider" in available:
+            providers = ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
+            ov_device = self._device_id if self._device_id else "GPU"
+            options = [{
+                "device_type": ov_device.upper(),
+                "cache_dir": os.path.abspath(config.OV_CACHE_DIR),
+                "num_streams": "1"
+            }, {}]
+        elif self._device_type == "AUTO":
+            # Priority: GPU > NPU > CPU
             if "CUDAExecutionProvider" in available:
-                dev_idx = int(self._device_id.split(":")[-1]) if ":" in self._device_id else 0
                 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                options = [{"device_id": str(dev_idx)}, {}]
-        elif self._device_type in ["GPU", "NPU", "OpenVINO"]:
-            if "OpenVINOExecutionProvider" in available:
+                options = [{"device_id": "0"}, {}]
+            elif "OpenVINOExecutionProvider" in available:
                 providers = ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
                 options = [{
-                    "device_type": self._device_id,
+                    "device_type": "GPU",
                     "cache_dir": os.path.abspath(config.OV_CACHE_DIR),
                     "num_streams": "1"
                 }, {}]
+            else:
+                # AUTO Fallback to CPU
+                options = [{
+                    "intra_op_num_threads": str(config.PREPROCESS_THREADS),
+                    "inter_op_num_threads": "1"
+                }]
         else:
-            # CPU Path
+            # CPU Path or Fallback
             options = [{
                 "intra_op_num_threads": str(config.PREPROCESS_THREADS),
                 "inter_op_num_threads": "1"
@@ -183,12 +275,26 @@ class PreprocessingManager:
             p_start = time.time()
             use_cpu_lock = self._device_type == "CPU"
 
+            # Resolve providers and options again to ensure thread-context is fresh
+            available_providers = ort.get_available_providers()
+            _, target_options = self._resolve_providers(available_providers)
+
             with self._lock:
-                if use_cpu_lock:
-                    with utils.cpu_lock_ctx():
-                        stems = sep.separate(audio_path)
+                # Inject options into thread context for the deep-patched InferenceSession
+                if target_options and "device_type" in target_options[0]:
+                    utils.THREAD_CONTEXT.ov_options = target_options[0]
                 else:
-                    stems = sep.separate(audio_path)
+                    utils.THREAD_CONTEXT.ov_options = None
+
+                try:
+                    if use_cpu_lock:
+                        with utils.cpu_lock_ctx():
+                            stems = sep.separate(audio_path)
+                    else:
+                        stems = sep.separate(audio_path)
+                finally:
+                    # CRITICAL: Clear hardware options to prevent leaking into VAD/Whisper logic
+                    utils.THREAD_CONTEXT.ov_options = None
 
             dur = time.time() - p_start
             logger.info("[UVR] Isolation complete on %s (Duration: %.2fs)", unit_name, dur)
@@ -202,11 +308,18 @@ class PreprocessingManager:
                 if not os.path.isabs(stem_path):
                     stem_path = str(CACHE_DIR / stem_path)
 
+                # Register for request-local cleanup
+                utils.track_file(stem_path)
+
                 # Cleanup unused stems to prevent disk/memory leakage
                 for extra_stem in stems[1:]:
                     try:
                         extra_path = extra_stem if os.path.isabs(
                             extra_stem) else str(CACHE_DIR / extra_stem)
+
+                        # Also track extra stems just in case they fail to remove here
+                        utils.track_file(extra_path)
+
                         if os.path.exists(extra_path) and extra_path != stem_path:
                             os.remove(extra_path)
                     except (IOError, OSError) as cleanup_err:

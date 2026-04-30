@@ -161,13 +161,26 @@ def download_logs():
         logger.error("[System] Log download failed: File not found at %s", log_path)
         return jsonify({"error": "Log file not found"}), 404
 
+    # FORCE FLUSH all logging handlers to ensure the latest logs are on disk
     try:
-        return send_from_directory(
+        for handler in logging.root.handlers:
+            handler.flush()
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.debug("[System] Minor error during log flush: %s", e)
+
+    try:
+        response = send_from_directory(
             log_dir,
             log_name,
             as_attachment=True,
-            mimetype='text/plain'
+            mimetype='text/plain',
+            max_age=0
         )
+        # Aggressive cache busting for the latest logs
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, post-check=0, pre-check=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("[System] Log download error: %s", e)
         return jsonify({"error": str(e)}), 500

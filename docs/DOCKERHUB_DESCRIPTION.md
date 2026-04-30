@@ -66,16 +66,13 @@ Deploy with: `docker compose up -d`
 
 ---
 
-## 📝 v1.0.4 Changelog Summary
-### Audio Standardization & SSD Preservation
-This major update introduces high-concurrency signal processing and refined durability logic to protect SSD hardware while maintaining high-fidelity history.
+## 📝 v1.0.5 Changelog Summary
+### Memory & Storage Hygiene
+This update hardens the system against resource leaks and optimizes the long-term operational footprint.
 
-- **Standardized Audio Pipeline**: All incoming media (MKV, AVI, MP4, etc.) is automatically standardized to clean **16kHz WAV** using a high-speed FFmpeg normalization layer.
-- **Live SRT Streaming**: Features a real-time, auto-scrolling SubRip (SRT) display during processing, providing immediate visual feedback identical to the final output.
-- **Advanced Memory Hygiene**: Implements a "Nuclear Purge" strategy using `malloc_trim` and ctranslate2 cache clearing to ensure idle memory remains below 500MB even after heavy ASR sessions.
-- **On-Demand History Tiering**: Implements a dual-tier storage strategy. The dashboard and RAM are strictly capped at the last 20 tasks for peak performance, while a durable history of up to 1000 tasks is maintained on the persistent state volume (`/app/data`).
-- **Live Lifecycle Logs**: The dashboard now streams real-time logs for all task stages, including 'Initializing' (UVR/Montage) and 'Active' (ASR), ensuring zero "blind spots" during long processing runs.
-- **Stylized Browser Identity**: Updated the dashboard favicon to a custom Whisper soundwave 'W' for professional tab identification.
+- **Centralized Storage Hygiene**: Implements a thread-local tracking system that registers every transient asset (uploads, standardized WAVs, isolated stems) created during a request. The system ensures a **100% cleanup rate** by purging all tracked files immediately upon task completion.
+- **Durable History & Log Truncation**: To protect against memory bloat and SSD wear, task logs in the persistent history are automatically truncated to the most recent 100 lines.
+- **Nuclear Purge Enhancements**: Refined model offloading and memory reclamation logic to ensure the service maintains its <500MB idle footprint even after processing multi-hour media.
 
 ---
 

@@ -216,7 +216,7 @@ def _prepare_montage(source_path, offsets):
                      result.returncode, result.stderr)
         raise RuntimeError(f"FFmpeg montage extraction failed with code {result.returncode}")
 
-    return montage_path
+    return utils.track_file(montage_path)
 
 
 def _cleanup_batch_assets(montage_path, isolated_path):

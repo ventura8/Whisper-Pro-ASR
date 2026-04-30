@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 HISTORY_FILE = os.path.join(config.STATE_DIR, "task_history.json")
 MAX_HISTORY_DISK = 1000  # Persistent storage limit
-MAX_HISTORY_RAM = 100    # RAM cache limit (match disk limit for accurate stats)
+MAX_HISTORY_RAM = 20    # RAM cache limit (match disk limit for accurate stats)
 
 # --- [DEFERRED PERSISTENCE ENGINE] ---
 _HISTORY_CACHE: List[Dict[str, Any]] = []
@@ -135,7 +135,9 @@ def get_history() -> List[Dict[str, Any]]:
     """
     _ensure_loaded()
     # Filter out corrupted or legacy entries that don't match the task schema
-    return [t for t in _HISTORY_CACHE if isinstance(t, dict) and "task_id" in t]
+    valid_tasks = [t for t in _HISTORY_CACHE if isinstance(t, dict) and "task_id" in t]
+    # Return only the most recent tasks for the dashboard
+    return valid_tasks[:MAX_HISTORY_RAM]
 
 
 def get_history_stats() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:

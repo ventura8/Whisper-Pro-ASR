@@ -23,6 +23,11 @@ def reset_state():
         scheduler.STATE = SchedulerState()
         scheduler.STATE.engine_initialized = True
 
+    # Reset thread context
+    utils.THREAD_CONTEXT.is_priority = False
+    if hasattr(utils.THREAD_CONTEXT, 'assigned_unit'):
+        utils.THREAD_CONTEXT.assigned_unit = None
+
     yield
 
     with mock.patch("modules.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):

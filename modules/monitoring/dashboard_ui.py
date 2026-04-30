@@ -1005,7 +1005,9 @@ def get_dashboard_html():
                                     <summary><span class="material-icons-sharp">terminal</span> Real-time Logs</summary>
                                     <div class="log-buffer">${escapeHtml(logContent)}</div>
                                 </details>
-                                ${t.status==='queued' ? `<div style="font-size:11px; color:var(--md-sys-color-warning); font-style:italic; margin-top:8px; display:flex; align-items:center; gap:4px;"><span class="material-icons-sharp" style="font-size:14px">hourglass_empty</span> Waiting for available hardware unit...</div>` : ''}
+                                <div class="hw-wait-msg" style="font-size:11px; color:var(--md-sys-color-warning); font-style:italic; margin-top:8px; display:${t.status==='queued'?'flex':'none'}; align-items:center; gap:4px;">
+                                    <span class="material-icons-sharp" style="font-size:14px">hourglass_empty</span> Waiting for available hardware unit...
+                                </div>
                             `;
                         } else {
                             // Update Status Icon and Badge
@@ -1018,6 +1020,11 @@ def get_dashboard_html():
                             if (statusBadge) {
                                 statusBadge.innerText = t.status === 'queued' ? 'queue' : (t.status || 'unknown');
                                 statusBadge.className = `badge badge-${t.status || 'unknown'}`;
+                            }
+
+                            const hwWait = card.querySelector('.hw-wait-msg');
+                            if (hwWait) {
+                                hwWait.style.display = t.status === 'queued' ? 'flex' : 'none';
                             }
 
                             card.querySelector('.stage-text').innerText = t.stage || 'Initializing';
