@@ -110,6 +110,7 @@ def handle_upload():
                         os.remove(tmp_path)
                     raise ValueError("Input file is corrupted (contains only null bytes).")
 
+        utils.track_file(tmp_path)
         logger.info("[System] Remote source ingestion successful: %d bytes", f_size)
         return tmp_path, tmp_path, original_filename
     except Exception as e:
@@ -119,13 +120,17 @@ def handle_upload():
 
 
 def cleanup_files(*args):
-    """Securely remove temporary processing assets."""
-    for f_path in args:
+    """Securely remove temporary processing assets, including tracked ones."""
+    to_remove = set(args) | set(utils.get_tracked_files())
+    for f_path in to_remove:
         if f_path and os.path.exists(f_path):
             try:
                 os.remove(f_path)
+                logger.debug("[System] Cleaned up: %s", f_path)
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
+    # Reset tracking
+    utils.get_tracked_files().clear()
 
 
 def handle_error(err, context="ASR"):

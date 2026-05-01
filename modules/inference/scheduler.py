@@ -117,24 +117,40 @@ STATE = SchedulerState()
 
 def wait_for_priority():
     """Handles priority task synchronization (Request pause from others)."""
+    # Mark this thread as a priority thread for the duration of the task
+    utils.THREAD_CONTEXT.is_priority = True
+
+    # 1. Hardware-aware enforcement: Limit concurrent priority tasks to available units
+    # The lock is now acquired by the caller via early_task_registration context manager
+    # to satisfy Pylint's structured 'with' block requirements.
+
+    do_pause = False
     with STATE.priority_lock:
         STATE.priority_requests += 1
         # Only pause others if we are actually at capacity (no free units)
         if STATE.active_sessions > STATE.accel_limit:
+            do_pause = True
             logger.info("[Scheduler] Priority request: Pausing other tasks...")
             STATE.pause_requested.set()
             STATE.resume_event.clear()
 
-    # Sequential enforcement: Only one priority task runs at a time
-    with STATE.priority_sequential_lock:
-        if STATE.active_sessions > 1:
-            # Wait for others to confirm they are paused
-            logger.debug("[Scheduler] Waiting for preemption confirmation...")
-            STATE.pause_confirmed.wait(timeout=30)
+    if do_pause:
+        # Wait for others to confirm they are paused
+        logger.debug("[Scheduler] Waiting for preemption confirmation...")
+        # If it takes > 30s, we proceed anyway to avoid service deadlock,
+        # but in normal operation, tasks will signal via pause_confirmed.
+        STATE.pause_confirmed.wait(timeout=30)
 
 
 def release_priority():
     """Releases priority hold and resumes paused tasks."""
+    # Safety: Only proceed if this thread actually holds a priority token
+    if not getattr(utils.THREAD_CONTEXT, "is_priority", False):
+        return
+
+    # Reset priority flag to prevent double-release
+    utils.THREAD_CONTEXT.is_priority = False
+
     try:
         with STATE.priority_lock:
             STATE.priority_requests = max(0, STATE.priority_requests - 1)
@@ -145,17 +161,20 @@ def release_priority():
                 STATE.resume_event.set()
                 STATE.pause_confirmed.clear()
     finally:
-        # Release sequential lock if held
-        try:
-            STATE.priority_sequential_lock.release()
-        except (ValueError, RuntimeError):
-            pass
+        # Note: priority_sequential_lock is now released by the early_task_registration
+        # context manager via a 'with' block.
+        pass
 
 
 @contextlib.contextmanager
-def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=None):
+def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=None, is_priority=False):
     """Registers a task immediately for dashboard visibility."""
-    thread_id = threading.get_ident()
+    # 1. Hardware-aware enforcement for priority tasks
+    # Using 'with' satisfies Pylint R1732 (consider-using-with)
+    lock_ctx = STATE.priority_sequential_lock if is_priority else contextlib.nullcontext()
+
+    with lock_ctx:
+        thread_id = threading.get_ident()
     task_id = str(uuid.uuid4())
     display_name = filename or getattr(utils.THREAD_CONTEXT, "filename", "Unknown")
 

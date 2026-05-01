@@ -87,7 +87,6 @@ def transcribe():
     utils.THREAD_CONTEXT.request_json = params
 
     start_time = time.time()
-    temp_path, clean_wav = None, None
     filename = routes_utils.get_display_name_early()
 
     task_type = "Translation" if params.get('task') == 'translate' else "Transcription"
@@ -102,7 +101,7 @@ def transcribe():
     except Exception as e:  # pylint: disable=broad-exception-caught
         return routes_utils.handle_error(e)
     finally:
-        routes_utils.cleanup_files(temp_path, clean_wav)
+        routes_utils.cleanup_files()
         model_manager.decrement_active_session()
 
 

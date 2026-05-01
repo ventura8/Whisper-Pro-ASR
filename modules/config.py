@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 HARDWARE_UNITS = []  # Global registry for accelerator orchestration
 
 # --- [RESOURCE POOL LIMITS] ---
@@ -49,9 +49,9 @@ ASR_DEVICE_ENV = os.environ.get("ASR_DEVICE", "AUTO").upper()
 ASR_COMPUTE_ENV = os.environ.get("ASR_COMPUTE_TYPE", "AUTO").upper()
 
 _DETECTED_ENGINE = "FASTER-WHISPER"
-_DETECTED_DEVICE = "CPU"
-_DETECTED_PREP_DEVICE = "CPU"
-_DETECTED_COMPUTE = "int8"
+_DETECTED_DEVICE = "CPU"  # pylint: disable=invalid-name
+_DETECTED_PREP_DEVICE = "CPU"  # pylint: disable=invalid-name
+_DETECTED_COMPUTE = "int8"  # pylint: disable=invalid-name
 
 # Default to Faster-Whisper (CTranslate2) format
 DEFAULT_MODEL = "Systran/faster-whisper-large-v3"
@@ -75,9 +75,9 @@ else:
 
 # --- [HARDWARE DETECTION] ---
 logger.debug("Performing hardware detection...")
-_DETECTED_DEVICE = "CPU"
-_DETECTED_PREP_DEVICE = "CPU"
-_DETECTED_COMPUTE = "int8"
+_DETECTED_DEVICE = "CPU"  # pylint: disable=invalid-name
+_DETECTED_PREP_DEVICE = "CPU"  # pylint: disable=invalid-name
+_DETECTED_COMPUTE = "int8"  # pylint: disable=invalid-name
 
 # 1. NVIDIA Acceleration Check
 CUDA_COUNT = 0
@@ -86,9 +86,9 @@ try:
     CUDA_COUNT = _ct2.get_cuda_device_count()  # pylint: disable=not-callable
     if CUDA_COUNT > 0:
         logger.debug("Auto-detected %d NVIDIA GPU(s).", CUDA_COUNT)
-        _DETECTED_DEVICE = "CUDA"
-        _DETECTED_PREP_DEVICE = "CUDA"
-        _DETECTED_COMPUTE = "float16"
+        _DETECTED_DEVICE = "CUDA"  # pylint: disable=invalid-name
+        _DETECTED_PREP_DEVICE = "CUDA"  # pylint: disable=invalid-name
+        _DETECTED_COMPUTE = "float16"  # pylint: disable=invalid-name
         cuda_to_use = min(CUDA_COUNT, MAX_CUDA)
         for i in range(cuda_to_use):
             HARDWARE_UNITS.append({"type": "CUDA", "id": f"cuda:{i}", "name": f"NVIDIA GPU {i}"})
@@ -116,8 +116,10 @@ try:
                 DEV_NAME = f"Intel {dev}"
             HARDWARE_UNITS.append({"type": "GPU", "id": dev, "name": DEV_NAME})
             GPU_DETECT_COUNT += 1
-            if _DETECTED_DEVICE == "CPU":
-                _DETECTED_PREP_DEVICE = "GPU"
+            # Prioritize Intel GPU for preprocessing if it's available,
+            # allowing NVIDIA to be dedicated to ASR.
+            if _DETECTED_PREP_DEVICE in ("CPU", "CUDA"):
+                _DETECTED_PREP_DEVICE = "GPU"  # pylint: disable=invalid-name
         elif "NPU" in dev:
             if NPU_DETECT_COUNT >= MAX_NPU:
                 continue
@@ -127,8 +129,8 @@ try:
                 DEV_NAME = f"Intel {dev}"
             HARDWARE_UNITS.append({"type": "NPU", "id": dev, "name": DEV_NAME})
             NPU_DETECT_COUNT += 1
-            if _DETECTED_DEVICE == "CPU":
-                _DETECTED_PREP_DEVICE = "NPU"
+            # NPUs are even better for background preprocessing
+            _DETECTED_PREP_DEVICE = "NPU"  # pylint: disable=invalid-name
 
 except Exception as e:  # pylint: disable=broad-exception-caught
     logger.debug("Intel accelerator detection skipped: %s", e)
@@ -379,32 +381,25 @@ os.environ["ORT_INTRA_OP_NUM_THREADS"] = str(PREPROCESS_THREADS)
 os.environ["ORT_INTER_OP_NUM_THREADS"] = "1"
 
 # FFmpeg concurrency for audio preparation
-FFMPEG_THREADS = int(os.environ.get("FFMPEG_THREADS", 0))
+FFMPEG_THREADS = int(os.environ.get("FFMPEG_THREADS", 1))
 FFMPEG_HWACCEL = os.environ.get("FFMPEG_HWACCEL", "none")
 FFMPEG_FILTER = os.environ.get("FFMPEG_FILTER", "dynaudnorm")
 
 
 def _validate_thread_concurrency():
     """Enforce hardware-aware thread limits to maintain responsiveness."""
-    global FFMPEG_THREADS  # pylint: disable=global-statement
     try:
-        logical_cores = CPU_CORE_LIMIT
-        if FFMPEG_THREADS == 0 and PREPROCESS_THREADS > 1:
-            logger.info(
-                "[Config] Parallel prep detected (Threads: %d). "
-                "Auto-capping FFMPEG_THREADS to 1 to prevent core thrashing.",
-                PREPROCESS_THREADS
-            )
-            FFMPEG_THREADS = 1
-
         eff_ffmpeg = FFMPEG_THREADS if FFMPEG_THREADS > 0 else 1
-        total_load = PREPROCESS_THREADS * eff_ffmpeg
+        # Preprocessing threads are per-task. If we are at capacity,
+        # we only care about the threads used by the ACTIVE units.
+        # But for a simple check, we use the global limit.
+        total_load = PREPROCESS_THREADS + eff_ffmpeg
 
-        if total_load > logical_cores:
+        if total_load > (CPU_CORE_LIMIT + 2):  # Allow slight over-subscription for I/O
             logger.warning(
-                "[Config] OVER-PROVISIONING: PREPROCESS_THREADS (%d) * "
+                "[Config] OVER-PROVISIONING: PREPROCESS_THREADS (%d) + "
                 "FFMPEG_THREADS (%d) = %d, which exceeds logical cores (%d).",
-                PREPROCESS_THREADS, eff_ffmpeg, total_load, logical_cores
+                PREPROCESS_THREADS, eff_ffmpeg, total_load, CPU_CORE_LIMIT
             )
     except Exception:  # pylint: disable=broad-exception-caught
         pass

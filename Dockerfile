@@ -1,5 +1,5 @@
 # Start with OpenVINO runtime which has verified Intel NPU/GPU drivers
-FROM openvino/ubuntu24_runtime:2025.4.1
+FROM openvino/ubuntu24_runtime:2026.1.0
 
 # Switch to root for installations
 USER root
@@ -22,6 +22,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   python3-pip \
   python3-venv \
   software-properties-common \
+  intel-opencl-icd \
+  intel-level-zero-gpu \
   && rm -rf /var/lib/apt/lists/* \
   && wget https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz \
   && tar -xvf ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz \
@@ -55,10 +57,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
   python3 -m pip install -r requirements.txt "audio-separator~=0.41.1" --retries 3 && \
   # Segregated Install: NVIDIA CUDA Support
   mkdir -p /app/libs/nvidia && \
-  python3 -m pip install "onnxruntime-gpu~=1.21.0" --target /app/libs/nvidia --no-dependencies && \
+  python3 -m pip install "onnxruntime-gpu~=1.25.0" --target /app/libs/nvidia --no-dependencies && \
   # Segregated Install: Intel OpenVINO Support
   mkdir -p /app/libs/intel && \
-  python3 -m pip install "onnxruntime-openvino~=1.21.0" --target /app/libs/intel --no-dependencies
+  python3 -m pip install "onnxruntime-openvino~=1.24.0" --target /app/libs/intel --no-dependencies
 
 # Fix CTranslate2 executable stack issues
 RUN find /usr/local/lib/python3.*/ -name "*.so*" -exec patchelf --clear-execstack {} \;

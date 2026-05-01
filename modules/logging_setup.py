@@ -38,6 +38,11 @@ def setup_logging():
     if log_buffer not in logging.root.handlers:
         logging.root.addHandler(log_buffer)
 
+    # Ensure file handler is present (to persist logs across basicConfig(force=True))
+    fh = get_file_handler()
+    if fh and fh not in logging.root.handlers:
+        logging.root.addHandler(fh)
+
 
 def _apply_standard_filters(handler):
     """Apply the standard suite of filters to a given handler."""
@@ -167,21 +172,38 @@ for hand in logging.root.handlers:
 logging.root.addHandler(log_buffer)
 
 # --- [PERSISTENT FILE LOGGING] ---
-LOG_FILE = os.path.join(config.LOG_DIR, "whisper_pro.log")
-try:
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    # Retention is configurable via environment, defaults to 7 days
-    retention_days = int(os.environ.get("LOG_RETENTION_DAYS", 7))
-    file_handler = TimedRotatingFileHandler(
-        LOG_FILE, when="D", interval=1, backupCount=retention_days, encoding="utf-8"
-    )
-    file_handler.setFormatter(logging.Formatter(
-        '%(asctime)s %(task_ctx)s [%(levelname)s] %(message)s'
-    ))
-    _apply_standard_filters(file_handler)
-    logging.root.addHandler(file_handler)
-except Exception as e:  # pylint: disable=broad-exception-caught
-    print(f"Failed to initialize file logging: {e}")
+_FILE_HANDLER = None
+
+
+def get_file_handler():
+    """Idempotent factory for the persistent file handler."""
+    global _FILE_HANDLER  # pylint: disable=global-statement
+    if _FILE_HANDLER:
+        return _FILE_HANDLER
+
+    log_file = os.path.join(config.LOG_DIR, "whisper_pro.log")
+    try:
+        os.makedirs(config.LOG_DIR, exist_ok=True)
+        # Retention is configurable via environment, defaults to 7 days
+        retention_days = int(os.environ.get("LOG_RETENTION_DAYS", 7))
+        handler = TimedRotatingFileHandler(
+            log_file, when="D", interval=1, backupCount=retention_days, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter(
+            '%(asctime)s %(task_ctx)s [%(levelname)s] %(message)s'
+        ))
+        _apply_standard_filters(handler)
+        _FILE_HANDLER = handler
+        return _FILE_HANDLER
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"Failed to initialize file logging: {e}")
+        return None
+
+
+# Initial attachment (at import time)
+_fh = get_file_handler()
+if _fh:
+    logging.root.addHandler(_fh)
 
 LOGGERS_TO_FILTER = [
     "transformers",

@@ -27,15 +27,8 @@ def check_coverage(xml_file, threshold=0.9, use_color=True):
             filename = cls.get('filename')
             pct = line_rate * 100
 
-            # Hardware discovery is difficult to mock fully in Docker
-            if "metrics_discovery" in filename:
-                file_threshold = 0.4
-            elif "model_manager" in filename:
-                file_threshold = 0.89
-            elif "preprocessing" in filename:
-                file_threshold = 0.85
-            else:
-                file_threshold = threshold
+            # Enforce global threshold for all files
+            file_threshold = threshold
 
             if line_rate < file_threshold:
                 status = f"{clr['red']}FAIL{clr['reset']}"

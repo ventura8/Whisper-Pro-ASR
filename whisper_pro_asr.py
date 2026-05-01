@@ -6,7 +6,7 @@ import importlib
 import logging
 import time
 from flask import Flask, request, jsonify
-from flasgger import Swagger
+from flasgger import Swagger  # pylint: disable=import-error
 
 # CRITICAL: Bootstrap hardware path before ANY other first-party imports
 from modules import bootstrap  # pylint: disable=unused-import
@@ -56,6 +56,13 @@ def _setup_request_lifecycle(flask_app):
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
         response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
         return response
+
+    @flask_app.teardown_request
+    def teardown_cleanup(exception=None):
+        """Final catch-all to ensure storage hygiene after every request."""
+        if exception:
+            logger.debug("[System] Request teardown with exception: %s", exception)
+        utils.cleanup_tracked_files()
 
 
 def _setup_swagger(flask_app):

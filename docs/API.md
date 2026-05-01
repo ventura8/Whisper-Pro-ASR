@@ -8,8 +8,7 @@ Health check. Returns JSON with service identity.
 ### `GET /status`
 Returns hardware pool status, active sessions, and version.
 
-### `POST /detect-language`
-Detect audio language with **High Priority**. Utilizes a specialized **16kHz Stereo Batch Montage** for maximum hardware efficiency across Intel iGPU/NPU and NVIDIA backends. Supports all media containers (MKV, AVI, MP4, etc.) without full-file standardization.
+Detect audio language with **High Priority**. All media inputs are automatically standardized to **16kHz Mono/Stereo WAV** before entering the voting consensus, ensuring maximum compatibility across Intel iGPU/NPU and NVIDIA backends.
 
 **Parameters**: `audio_file` (upload) OR `local_path` (server path)
 
@@ -28,7 +27,7 @@ curl -X POST -F "audio_file=@movie.mp4" http://localhost:9000/detect-language
 ```
 
 ### `POST /asr`
-Transcribe audio to SRT/JSON.
+Transcribe audio to SRT/JSON. All incoming media is automatically standardized to **16kHz Mono WAV** via an optimized FFmpeg pipeline before inference.
 
 **Parameters**:
 | Param | Type | Default | Description |

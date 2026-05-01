@@ -55,20 +55,17 @@ def detect_language():
         "user_agent": request.headers.get('User-Agent', 'Unknown')
     }
     start_time = time.time()
-    temp_path = None
     filename = routes_utils.get_display_name_early()
 
     try:
-        with model_manager.early_task_registration(task_type="Language Detection", filename=filename):
+        with model_manager.early_task_registration(task_type="Language Detection", filename=filename, is_priority=True):
             try:
-                source_path, upload_temp, err = routes_utils.initialize_task_context(
+                source_path, _, err = routes_utils.initialize_task_context(
                     is_priority=True)
                 if err:
                     return err
 
                 model_manager.update_task_progress(None, "Analyzing Stream")
-
-                temp_path = upload_temp
                 result = language_detection.run_voting_detection(
                     source_path, model_manager, start_time=start_time)
 
@@ -84,7 +81,7 @@ def detect_language():
     except Exception as e:  # pylint: disable=broad-exception-caught
         return routes_utils.handle_error(e, "LD")
     finally:
-        routes_utils.cleanup_files(temp_path)
+        routes_utils.cleanup_files()
         model_manager.decrement_active_session()
 
 

@@ -1,6 +1,6 @@
 # Concurrency & Resource Orchestration
 
-This document provides a technical reference for the multithreading and resource management strategies implemented in **Whisper Pro ASR v1.0.4**.
+This document provides a technical reference for the multithreading and resource management strategies implemented in **Whisper Pro ASR v1.0.5**.
 
 ---
 
@@ -88,13 +88,11 @@ By consolidating up to 15 probes into a single processing pass:
 - `_ACTIVE_SESSIONS`: Tasks currently in core execution.
 - `_QUEUED_SESSIONS`: Tasks waiting for hardware availability.
 
-### 2. Proactive Reclamation
-The system triggers `_check_and_offload_resources()` only when `Active + Queued == 0`. This keeps models resident in memory between consecutive tasks, eliminating "cold start" latency.
+### 3. Storage & Memory Hygiene (v1.0.5)
+The service implements a **Centralized Storage Hygiene** strategy. Every transient file created during a request (uploads, HQ prep files, isolated stems) is registered in a thread-local `tracked_files` registry. A mandatory `cleanup_files()` call in the request's `finally` block ensures 100% reclamation of storage space.
 
----
-
-### 3. CPU Constraint Enforcement (v1.0.4)
+### 4. CPU Constraint Enforcement
 On hardware with very limited resources (e.g., 1-CPU systems), the service automatically wraps **all** AI inference (including Whisper and UVR) in the `_CPU_LOCK`. This prevents the "thundering herd" problem where multiple AI engines attempt to over-utilize the same single CPU core, which previously caused significant latency spikes and high memory overhead.
 
 > [!IMPORTANT]
-> **v1.0.4 Hardware Enforcement**: The service automatically resolves and enforces thread limits based on your host's physical silicon. User-provided `ASR_THREADS` in `docker-compose.yml` are treated as maximums, not guarantees.
+> **v1.0.5 Hardware Enforcement**: The service automatically resolves and enforces thread limits based on your host's physical silicon. User-provided `ASR_THREADS` in `docker-compose.yml` are treated as maximums, not guarantees.

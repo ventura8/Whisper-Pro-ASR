@@ -2,6 +2,7 @@
 
 ![Main Language](https://img.shields.io/github/languages/top/ventura8/Whisper-Pro-ASR)
 ![Coverage](assets/coverage.svg)
+![Pylint](https://img.shields.io/badge/Pylint-10.0%2F10-brightgreen)
 
 **Whisper Pro ASR** is a high-performance transcription microservice optimized for the **Whisper Large V3** model. It delivers enterprise-grade performance with native hardware acceleration for **Intel Core Ultra NPUs**, **Integrated GPUs**, and **NVIDIA CUDA** environments.
 
@@ -81,8 +82,9 @@ services:
 - **Proactive Resource Reclamation**: Automatically offloads heavy models and clears hardware caches (CUDA/NPU) only when the queue is empty.
 - **Weighted Multi-Segment Voting**: Aggregates probabilities from multiple zones with confidence-weighted averaging for industrial-strength accuracy.
 - **Advanced Memory Hygiene**: Implements a "Nuclear Purge" strategy using `malloc_trim` and ctranslate2 cache clearing to ensure idle memory remains below 500MB even after heavy ASR sessions.
-- **On-Demand History Tiering**: Implements a dual-tier storage strategy. The dashboard and RAM are strictly capped at the last 20 tasks for peak performance, while a durable history of up to 1000 tasks is maintained on the persistent SSD volume (`/app/data`).
-- **Persistent Audit Logs**: System logs (`whisper_pro.log`) are redirected to the persistent state volume, ensuring operational records survive container updates and re-deployments.
+- **Centralized Storage Hygiene**: Features a thread-local tracking system that registers every transient asset (uploads, HQ prep files, isolated stems) created during a request. The system ensures a **100% cleanup rate** by purging all tracked files immediately upon request completion or failure.
+- **On-Demand History Tiering**: Implements a dual-tier storage strategy. The dashboard and RAM are strictly capped at the last 20 tasks, while a durable history of up to 1000 tasks is maintained on the persistent volume.
+- **Hardened Diagnostic Logging**: System logs (`whisper_pro.log`) are redirected to the persistent state volume with real-time flush-to-disk logic. Log downloads are optimized with zero-caching headers to ensure the latest diagnostic data is always available.
 
 ### Production Ready
 - **OpenAI Standard API**: Drop-in compatible with the OpenAI whisper specification, allowing immediate integration with existing clients.

@@ -94,3 +94,58 @@ def test_caching_logic():
     val2 = metrics_discovery._get_cached_metric("test_key", mock_fetch)
     assert val2 == 10
     assert mock_fetch.call_count == 1
+
+
+# --- Edge Cases and Direct Coverage ---
+
+def test_fetch_intel_gpu_load_linux_sysfs_success():
+    """Test successful Intel GPU load reading on Linux sysfs."""
+    with mock.patch("glob.glob", return_value=["/sys/class/drm/card0/device/gpu_busy_percent"]):
+        with mock.patch("builtins.open", mock.mock_open(read_data="42\n")):
+            res = metrics_discovery._fetch_intel_gpu_load()
+            assert res == 42
+
+
+def test_fetch_npu_load_linux_sysfs_success():
+    """Test successful NPU load reading on Linux sysfs."""
+    with mock.patch("glob.glob", return_value=["/sys/class/accel/accel0/device/utilization"]):
+        with mock.patch("builtins.open", mock.mock_open(read_data="88\n")):
+            res = metrics_discovery._fetch_npu_load()
+            assert res == 88
+
+
+def test_fetch_npu_load_windows_success():
+    """Test successful NPU load reading on Windows via PowerShell."""
+    with mock.patch("platform.system", return_value="Windows"):
+        with mock.patch("glob.glob", return_value=[]):
+            with mock.patch("subprocess.check_output", return_value="12.5\n"):
+                res = metrics_discovery._fetch_npu_load()
+                assert res == 12
+
+
+def test_fetch_npu_load_windows_fail():
+    """Test PowerShell failure on Windows for NPU."""
+    with mock.patch("platform.system", return_value="Windows"):
+        with mock.patch("glob.glob", return_value=[]):
+            with mock.patch("subprocess.check_output", side_effect=subprocess.CalledProcessError(1, "cmd")):
+                res = metrics_discovery._fetch_npu_load()
+                assert res == 0
+
+
+def test_fetch_hybrid_fallback_import_error():
+    """Test fallback when scheduler import fails."""
+    with mock.patch("glob.glob", return_value=[]):
+        with mock.patch("platform.system", return_value="Linux"):
+            with mock.patch("builtins.__import__", side_effect=ImportError):
+                res = metrics_discovery._fetch_intel_gpu_load()
+                assert res == 0
+
+
+def test_fetch_hybrid_fallback_npu_active():
+    """Test NPU fallback when tasks are active."""
+    mock_stats = {"active_tasks": [{"unit_type": "NPU"}]}
+    with mock.patch("glob.glob", return_value=[]):
+        with mock.patch("platform.system", return_value="Linux"):
+            with mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value=mock_stats):
+                res = metrics_discovery._fetch_npu_load()
+                assert res == 100

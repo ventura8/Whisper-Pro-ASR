@@ -43,8 +43,36 @@ def get_system_telemetry():
     }
 
 
-# Global thread-local storage for request context (e.g. filename tracking)
+# Global thread-local storage for request context (e.g. filename tracking, temp files)
 THREAD_CONTEXT = threading.local()
+
+
+def get_tracked_files():
+    """Retrieve the list of files tracked for cleanup in the current thread."""
+    if not hasattr(THREAD_CONTEXT, 'tracked_files'):
+        THREAD_CONTEXT.tracked_files = []
+    return THREAD_CONTEXT.tracked_files
+
+
+def track_file(path):
+    """Add a file path to the current thread's cleanup list."""
+    if path and os.path.exists(path) and os.path.isfile(path):
+        tracked = get_tracked_files()
+        if path not in tracked:
+            tracked.append(path)
+    return path
+
+
+def cleanup_tracked_files():
+    """Remove all files tracked in the current thread and clear the registry."""
+    files = get_tracked_files()
+    if not files:
+        return
+
+    logger.debug("[System] Performing request-local storage hygiene on %d files", len(files))
+    for f_path in list(files):
+        secure_remove(f_path)
+    files.clear()
 
 
 logger = logging.getLogger(__name__)
@@ -113,7 +141,7 @@ def prepare_for_uvr(source_path):
     if source_path and source_path.lower().endswith(('.wav', '.flac')):
         return source_path
 
-    return _convert_base(source_path, HQ_AUDIO_FLAGS, 44100, 2, tag="HQ-Prep")
+    return track_file(_convert_base(source_path, HQ_AUDIO_FLAGS, 44100, 2, tag="HQ-Prep"))
 
 
 def _convert_base(source_path, flags, rate, channels, tag="Prep"):
@@ -140,7 +168,7 @@ def _convert_base(source_path, flags, rate, channels, tag="Prep"):
     try:
         _run_ffmpeg_standardization(source_path, output_path, duration, flags)
         logger.info("[%s] Normalization sequence completed successfully.", tag)
-        return output_path
+        return track_file(output_path)
 
     except Exception as err:  # pylint: disable=broad-exception-caught
         logger.error("[%s] Media standardization failed: %s", tag, err)
