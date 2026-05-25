@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 HARDWARE_UNITS = []  # Global registry for accelerator orchestration
 
 # --- [RESOURCE POOL LIMITS] ---
@@ -250,23 +250,39 @@ OV_CACHE_DIR = os.environ.get("OV_CACHE_DIR", LOCAL_CACHE)
 
 # --- [SSD WRITE WEAR OPTIMIZATION] ---
 TEMP_DIR = os.environ.get("WHISPER_TEMP_DIR", tempfile.gettempdir())
-os.makedirs(TEMP_DIR, exist_ok=True)
+try:
+    os.makedirs(TEMP_DIR, exist_ok=True)
+except PermissionError:
+    TEMP_DIR = tempfile.gettempdir()
 
 # Persistence Directory (Should be mounted to a physical volume for history/logs)
 PERSISTENT_DIR = os.environ.get("WHISPER_PERSISTENT_DIR", "/app/data")
-os.makedirs(PERSISTENT_DIR, exist_ok=True)
+try:
+    os.makedirs(PERSISTENT_DIR, exist_ok=True)
+except PermissionError:
+    PERSISTENT_DIR = "./test_data"
+    os.makedirs(PERSISTENT_DIR, exist_ok=True)
 
 # State and Telemetry Directory (Persistent across restarts)
 STATE_DIR = os.environ.get("WHISPER_STATE_DIR", PERSISTENT_DIR)
 LOG_DIR = os.environ.get("WHISPER_LOG_DIR", STATE_DIR)
-os.makedirs(STATE_DIR, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
+try:
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+except PermissionError:
+    STATE_DIR = "./test_state"
+    LOG_DIR = "./test_state"
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
 
 TEMP_DIR_MIN_FREE_BYTES = int(os.environ.get(
     "WHISPER_TEMP_MIN_FREE_MB", 512)) * 1024 * 1024
 
 PERSISTENT_TEMP_DIR = os.path.join(OV_CACHE_DIR, "temp")
-os.makedirs(PERSISTENT_TEMP_DIR, exist_ok=True)
+try:
+    os.makedirs(PERSISTENT_TEMP_DIR, exist_ok=True)
+except PermissionError:
+    PERSISTENT_TEMP_DIR = tempfile.gettempdir()
 
 
 def get_temp_dir(required_bytes=0):
@@ -457,6 +473,9 @@ ENABLE_LD_PREPROCESSING = os.environ.get(
     "ENABLE_LD_PREPROCESSING", "true").lower() == "true"
 # Aggressiveness of VAD during language detection (0.0 to 1.0)
 LD_VAD_THRESHOLD = float(os.environ.get("LD_VAD_THRESHOLD", 0.3))
+# Minimum confidence threshold to consider a segment's vote in language detection
+LD_MIN_CONFIDENCE = float(os.environ.get("LD_MIN_CONFIDENCE", 0.5))
+
 
 # --- [HALLUCINATION FILTERING] ---
 # Known "silence" or "credit" hallucination phrases for removal during post-processing

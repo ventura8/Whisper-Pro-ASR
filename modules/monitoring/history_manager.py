@@ -54,10 +54,42 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
 
         # Add completion metadata
         task_data["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        task_data["total_elapsed_sec"] = round(
-            time.time() - task_data.get("start_time", time.time()), 2)
+        start_time = task_data.get("start_time", time.time())
+        start_active = task_data.get("start_active")
+
+        # Calculate total elapsed time
+        total_elapsed = round(time.time() - start_time, 2)
+        task_data["total_elapsed_sec"] = total_elapsed
+
+        # Try to extract precise queue time from the performance stats
+        perf = task_data.get("result", {}).get("performance", {}) or task_data.get("response_json", {}).get("performance", {})
+        perf_queue = perf.get("queue_sec")
+
+        if perf_queue is not None:
+            queue_elapsed = round(float(perf_queue), 2)
+            task_data["queue_elapsed_sec"] = queue_elapsed
+            task_data["active_elapsed_sec"] = round(max(0.0, total_elapsed - queue_elapsed), 2)
+        elif start_active is not None:
+            queue_elapsed = round(start_active - start_time, 2)
+            task_data["queue_elapsed_sec"] = queue_elapsed
+            task_data["active_elapsed_sec"] = round(max(0.0, total_elapsed - queue_elapsed), 2)
+        else:
+            # Task never got active (e.g. failed/aborted in queue)
+            task_data["queue_elapsed_sec"] = total_elapsed
+            task_data["active_elapsed_sec"] = 0.0
+
         if "logs" in task_data:
             task_data["log_count"] = len(task_data["logs"])
+
+        result = task_data.get("result", {}) or {}
+        task_type = task_data.get("type", "")
+        if task_type in ["Transcription", "Translation"]:
+            segments = result.get("segments", []) or []
+            task_data["segments_processed"] = len(segments)
+        elif task_type == "Language Detection":
+            task_data["segments_processed"] = result.get("segments_processed", 1)
+        else:
+            task_data["segments_processed"] = 0
 
         if "result" in task_data:
             res_keys = list(task_data["result"].keys())

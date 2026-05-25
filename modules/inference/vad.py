@@ -7,7 +7,10 @@ Silero VAD model via the optimized faster-whisper backend.
 import logging
 import tempfile
 import subprocess
+import sys
 from modules import config
+from modules import utils
+
 try:
     from faster_whisper.vad import get_speech_timestamps as fw_get_ts, VadOptions as fw_Opts
     from faster_whisper.audio import decode_audio as fw_decode
@@ -18,8 +21,51 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+_VAD_STATE = {
+    "wrapped": False,
+    "wrapped_func": None
+}
+
+
 def _lazy_import_vad():
-    """Return VAD components."""
+    """Return VAD components and apply monkeypatching for metrics logging."""
+    global fw_get_ts  # pylint: disable=global-statement
+    if fw_get_ts is not None and not _VAD_STATE["wrapped"]:
+        orig_get_ts = fw_get_ts
+
+        def get_speech_timestamps_wrapped(audio, *args, **kwargs):
+            res = orig_get_ts(audio, *args, **kwargs)
+            try:
+                if isinstance(res, (list, tuple)):
+                    total_sec = len(audio) / 16000.0
+                    speech_sec = sum((ts['end'] - ts['start']) / 16000.0 for ts in res)
+                    removed_sec = total_sec - speech_sec
+                    removed_pct = (removed_sec / total_sec) * 100 if total_sec > 0 else 0.0
+
+                    logger.info(
+                        "[VAD] Speech detection complete: processed %s of audio | VAD removed %s (%.1f%% silence)",
+                        utils.format_duration(total_sec),
+                        utils.format_duration(removed_sec),
+                        removed_pct
+                    )
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.debug("[VAD] Failed to log VAD statistics: %s", e)
+            return res
+
+        fw_get_ts = get_speech_timestamps_wrapped
+        _VAD_STATE["wrapped_func"] = get_speech_timestamps_wrapped
+        _VAD_STATE["wrapped"] = True
+
+    # Always ensure sys.modules is patched if the module is loaded
+    if _VAD_STATE["wrapped_func"] is not None:
+        try:
+            for name, module in list(sys.modules.items()):
+                if name.startswith("faster_whisper") and module:
+                    if hasattr(module, "get_speech_timestamps"):
+                        setattr(module, "get_speech_timestamps", _VAD_STATE["wrapped_func"])
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
     return fw_get_ts, fw_Opts, fw_decode
 
 

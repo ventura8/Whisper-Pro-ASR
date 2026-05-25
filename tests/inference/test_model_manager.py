@@ -302,7 +302,7 @@ def test_model_manager_booster_edge_cases():
     assert model_manager.run_vocal_isolation_direct("test.wav", "NON_EXISTENT") == "test.wav"
 
     # 285: break in batch LD
-    with mock.patch("modules.inference.vad.decode_audio", return_value=np.zeros(100)):
+    with mock.patch("modules.inference.vad.decode_audio", return_value=np.zeros(0)):
         res = model_manager.run_batch_language_detection_direct(mock_model, "test.wav", 5)
         assert res == []
 

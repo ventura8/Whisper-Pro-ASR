@@ -4,6 +4,7 @@ ASR Transcription Routes for Whisper Pro ASR
 import logging
 import time
 import os
+import json
 from flask import Blueprint, request, jsonify, Response  # pylint: disable=import-error
 from modules import config
 from modules.inference import model_manager, language_detection
@@ -90,6 +91,9 @@ def transcribe():
     filename = routes_utils.get_display_name_early()
 
     task_type = "Translation" if params.get('task') == 'translate' else "Transcription"
+    logger.info("    Task: %s | Format: %s | Lang: %s",
+                task_type.upper(), params.get('output_format', 'srt').upper(),
+                params.get('language') or 'auto-detect')
     try:
         with model_manager.early_task_registration(task_type=task_type, filename=filename):
             result, source_path, err = _perform_transcription_task(params, task_type)
@@ -161,6 +165,8 @@ def _detect_lang_if_needed(lang, path):
     if not lang:
         model_manager.update_task_progress(0, "Language Detection")
         res = language_detection.run_voting_detection(path, model_manager)
+        loggable = {k: v for k, v in res.items() if k != 'logs'}
+        logger.info("LD Response JSON: %s", json.dumps(loggable, ensure_ascii=False, indent=None))
         return res.get('detected_language')
     return lang
 
@@ -172,8 +178,9 @@ def _build_response(result, params, stats, path, start):
     stats['language'] = result.get('language')
 
     perf = result.get('performance', {})
-    logger.info("ASR Completed | Lang: %s | Total: %s | Queue: %.2fs | Isolation: %.2fs | Inference: %.2fs",
-                stats['language'], utils.format_duration(stats['total']),
+    task_type = "TRANSLATE" if params.get('task') == 'translate' else "TRANSCRIBE"
+    logger.info("ASR Completed | Type: %s | Lang: %s | Total: %s | Queue: %.2fs | Isolation: %.2fs | Inference: %.2fs",
+                task_type, stats['language'], utils.format_duration(stats['total']),
                 perf.get('queue_sec', 0), perf.get('isolation_sec', 0), perf.get('inference_sec', 0))
 
     fmt = params['output_format'].lower()

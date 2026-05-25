@@ -48,6 +48,7 @@ def _telemetry_worker():
 
 
 def get_service_stats():
+    # pylint: disable=protected-access
     """Consolidates service state for the dashboard."""
     with scheduler.STATE.task_registry_lock:
         tasks = []
@@ -77,6 +78,43 @@ def get_service_stats():
     actual_active = sum(1 for t in tasks if t.get('status') in ['active', 'initializing'])
     actual_queued = sum(1 for t in tasks if t.get('status') == 'queued')
 
+    # Dynamic hardware units status resolution
+    hw_units_with_status = []
+    for u in config.HARDWARE_UNITS:
+        u_copy = u.copy()
+        unit_id = u['id']
+
+        whisper_unit_active = any(
+            t.get('status') == 'active' and
+            str(t.get('unit_id')) == str(unit_id) and
+            any(s in t.get('stage', '').lower() for s in ['transcrib', 'inference'])
+            for t in tasks
+        )
+
+        uvr_unit_active = any(
+            t.get('status') == 'active' and
+            str(t.get('unit_id')) == str(unit_id) and
+            any(s in t.get('stage', '').lower() for s in ['isolation', 'separation', 'uvr'])
+            for t in tasks
+        )
+
+        if whisper_unit_active:
+            u_copy['whisper_status'] = 'busy'
+        elif unit_id in model_manager._MODEL_POOL:
+            u_copy['whisper_status'] = 'loaded'
+        else:
+            u_copy['whisper_status'] = 'ready'
+
+        if uvr_unit_active:
+            u_copy['uvr_status'] = 'busy'
+        elif (unit_id in model_manager._PREPROCESSOR_POOL and
+              model_manager._PREPROCESSOR_POOL[unit_id].separator is not None):
+            u_copy['uvr_status'] = 'loaded'
+        else:
+            u_copy['uvr_status'] = 'ready'
+
+        hw_units_with_status.append(u_copy)
+
     return {
         "version": config.VERSION,
         "uptime_sec": time.time() - SERVICE_START_TIME,
@@ -88,7 +126,7 @@ def get_service_stats():
         "queued_sessions": actual_queued,
         "tasks": tasks,
         "telemetry_history": telemetry_snap,
-        "hardware_units": config.HARDWARE_UNITS,
+        "hardware_units": hw_units_with_status,
         "history": history,
         "history_stats": history_stats,
         "telemetry": {

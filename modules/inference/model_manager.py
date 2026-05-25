@@ -28,6 +28,8 @@ def _lazy_import_engines():
             import ctranslate2 as ct  # pylint: disable=import-outside-toplevel
             _ENGINES["WhisperModel"] = wm
             _ENGINES["ctranslate2"] = ct
+            # Ensure VAD monkeypatching is applied after faster_whisper load
+            vad._lazy_import_vad()  # pylint: disable=protected-access
             if config.ASR_ENGINE == "INTEL-WHISPER":
                 from modules.inference.intel_engine import IntelWhisperEngine as iwe  # pylint: disable=import-outside-toplevel
                 _ENGINES["IntelWhisperEngine"] = iwe
@@ -260,6 +262,7 @@ def run_language_detection(audio_path):
         scheduler.update_task_progress(5, "Detection")
         res = run_language_detection_core(model, audio_path)
         res['performance'] = {"inference_sec": round(time.time() - start_time, 2)}
+        res['segments_processed'] = 1
         scheduler.update_task_metadata(result=res)
         return res
 
@@ -286,7 +289,7 @@ def run_batch_language_detection_direct(model, audio_path, segment_count):
 
             # Use .copy() to avoid keeping the full array alive via views
             chunk = full_audio[start:end].copy()
-            results.append(run_language_detection_core(model, chunk, skip_vad=True))
+            results.append(run_language_detection_core(model, chunk, skip_vad=False))
 
             # Granular progress for voting (Maps 60% -> 95%)
             progress = 60 + int(((i + 1) / segment_count) * 35)
@@ -308,9 +311,9 @@ def run_language_detection_core(model, audio_input, skip_vad=False):
     """Internal core using detect_language optimization."""
     if not skip_vad:
         if isinstance(audio_input, str):
-            speech_ts = vad.get_speech_timestamps_from_path(audio_input)
+            speech_ts = vad.get_speech_timestamps_from_path(audio_input, threshold=config.LD_VAD_THRESHOLD)
         else:
-            speech_ts = vad.get_speech_timestamps(audio_input)
+            speech_ts = vad.get_speech_timestamps(audio_input, threshold=config.LD_VAD_THRESHOLD)
 
         if not speech_ts:
             return {
@@ -375,6 +378,20 @@ def model_lock_ctx(priority=None):
                         borrowed = True
                         break
 
+            # If there are any priority tasks queued or running, standard tasks must yield
+            has_priority = False
+            with scheduler.STATE.task_registry_lock:
+                has_priority = any(t.get('is_priority', False) for t in scheduler.STATE.task_registry.values())
+
+            if not is_priority and has_priority:
+                if not queued_added:
+                    scheduler.update_task_metadata(status="queued")
+                    scheduler.update_task_progress(None, "Waiting for Hardware")
+                    scheduler.increment_queued_session()
+                    queued_added = True
+                time.sleep(0.5)
+                continue
+
             if scheduler.STATE.model_lock.acquire(blocking=False):
                 unit = scheduler.STATE.hw_pool.get()
                 break
@@ -386,12 +403,13 @@ def model_lock_ctx(priority=None):
                 queued_added = True
 
             if not is_priority:
-                # Standard task: Wait on semaphore
-                scheduler.STATE.model_lock.acquire()
-                unit = scheduler.STATE.hw_pool.get()
-                break
-            # Priority task: Loop until a unit is preempted or a slot opens
-            time.sleep(0.5)
+                # Standard task: Wait on semaphore with a short timeout to check for new priority tasks
+                if scheduler.STATE.model_lock.acquire(timeout=0.5):
+                    unit = scheduler.STATE.hw_pool.get()
+                    break
+            else:
+                # Priority task: Loop until a unit is preempted or a slot opens
+                time.sleep(0.5)
     finally:
         if queued_added:
             scheduler.decrement_queued_session()
@@ -430,15 +448,27 @@ def _check_preemption():
     if scheduler.STATE.pause_requested.is_set():
         thread_id = threading.get_ident()
         unit_id = None
+        old_status = "active"
+        is_priority = False
         with scheduler.STATE.task_registry_lock:
             task = scheduler.STATE.task_registry.get(thread_id)
             if task:
                 unit_id = task.get('unit_id')
+                old_status = task.get('status', 'active')
+                is_priority = task.get('is_priority', False)
+
+        if is_priority:
+            # Priority tasks are never preempted
+            return
 
         if unit_id:
             logger.info("[Engine] Preempting task on %s...", unit_id)
             old_stage = task.get('stage')
+
+            # Temporarily mark task as queued during preemption/pause
+            scheduler.update_task_metadata(status="queued")
             scheduler.update_task_progress(task.get('progress'), "Paused for Priority Task")
+
             scheduler.mark_unit_preemptible(unit_id)
             scheduler.STATE.pause_confirmed.set()
             scheduler.STATE.resume_event.wait()
@@ -453,6 +483,7 @@ def _check_preemption():
                 time.sleep(0.5)
 
             scheduler.STATE.pause_confirmed.clear()
+            scheduler.update_task_metadata(status=old_status)
             scheduler.update_task_progress(task.get('progress'), old_stage)
             logger.info("[Engine] Resuming task on %s", unit_id)
 

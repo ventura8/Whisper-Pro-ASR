@@ -1,6 +1,7 @@
 """
 Language Detection Routes for Whisper Pro ASR
 """
+import json
 import logging
 import time
 from flask import Blueprint, jsonify, request  # pylint: disable=import-error
@@ -92,7 +93,7 @@ def _log_detection_result(result, start_time):
     detected_conf = result.get('confidence', 0) * 100
 
     candidates = result.get('voting_details') or result.get('all_probabilities') or {}
-    scans = result.get('segment_count', 1)
+    scans = result.get('segments_processed', 1)
     top_3 = sorted(candidates.items(), key=lambda x: x[1], reverse=True)[:3]
     cand_str = ", ".join([f"{k}:{v*100:.1f}%" for k, v in top_3])
 
@@ -105,3 +106,7 @@ def _log_detection_result(result, start_time):
 
     logger.info("LD Completed | Lang: %s (%.1f%%) | Segments: %d | Rank: %s | Phases: %s | Total: %s",
                 detected_lang, detected_conf, scans, cand_str, perf_str, utils.format_duration(elapsed))
+
+    # Log the full JSON response so it appears in the logs
+    loggable = {k: v for k, v in result.items() if k != 'logs'}
+    logger.info("LD Response JSON: %s", json.dumps(loggable, ensure_ascii=False, indent=None))

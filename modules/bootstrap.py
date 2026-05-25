@@ -29,13 +29,30 @@ def initialize_hardware_path():
     context_reason = "Default"
 
     # Strategy 1: Intel OpenVINO Optimization (Prioritize on Intel Hardware)
-    is_intel_hw = os.path.exists("/dev/dri") or os.path.exists("/dev/dxg")
+    is_intel_hw = (
+        os.path.exists("/dev/dri") or
+        os.path.exists("/dev/dxg") or
+        os.path.exists("/dev/accel")
+    )
+    if not is_intel_hw:
+        try:
+            import openvino as ov  # pylint: disable=import-outside-toplevel,import-error
+            core = ov.Core()
+            is_intel_hw = any("GPU" in d or "NPU" in d for d in core.available_devices)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            boot_logger.debug("OpenVINO hardware check failed: %s", e)
+
+    # Strategy 2: NVIDIA CUDA Optimization
+    is_nvidia_hw = (
+        os.path.exists("/dev/nvidia0") or
+        os.path.exists("/dev/nvidiactl") or
+        os.path.exists("/dev/nvidia-uvm")
+    )
+
     if "intel" in device or (device == "auto" and is_intel_hw and os.path.exists("/app/libs/intel")):
         target_lib = "/app/libs/intel"
         context_reason = "Intel OpenVINO"
-
-    # Strategy 2: NVIDIA CUDA Optimization
-    elif device == "cuda" or (device == "auto" and os.path.exists("/app/libs/nvidia")):
+    elif device == "cuda" or (device == "auto" and is_nvidia_hw and os.path.exists("/app/libs/nvidia")):
         target_lib = "/app/libs/nvidia"
         context_reason = "NVIDIA CUDA"
 

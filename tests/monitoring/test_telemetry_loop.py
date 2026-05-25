@@ -19,48 +19,82 @@ def clean_telemetry():
 
 def test_telemetry_worker_unit(clean_telemetry):
     """Test a single execution of the telemetry worker logic."""
-    with mock.patch("modules.utils.get_system_telemetry", return_value={"cpu": 10}):
-        with mock.patch("modules.monitoring.metrics_discovery.get_nvidia_metrics", return_value=[]):
-            with mock.patch("modules.monitoring.metrics_discovery.get_intel_gpu_load", return_value=0):
-                with mock.patch("modules.monitoring.metrics_discovery.get_npu_load", return_value=0):
+    with mock.patch("modules.config.TELEMETRY_RETENTION_HOURS", 0):
+        with mock.patch("modules.utils.get_system_telemetry", return_value={"cpu": 10}):
+            with mock.patch("modules.monitoring.metrics_discovery.get_nvidia_metrics", return_value=[]):
+                with mock.patch("modules.monitoring.metrics_discovery.get_intel_gpu_load", return_value=0):
+                    with mock.patch("modules.monitoring.metrics_discovery.get_npu_load", return_value=0):
 
-                    # Ensure history is empty before start
-                    telemetry.TELEMETRY_HISTORY.clear()
+                        # Seed with dummy entry so that appending makes len=2 > max_points=0, triggering pop(0)
+                        telemetry.TELEMETRY_HISTORY.clear()
+                        telemetry.TELEMETRY_HISTORY.append({"system": {"cpu": 5}})
 
-                    # Mock the loop condition to run exactly once, then stay set to True
-                    # Use a side effect that doesn't exhaust
-                    def side_effect(*args, **kwargs):
-                        if not hasattr(side_effect, 'counter'):
-                            side_effect.counter = 0
-                        side_effect.counter += 1
-                        return side_effect.counter > 1
+                        # Mock the loop condition to run exactly once, then stay set to True
+                        # Use a side effect that doesn't exhaust
+                        def side_effect(*args, **kwargs):
+                            if not hasattr(side_effect, 'counter'):
+                                side_effect.counter = 0
+                            side_effect.counter += 1
+                            return side_effect.counter > 1
 
-                    with mock.patch.object(telemetry._STOP_EVENT, 'is_set', side_effect=side_effect):
-                        telemetry._telemetry_worker()
+                        with mock.patch.object(telemetry._STOP_EVENT, 'is_set', side_effect=side_effect):
+                            telemetry._telemetry_worker()
 
-                    # Use >= 1 because some background thread might have sneaked in if not properly stopped
-                    # but with the clear() above it should be 1.
-                    assert len(telemetry.TELEMETRY_HISTORY) >= 1
-                    # Find our mocked entry
-                    found = any(entry.get("system", {}).get("cpu") ==
-                                10 for entry in telemetry.TELEMETRY_HISTORY)
-                    assert found, f"Mocked CPU telemetry not found in history: {telemetry.TELEMETRY_HISTORY}"
+                        # Use >= 1 because some background thread might have sneaked in if not properly stopped
+                        # but with the clear() above it should be 1.
+                        assert len(telemetry.TELEMETRY_HISTORY) >= 1
+                        # Find our mocked entry
+                        found = any(entry.get("system", {}).get("cpu") ==
+                                    10 for entry in telemetry.TELEMETRY_HISTORY)
+                        assert found, f"Mocked CPU telemetry not found in history: {telemetry.TELEMETRY_HISTORY}"
 
 
 def test_get_service_stats_structure(clean_telemetry):
     """Test that get_service_stats returns the expected schema."""
-    with mock.patch("modules.monitoring.history_manager.get_history_stats", return_value=([], {})):
-        with mock.patch("modules.monitoring.metrics_discovery.get_nvidia_metrics", return_value=[]):
-            with mock.patch("modules.inference.model_manager.is_engine_actually_loaded", return_value=True):
-                with mock.patch("modules.inference.model_manager.is_uvr_actually_loaded", return_value=False):
-                    stats = telemetry.get_service_stats()
+    from modules.inference import scheduler, model_manager
 
-                    assert "version" in stats
-                    assert "active_sessions" in stats
-                    assert "tasks" in stats
-                    assert "engines" in stats
-                    assert stats["engines"]["whisper"]["status"] == "loaded"
-                    assert stats["engines"]["uvr"]["status"] == "ready"
+    mock_units = [
+        {"id": "CPU", "type": "CPU", "name": "CPU"},
+        {"id": "GPU", "type": "GPU", "name": "GPU"},
+        {"id": "NPU", "type": "NPU", "name": "NPU"},
+        {"id": "AUTO", "type": "AUTO", "name": "AUTO"}
+    ]
+
+    with scheduler.STATE.task_registry_lock:
+        scheduler.STATE.task_registry.clear()
+        scheduler.STATE.task_registry["t1"] = {
+            "status": "active",
+            "stage": "transcribing",
+            "unit_id": "CPU"
+        }
+        scheduler.STATE.task_registry["t2"] = {
+            "status": "active",
+            "stage": "vocal isolation",
+            "unit_id": "GPU"
+        }
+
+    mock_preprocessor = mock.MagicMock()
+    mock_preprocessor.separator = mock.MagicMock()
+
+    with mock.patch("modules.config.HARDWARE_UNITS", mock_units):
+        with mock.patch.dict(model_manager._MODEL_POOL, {"NPU": mock.MagicMock()}):
+            with mock.patch.dict(model_manager._PREPROCESSOR_POOL, {"NPU": mock_preprocessor}):
+                with mock.patch("modules.monitoring.history_manager.get_history_stats", return_value=([], {})):
+                    with mock.patch("modules.monitoring.metrics_discovery.get_nvidia_metrics", return_value=[]):
+                        with mock.patch("modules.inference.model_manager.is_engine_actually_loaded", return_value=True):
+                            with mock.patch("modules.inference.model_manager.is_uvr_actually_loaded", return_value=False):
+                                stats = telemetry.get_service_stats()
+
+                                assert "version" in stats
+                                assert "active_sessions" in stats
+                                assert "tasks" in stats
+                                assert "engines" in stats
+                                assert stats["engines"]["whisper"]["status"] == "busy"
+                                assert stats["engines"]["uvr"]["status"] == "busy"
+                                assert "hardware_units" in stats
+                                for u in stats["hardware_units"]:
+                                    assert "whisper_status" in u
+                                    assert "uvr_status" in u
 
 
 def test_get_minimal_stats():

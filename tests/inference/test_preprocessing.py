@@ -343,3 +343,119 @@ class TestCache:
 def test_lazy_import():
     res = preprocessing._lazy_import_separator()
     assert res is not None or res is None
+
+
+class TestCandidateOutputDirs:
+    """Tests for _candidate_output_dirs()."""
+
+    def test_returns_list_no_duplicates(self):
+        dirs = preprocessing._candidate_output_dirs()
+        assert isinstance(dirs, list)
+        assert len(dirs) == len(set(dirs))
+
+    def test_cache_dir_is_first(self):
+        dirs = preprocessing._candidate_output_dirs()
+        assert dirs[0] == str(preprocessing.CACHE_DIR)
+
+    def test_shm_included_when_exists(self):
+        with mock.patch("os.path.isdir", return_value=True):
+            dirs = preprocessing._candidate_output_dirs()
+            assert "/dev/shm" in dirs
+
+    def test_shm_excluded_when_absent(self):
+        with mock.patch("os.path.isdir", return_value=False):
+            dirs = preprocessing._candidate_output_dirs()
+            assert "/dev/shm" not in dirs
+
+
+class TestSeparateWithFallback:
+    """Tests for _separate_with_fallback()."""
+
+    def _enospc(self, path=None, **_kwargs):
+        """Helper: raise ENOSPC OSError."""
+        import errno as _errno
+        raise OSError(_errno.ENOSPC, "No space left on device")
+
+    def test_primary_succeeds(self):
+        """Should return immediately on first try without calling sep_factory."""
+        mock_sep = mock.MagicMock()
+        mock_sep.separate.return_value = ["/tmp/vocal.wav"]
+        factory = mock.MagicMock()
+
+        with mock.patch("os.makedirs"):
+            result = preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+
+        assert result == ["/tmp/vocal.wav"]
+        factory.assert_not_called()
+
+    def test_fallback_on_enospc(self):
+        """Should retry with a new separator when ENOSPC is raised."""
+        import errno as _errno
+        mock_sep = mock.MagicMock()
+        mock_sep.separate.side_effect = OSError(_errno.ENOSPC, "No space")
+
+        mock_fallback_sep = mock.MagicMock()
+        mock_fallback_sep.separate.return_value = ["/persistent/vocal.wav"]
+        factory = mock.MagicMock(return_value=mock_fallback_sep)
+
+        candidates = [str(preprocessing.CACHE_DIR), "/persistent/tmp"]
+        with mock.patch("os.makedirs"), \
+            mock.patch("modules.inference.preprocessing._candidate_output_dirs",
+                       return_value=candidates):
+            result = preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+
+        assert result == ["/persistent/vocal.wav"]
+        factory.assert_called_once_with("/persistent/tmp")
+
+    def test_non_enospc_propagates_immediately(self):
+        """Non-ENOSPC OSError should not trigger fallback."""
+        mock_sep = mock.MagicMock()
+        mock_sep.separate.side_effect = OSError(5, "Input/output error")
+        factory = mock.MagicMock()
+
+        with mock.patch("os.makedirs"), \
+            mock.patch("modules.inference.preprocessing._candidate_output_dirs",
+                       return_value=[str(preprocessing.CACHE_DIR)]):
+            with pytest.raises(OSError) as exc_info:
+                preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+        assert exc_info.value.errno == 5
+        factory.assert_not_called()
+
+    def test_disk_usage_failure_during_enospc_logging(self):
+        """shutil.disk_usage failing during error logging should not crash."""
+        import errno as _errno
+        mock_sep = mock.MagicMock()
+        mock_sep.separate.side_effect = OSError(_errno.ENOSPC, "No space")
+
+        mock_fallback_sep = mock.MagicMock()
+        mock_fallback_sep.separate.return_value = ["/ok/vocal.wav"]
+        factory = mock.MagicMock(return_value=mock_fallback_sep)
+
+        candidates = [str(preprocessing.CACHE_DIR), "/ok/dir"]
+        with mock.patch("os.makedirs"), \
+            mock.patch("modules.inference.preprocessing._candidate_output_dirs",
+                       return_value=candidates), \
+            mock.patch("modules.inference.preprocessing.shutil.disk_usage",
+                       side_effect=OSError("stat failed")):
+            result = preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+        assert result == ["/ok/vocal.wav"]
+
+    def test_all_candidates_exhausted_raises(self):
+        """Should raise ENOSPC OSError when every directory fails."""
+        import errno as _errno
+        mock_sep = mock.MagicMock()
+        mock_sep.separate.side_effect = OSError(_errno.ENOSPC, "No space")
+
+        mock_fallback_sep = mock.MagicMock()
+        mock_fallback_sep.separate.side_effect = OSError(_errno.ENOSPC, "No space")
+        factory = mock.MagicMock(return_value=mock_fallback_sep)
+
+        candidates = [str(preprocessing.CACHE_DIR), "/another/dir"]
+        with mock.patch("os.makedirs"), \
+            mock.patch("modules.inference.preprocessing._candidate_output_dirs",
+                       return_value=candidates), \
+            mock.patch("modules.inference.preprocessing.shutil.disk_usage",
+                       side_effect=OSError("stat failed")):
+            with pytest.raises(OSError) as exc_info:
+                preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+        assert exc_info.value.args[0] == _errno.ENOSPC

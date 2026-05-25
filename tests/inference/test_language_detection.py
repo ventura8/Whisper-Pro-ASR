@@ -17,6 +17,7 @@ class TestDetectionPipeline:
                 # Mock internal worker result
                 mock_res = {
                     'detected_language': 'fr',
+                    'confidence': 1.0,
                     'all_probabilities': {'fr': 1.0, 'en': 0.0}
                 }
                 mock_mm.model_lock_ctx.return_value.__enter__.return_value = (
@@ -166,3 +167,37 @@ def test_ld_lazy_load_sf():
         language_detection._LIBS["sf"] = None
         res = language_detection._get_sf()
         assert res == "mock_sf"
+
+
+def test_ld_low_confidence_filtering():
+    """Test that language votes below LD_MIN_CONFIDENCE are skipped."""
+    with mock.patch("modules.config.LD_MIN_CONFIDENCE", 0.5):
+        results = [
+            {
+                "detected_language": "fr",
+                "confidence": 0.8,
+                "all_probabilities": {"fr": 0.8, "en": 0.2}
+            },
+            {
+                "detected_language": "en",
+                "confidence": 0.3,
+                "all_probabilities": {"fr": 0.1, "en": 0.3}
+            }
+        ]
+
+        mock_mm = mock.MagicMock()
+        mock_mm.run_batch_language_detection_direct.return_value = results
+
+        perf = {
+            'dur_queue': 1.0,
+            'dur_montage': 1.0,
+            'dur_iso': 1.0,
+            'dur_inf': 1.0,
+            'start_inf': 0.0
+        }
+
+        with mock.patch("modules.inference.language_detection._aggregate_language_probs", return_value={"fr": 1.0}) as mock_agg:
+            language_detection._step_run_inference(
+                (mock.MagicMock(), mock_mm), "isolated.wav", 2, perf
+            )
+            mock_agg.assert_called_once_with([{"fr": 0.8, "en": 0.2}])

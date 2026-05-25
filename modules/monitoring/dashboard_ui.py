@@ -23,7 +23,7 @@ def get_dashboard_html():
             --md-sys-color-on-primary: #ffffff;
             --md-sys-color-primary-container: #cbe6ff;
             --md-sys-color-secondary: #50606e;
-            --md-sys-color-surface: #fdfcff;
+            --md-sys-color-surface: #ffffff;
             --md-sys-color-surface-variant: #dee3eb;
             --md-sys-color-outline: #72777f;
             --md-sys-color-background: #fdfcff;
@@ -31,6 +31,45 @@ def get_dashboard_html():
             --md-sys-color-success: #2e7d32;
             --md-sys-color-error: #ba1a1a;
             --md-sys-color-warning: #e65100;
+
+            --card-bg: #ffffff;
+            --item-bg: #f8fafc;
+            --log-bg: #f8fafc;
+            --log-text: #2d3748;
+            --border-color: var(--md-sys-color-surface-variant);
+            --meta-bg: #f1f3f4;
+            --btn-download-bg: #f8fafc;
+            --btn-download-hover-bg: #e0f2fe;
+            --chart-bg: #ffffff;
+            --chart-text: #72777f;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --md-sys-color-primary: #90caf9;
+                --md-sys-color-on-primary: #00325b;
+                --md-sys-color-primary-container: #004b77;
+                --md-sys-color-secondary: #a2aab3;
+                --md-sys-color-surface: #1c1c1e;
+                --md-sys-color-surface-variant: #43474e;
+                --md-sys-color-outline: #8c9199;
+                --md-sys-color-background: #121214;
+                --md-sys-color-on-surface: #e2e2e6;
+                --md-sys-color-success: #81c784;
+                --md-sys-color-error: #e57373;
+                --md-sys-color-warning: #ffb74d;
+
+                --card-bg: #1c1c1e;
+                --item-bg: #2a2a2e;
+                --log-bg: #111112;
+                --log-text: #e2e2e6;
+                --border-color: #2e3035;
+                --meta-bg: #2e3035;
+                --btn-download-bg: #2a2a2e;
+                --btn-download-hover-bg: #374151;
+                --chart-bg: #1c1c1e;
+                --chart-text: #a2aab3;
+            }
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -45,6 +84,7 @@ def get_dashboard_html():
             gap: 24px;
             max-width: 1600px;
             margin: 0 auto;
+            transition: background-color 0.3s, color 0.3s;
         }
 
         header {
@@ -65,23 +105,23 @@ def get_dashboard_html():
             gap: 8px;
             padding: 8px 16px;
             background: var(--md-sys-color-primary);
-            color: white;
+            color: var(--md-sys-color-on-primary);
             text-decoration: none;
             border-radius: 100px;
             font-size: 14px;
             font-weight: 500;
-            transition: opacity 0.2s;
+            transition: opacity 0.2s, background-color 0.3s, color 0.3s;
             border: none;
             cursor: pointer;
         }
         .btn-swagger:hover { opacity: 0.9; }
 
         .btn-download {
-            background: #f8fafc;
+            background: var(--btn-download-bg);
             color: var(--md-sys-color-primary);
             border: 1px solid var(--md-sys-color-primary);
         }
-        .btn-download:hover { background: #e0f2fe; }
+        .btn-download:hover { background: var(--btn-download-hover-bg); }
 
         .stats-grid {
             display: grid;
@@ -90,14 +130,15 @@ def get_dashboard_html():
         }
 
         .card {
-            background: #ffffff;
+            background: var(--card-bg);
             border-radius: 16px;
             padding: 16px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            border: 1px solid var(--md-sys-color-surface-variant);
+            border: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
             gap: 8px;
+            transition: background-color 0.3s, border-color 0.3s;
         }
 
         .card-title {
@@ -148,7 +189,7 @@ def get_dashboard_html():
         .tabs {
             display: flex;
             gap: 16px;
-            border-bottom: 1px solid var(--md-sys-color-surface-variant);
+            border-bottom: 1px solid var(--border-color);
             margin-bottom: 16px;
         }
 
@@ -181,12 +222,12 @@ def get_dashboard_html():
 
         .task-card, .history-card, .chart-card {
             padding: 20px;
-            background: white;
-            border: 1px solid var(--md-sys-color-surface-variant);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
             border-radius: 20px;
             display: flex; flex-direction: column; gap: 16px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.04);
-            transition: transform 0.2s;
+            transition: transform 0.2s, background-color 0.3s, border-color 0.3s;
         }
 
         .task-card.queued {
@@ -211,21 +252,22 @@ def get_dashboard_html():
             font-weight: 700;
             border-radius: 8px;
             border: 1px solid var(--md-sys-color-outline);
-            background: white;
+            background: var(--card-bg);
             color: var(--md-sys-color-secondary);
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s, background-color 0.3s, border-color 0.3s;
         }
         .btn-time.active {
             background: var(--md-sys-color-primary);
-            color: white;
+            color: var(--md-sys-color-on-primary);
             border-color: var(--md-sys-color-primary);
         }
 
         .empty-state {
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            padding: 60px 40px; background: white; border: 1px dashed var(--md-sys-color-outline);
+            padding: 60px 40px; background: var(--card-bg); border: 1px dashed var(--md-sys-color-outline);
             border-radius: 24px; color: var(--md-sys-color-secondary); text-align: center; gap: 16px;
+            transition: background-color 0.3s, border-color 0.3s;
         }
 
         .empty-icon { font-size: 48px; color: var(--md-sys-color-surface-variant); }
@@ -242,19 +284,20 @@ def get_dashboard_html():
         .item-secondary { font-size: 12px; color: var(--md-sys-color-secondary); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
         .meta-tag {
-            background: #f1f3f4; padding: 2px 8px; border-radius: 4px; font-weight: 500;
+            background: var(--meta-bg); padding: 2px 8px; border-radius: 4px; font-weight: 500;
             color: var(--md-sys-color-secondary); font-size: 11px; display: flex; align-items: center; gap: 4px;
+            transition: background-color 0.3s, color 0.3s;
         }
 
         .badge { padding: 4px 10px; border-radius: 100px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-        .badge-active { background: #e8f5e9; color: #1b5e20; }
-        .badge-busy { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
-        .badge-queued { background: #fff3e0; color: #e65100; border: 1px solid #ffccbc; }
-        .badge-ready { background: #e3f2fd; color: #0d47a1; }
-        .badge-initializing { background: rgba(0, 100, 149, 0.1); color: #006495; }
-        .badge-initialized { background: #f0f9ff; color: #0369a1; }
-        .badge-loaded { background: #ecfdf5; color: #047857; }
-        .badge-failed { background: #fef2f2; color: #b91c1c; }
+        .badge-active { background: rgba(46, 125, 50, 0.15); color: var(--md-sys-color-success); }
+        .badge-busy { background: rgba(230, 81, 0, 0.15); color: var(--md-sys-color-warning); border: 1px solid rgba(230, 81, 0, 0.3); }
+        .badge-queued { background: rgba(230, 81, 0, 0.15); color: var(--md-sys-color-warning); border: 1px solid rgba(230, 81, 0, 0.3); }
+        .badge-ready { background: rgba(0, 100, 149, 0.15); color: var(--md-sys-color-primary); }
+        .badge-initializing { background: rgba(0, 100, 149, 0.15); color: var(--md-sys-color-primary); }
+        .badge-initialized { background: rgba(0, 100, 149, 0.15); color: var(--md-sys-color-primary); }
+        .badge-loaded { background: rgba(46, 125, 50, 0.15); color: var(--md-sys-color-success); }
+        .badge-failed { background: rgba(186, 26, 26, 0.15); color: var(--md-sys-color-error); }
 
         .badge-lang {
             background: var(--md-sys-color-primary-container);
@@ -262,12 +305,18 @@ def get_dashboard_html():
             border: 1px solid var(--md-sys-color-primary);
         }
 
-        .log-buffer, .json-buffer {
+        .log-buffer {
             padding: 14px; font-family: 'Roboto Mono', monospace; font-size: 11px; line-height: 1.6;
-            color: #2d3748; white-space: pre-wrap; max-height: 400px; overflow-y: auto; background: #f8fafc; border-top: 1px solid #edf2f7;
+            color: var(--log-text); white-space: pre-wrap; max-height: 400px; overflow-y: auto;
+            background: var(--log-bg); border-top: 1px solid var(--border-color);
+            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
         }
 
-        .json-buffer { background: #1e293b; color: #f1f5f9; border: none; border-radius: 8px; margin-top: 8px; }
+        .json-buffer {
+            padding: 14px; font-family: 'Roboto Mono', monospace; font-size: 11px; line-height: 1.6;
+            white-space: pre-wrap; max-height: 400px; overflow-y: auto;
+            background: #1e293b; color: #f1f5f9; border: none; border-radius: 8px; margin-top: 8px;
+        }
 
         .result-box {
             padding: 16px; background: #1e293b; border-radius: 12px; border: 1px solid #334155;
@@ -277,19 +326,21 @@ def get_dashboard_html():
         }
 
         .list-item {
-            padding: 12px 16px; background: white; border: 1px solid var(--md-sys-color-surface-variant);
+            padding: 12px 16px; background: var(--card-bg); border: 1px solid var(--border-color);
             border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
+            transition: background-color 0.3s, border-color 0.3s;
         }
 
         .hw-card {
-            padding: 12px; background: #f8fafc; border-radius: 12px;
-            border: 1px solid var(--md-sys-color-surface-variant);
+            padding: 12px; background: var(--item-bg); border-radius: 12px;
+            border: 1px solid var(--border-color);
             display: flex; flex-direction: column; gap: 4px;
+            transition: background-color 0.3s, border-color 0.3s;
         }
         .hw-card-title { font-size: 10px; font-weight: 700; color: var(--md-sys-color-secondary); text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
         .hw-card-status { font-size: 13px; font-weight: 600; font-family: 'Outfit', sans-serif; }
-        .status-used { color: #1b5e20; }
-        .status-idle { color: #5f6368; }
+        .status-used { color: var(--md-sys-color-success); }
+        .status-idle { color: var(--md-sys-color-secondary); }
 
         .refresh-indicator { font-size: 12px; color: var(--md-sys-color-outline); text-align: right; padding-top: 12px; }
         #history-section, #analytics-section, #charts-section, #settings-section { display: none; }
@@ -298,7 +349,8 @@ def get_dashboard_html():
             display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px;
         }
         .stat-box {
-            padding: 16px; background: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0;
+            padding: 16px; background: var(--item-bg); border-radius: 16px; border: 1px solid var(--border-color);
+            transition: background-color 0.3s, border-color 0.3s;
         }
         .stat-label { font-size: 11px; color: var(--md-sys-color-secondary); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; }
         .stat-value { font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 500; }
@@ -461,6 +513,22 @@ def get_dashboard_html():
         let charts = {};
         let currentTelemetry = [];
         let fullTaskHistory = [];
+        let lastStatusData = null;
+
+        function getHwIconAndLabel(unitId) {
+            if (!unitId) return { icon: 'hourglass_empty', label: 'Queued' };
+            const uid = unitId.toString().toLowerCase();
+            if (uid.startsWith('cuda')) {
+                return { icon: 'rocket_launch', label: 'NVIDIA GPU (' + unitId + ')' };
+            } else if (uid.startsWith('npu')) {
+                return { icon: 'psychology_alt', label: 'Intel NPU (' + unitId + ')' };
+            } else if (uid.startsWith('gpu')) {
+                return { icon: 'developer_board', label: 'Intel GPU (' + unitId + ')' };
+            } else if (uid === 'cpu') {
+                return { icon: 'settings_input_component', label: 'Host CPU' };
+            }
+            return { icon: 'memory', label: unitId };
+        }
 
         function escapeHtml(text) {
             if (!text) return "";
@@ -525,6 +593,17 @@ def get_dashboard_html():
             return (h < 10 ? "0" + h : h) + ":" + (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
         }
 
+        function getTimerText(t, now) {
+            const startTime = t.start_time || now;
+            const startActive = t.start_active || startTime;
+            if (t.status === 'queued') {
+                return 'Queued for: ' + formatDur(now - startTime);
+            }
+            const activeDur = formatDur(now - startActive);
+            const queueDur = formatDur(startActive - startTime);
+            return 'Running: ' + activeDur + ' (Queue: ' + queueDur + ')';
+        }
+
         function handleToggle(id, isOpen) {
             if (isOpen) {
                 expandedElements.add(id);
@@ -554,8 +633,9 @@ def get_dashboard_html():
             } catch (e) { alert("Failed to save settings: " + e); }
         }
 
-        function renderCharts(data) {
-            if (!currentTelemetry || currentTelemetry.length === 0) return;
+        function renderCharts() {
+            const data = lastStatusData;
+            if (!data || !currentTelemetry || currentTelemetry.length === 0) return;
             const sorted = [...currentTelemetry].sort((a,b) => a.timestamp - b.timestamp);
             if (sorted.length === 0) return;
 
@@ -617,6 +697,8 @@ def get_dashboard_html():
                 series = [{ name: 'No Acceleration Detected', data: new Array(labels.length).fill(0) }];
             }
 
+            const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+
             const options = {
                 series: series,
                 chart: {
@@ -625,7 +707,10 @@ def get_dashboard_html():
                     toolbar: { show: false },
                     zoom: { enabled: false },
                     animations: { enabled: true, easing: 'easeinout', speed: 800 },
-                    background: '#fff'
+                    background: 'transparent'
+                },
+                theme: {
+                    mode: isDark ? 'dark' : 'light'
                 },
                 colors: datasets.map(d => d.color || '#006495'),
                 dataLabels: { enabled: false },
@@ -633,7 +718,7 @@ def get_dashboard_html():
                 xaxis: {
                     categories: labels,
                     labels: {
-                        style: { colors: '#72777f', fontSize: '10px' },
+                        style: { fontSize: '10px' },
                         rotate: 0,
                         hideOverlappingLabels: true
                     },
@@ -644,12 +729,12 @@ def get_dashboard_html():
                     min: 0,
                     max: percent ? 100 : undefined,
                     labels: {
-                        style: { colors: '#72777f', fontSize: '10px' },
+                        style: { fontSize: '10px' },
                         formatter: (val) => percent ? val.toFixed(0) + '%' : val.toFixed(1)
                     }
                 },
                 grid: {
-                    borderColor: '#f0f0f0',
+                    borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#f0f0f0',
                     strokeDashArray: 4,
                     xaxis: { lines: { show: false } }
                 },
@@ -658,11 +743,10 @@ def get_dashboard_html():
                     horizontalAlign: 'right',
                     fontFamily: 'Outfit',
                     fontSize: '12px',
-                    labels: { colors: '#50606e' },
                     markers: { radius: 12 }
                 },
                 tooltip: {
-                    theme: 'light',
+                    theme: isDark ? 'dark' : 'light',
                     x: { show: true },
                     y: { formatter: (val) => percent ? val.toFixed(1) + '%' : val.toFixed(2) + ' GB' }
                 }
@@ -671,7 +755,10 @@ def get_dashboard_html():
             if (charts[id]) {
                 charts[id].updateOptions({
                     xaxis: { categories: labels },
-                    series: series
+                    series: series,
+                    theme: { mode: isDark ? 'dark' : 'light' },
+                    grid: { borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#f0f0f0' },
+                    tooltip: { theme: isDark ? 'dark' : 'light' }
                 });
             } else {
                 charts[id] = new ApexCharts(el, options);
@@ -690,7 +777,7 @@ def get_dashboard_html():
             const resOpen = expandedElements.has(`${id}_res`) ? 'open' : '';
 
             return `
-                <div style="margin-top:12px; border-top:1px solid #eee; padding-top:12px;">
+                <div style="margin-top:12px; border-top:1px solid var(--border-color); padding-top:12px;">
                     <details ${auditOpen} ontoggle="handleToggle('${id}_audit', this.open)">
                         <summary style="font-size:13px; color:var(--md-sys-color-secondary); margin-bottom:8px;">
                             <span class="material-icons-sharp" style="font-size:14px">policy</span> Audit & Caller Info
@@ -726,8 +813,8 @@ def get_dashboard_html():
                 if (!result.text) {
                     console.warn("[Dashboard] History item missing result.text:", id, h);
                 }
-                const speed = (h.video_duration > 0 && h.total_elapsed_sec > 0) 
-                    ? (h.video_duration / h.total_elapsed_sec).toFixed(1) + 'x'
+                const speed = (h.video_duration > 0 && (h.active_elapsed_sec || h.total_elapsed_sec) > 0) 
+                    ? (h.video_duration / (h.active_elapsed_sec || h.total_elapsed_sec)).toFixed(1) + 'x'
                     : 'N/A';
                 
                 const typeLower = (h.type || "").toLowerCase();
@@ -765,6 +852,7 @@ def get_dashboard_html():
                 const langBadge = langCode ? `<span class="badge badge-lang" style="margin-left:auto;">${langCode.toUpperCase()}</span>` : '';
 
                 const typeIcon = (h.type === '/asr' || h.type === 'Transcription') ? 'record_voice_over' : 'translate';
+                const hw = getHwIconAndLabel(h.unit_id);
 
                 return `<div class="history-card">
                     <div class="task-header">
@@ -774,15 +862,18 @@ def get_dashboard_html():
                         <div class="item-info">
                             <div style="display:flex; align-items:center; gap:8px; margin-bottom:2px;">
                                 <span class="item-primary">${h.filename}</span>
-                                <span class="meta-tag" style="background:#e8f5e9; color:#1b5e20; border:none; padding:1px 8px; border-radius:100px; font-weight:700;">
+                                <span class="meta-tag" style="background:rgba(46, 125, 50, 0.15); color:var(--md-sys-color-success); border:none; padding:1px 8px; border-radius:100px; font-weight:700;">
                                     <span class="material-icons-sharp" style="font-size:13px">check</span> ${h.type || 'Task'}
                                 </span>
                             </div>
                             <div class="item-secondary">
                                 <span class="meta-tag" title="Completed At"><span class="material-icons-sharp" style="font-size:12px;color:var(--md-sys-color-secondary)">schedule</span>${h.completed_at}</span>
                                 <span class="meta-tag"><span class="material-icons-sharp" style="font-size:12px">movie</span>${formatDur(h.video_duration)}</span>
-                                <span class="meta-tag" title="Processing Time"><span class="material-icons-sharp" style="font-size:12px">timer</span>Took: ${formatDur(h.total_elapsed_sec)}</span>
+                                <span class="meta-tag" title="Processing Time"><span class="material-icons-sharp" style="font-size:12px">timer</span>Took: ${formatDur(h.active_elapsed_sec || h.total_elapsed_sec)}</span>
+                                <span class="meta-tag" title="Queue Time"><span class="material-icons-sharp" style="font-size:12px">hourglass_empty</span>Queue: ${formatDur(h.queue_elapsed_sec || 0)}</span>
                                 <span class="meta-tag" title="Transcription Speed"><span class="material-icons-sharp" style="font-size:12px">speed</span>Speed: ${speed}</span>
+                                <span class="meta-tag" title="Hardware"><span class="material-icons-sharp" style="font-size:12px;color:var(--md-sys-color-primary)">${hw.icon}</span>${hw.label}</span>
+                                <span class="meta-tag" title="Processed Segments"><span class="material-icons-sharp" style="font-size:12px">segment</span>Segments: ${h.segments_processed !== undefined ? h.segments_processed : ((result.segments) ? result.segments.length : ((result.segments_processed) ? result.segments_processed : 0))}</span>
                             </div>
                         </div>
                         ${langBadge}
@@ -815,8 +906,8 @@ def get_dashboard_html():
                 icon.innerText = 'sync_disabled';
                 icon.classList.remove('pulse');
                 text.innerText = 'Refresh Paused';
-                btn.style.background = '#f1f3f4';
-                btn.style.color = '#5f6368';
+                btn.style.background = 'var(--meta-bg)';
+                btn.style.color = 'var(--md-sys-color-secondary)';
             }
         }
 
@@ -842,11 +933,12 @@ def get_dashboard_html():
                 document.getElementById('active-val').innerText = data.active_sessions || 0;
                 document.getElementById('queued-val').innerText = data.queued_sessions || 0;
 
+                lastStatusData = data;
                 currentTelemetry = data.telemetry_history || [];
                 fullTaskHistory = data.history || [];
                 console.log("[Dashboard] Update: Active Tasks:", (data.tasks||[]).length, "History:", fullTaskHistory.length);
 
-                if (currentTab === 'charts') renderCharts(data);
+                if (currentTab === 'charts') renderCharts();
                 if (currentTab === 'history') renderHistory();
 
                 // Auto-scroll active live transcription and logs only
@@ -913,8 +1005,12 @@ def get_dashboard_html():
                     return `
                         <div class="hw-card">
                             <div class="hw-card-title"><span class="material-icons-sharp" style="font-size:12px">${icon}</span> ${u.type}</div>
-                            <div style="font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${u.name}</div>
-                            <div class="hw-card-status ${statusClass}">${statusText}</div>
+                            <div style="font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 2px;">${u.name}</div>
+                            <div class="hw-card-status ${statusClass}" style="margin-bottom: 6px;">${statusText}</div>
+                            <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+                                <span class="badge badge-${u.uvr_status || 'ready'}" style="padding: 2px 6px; font-size: 9px; border-radius: 4px; line-height: 1.2;">UVR: ${u.uvr_status || 'ready'}</span>
+                                <span class="badge badge-${u.whisper_status || 'ready'}" style="padding: 2px 6px; font-size: 9px; border-radius: 4px; line-height: 1.2;">Whisper: ${u.whisper_status || 'ready'}</span>
+                            </div>
                         </div>
                     `;
                 }).join('');
@@ -963,6 +1059,7 @@ def get_dashboard_html():
                         const progressPct = t.progress || 0;
                         const logContent = (t.logs || []).join('\n');
                         const liveText = t.live_text || "Waiting for first transcription segment...";
+                        const hw = getHwIconAndLabel(t.unit_id);
 
                         if (card.innerHTML.trim() === '') {
                             card.innerHTML = `
@@ -980,7 +1077,8 @@ def get_dashboard_html():
                                         <div class="item-secondary">
                                             <span class="meta-tag" style="color:var(--md-sys-color-primary); font-weight:600;"><span class="material-icons-sharp" style="font-size:12px">layers</span><span class="stage-text">${t.stage || 'Initializing'}</span></span>
                                             <span class="meta-tag"><span class="material-icons-sharp" style="font-size:12px">movie</span>${formatDur(t.video_duration)}</span>
-                                            <span class="meta-tag"><span class="material-icons-sharp" style="font-size:12px">timer</span><span class="timer-text">${t.status==='queued'?'Queued for: ':'Running: '}${formatDur(now-(t.start_time || now))}</span></span>
+                                            <span class="meta-tag"><span class="material-icons-sharp" style="font-size:12px">timer</span><span class="timer-text">${getTimerText(t, now)}</span></span>
+                                            <span class="meta-tag hw-tag"><span class="material-icons-sharp hw-icon" style="font-size:12px;color:var(--md-sys-color-primary)">${hw.icon}</span><span class="hw-text">${hw.label}</span></span>
                                         </div>
                                     </div>
                                     <span class="badge badge-${t.status || 'unknown'}">${t.status === 'queued' ? 'queue' : (t.status || 'unknown')}</span>
@@ -1027,11 +1125,19 @@ def get_dashboard_html():
                                 hwWait.style.display = t.status === 'queued' ? 'flex' : 'none';
                             }
 
-                            card.querySelector('.stage-text').innerText = t.stage || 'Initializing';
-                            card.querySelector('.timer-text').innerText = (t.status==='queued'?'Queued for: ':'Running: ') + formatDur(now-(t.start_time || now));
-                            card.querySelector('.progress-bar').style.width = progressPct + '%';
-                            card.querySelector('.progress-text').innerText = progressPct;
-                            const lb = card.querySelector('.log-buffer');
+                             card.querySelector('.stage-text').innerText = t.stage || 'Initializing';
+                             card.querySelector('.timer-text').innerText = getTimerText(t, now);
+                             card.querySelector('.progress-bar').style.width = progressPct + '%';
+                             card.querySelector('.progress-text').innerText = progressPct;
+                             
+                             const hwIconEl = card.querySelector('.hw-icon');
+                             const hwTextEl = card.querySelector('.hw-text');
+                             if (hwIconEl && hwTextEl) {
+                                 hwIconEl.innerText = hw.icon;
+                                 hwTextEl.innerText = hw.label;
+                             }
+
+                             const lb = card.querySelector('.log-buffer');
                             if (lb && lb.innerText !== logContent) {
                                 lb.innerText = logContent;
                                 lb.scrollTop = lb.scrollHeight;
@@ -1053,14 +1159,19 @@ def get_dashboard_html():
                 }
 
                 const engines = data.engines || {};
-                document.getElementById('engine-list').innerHTML = Object.entries(engines).map(([k,v]) => `
-                    <div class="list-item">
-                        <div class="item-info">
-                            <span class="item-primary">${k.toUpperCase()}</span>
-                            <span class="item-secondary">${v.model || 'Unknown'}</span>
-                        </div>
-                        <span class="badge badge-${v.status || 'unknown'}">${v.status || 'unknown'}</span>
-                    </div>`).join('');
+                const orderedKeys = ['uvr', 'whisper'];
+                document.getElementById('engine-list').innerHTML = orderedKeys.map(k => {
+                    const v = engines[k];
+                    if (!v) return '';
+                    return `
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-primary">${k.toUpperCase()}</span>
+                                <span class="item-secondary">${v.model || 'Unknown'}</span>
+                            </div>
+                            <span class="badge badge-${v.status || 'unknown'}">${v.status || 'unknown'}</span>
+                        </div>`;
+                }).join('');
                 document.getElementById('last-update').innerText = `Updated: ${new Date().toLocaleTimeString()}`;
             } catch (e) { console.error(e); }
         }
@@ -1068,6 +1179,13 @@ def get_dashboard_html():
             updateStats();
             setInterval(updateStats, 2000);
             showTab('active');
+            if (window.matchMedia) {
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+                    if (currentTab === 'charts') {
+                        renderCharts();
+                    }
+                });
+            }
         };
     </script>
 </body>

@@ -7,9 +7,12 @@ MDX-NET architecture. It implements hardware-specific optimizations for ONNX Run
 including OpenVINO and CUDA backends, and handles both file-level and
 segment-level audio cleaning.
 """
+import errno
 import gc
 import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 import threading
 import time
@@ -34,6 +37,80 @@ logging.getLogger("audio_separator").setLevel(logging.INFO)
 
 CACHE_DIR = Path(config.PREPROCESSING_CACHE_DIR)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _candidate_output_dirs():
+    """
+    Return an ordered list of candidate output directories for UVR stem files.
+
+    Priority:
+        1. Configured preprocessing cache (fastest, usually on tmpfs).
+        2. PERSISTENT_TEMP_DIR (cross-volume fallback).
+        3. System /tmp.
+        4. /dev/shm (RAM-disk, last resort — only for small montage files).
+    """
+    candidates = [
+        str(CACHE_DIR),
+        config.PERSISTENT_TEMP_DIR,
+        tempfile.gettempdir(),
+    ]
+    # RAM-disk only when it exists and is distinct from the others
+    if os.path.isdir("/dev/shm"):
+        candidates.append("/dev/shm")
+    # Deduplicate while preserving order
+    seen = set()
+    result = []
+    for d in candidates:
+        if d not in seen:
+            seen.add(d)
+            result.append(d)
+    return result
+
+
+def _separate_with_fallback(sep, sep_factory, audio_path):
+    """
+    Run UVR separation, automatically retrying on ENOSPC with alternative
+    output directories. Re-instantiates the separator for each new directory
+    so the write target actually changes.
+
+    Parameters:
+        sep:         The already-initialised Separator instance (primary attempt).
+        sep_factory: Callable(output_dir: str) -> Separator, used when
+                     the primary directory fails and we need a new instance.
+        audio_path:  Path to the audio file to separate.
+
+    Returns:
+        List of stem paths returned by sep.separate().
+    """
+    candidates = _candidate_output_dirs()
+    current_sep = sep
+    last_err = None
+
+    for i, out_dir in enumerate(candidates):
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            if i > 0:
+                # Re-instantiate with the new output directory
+                current_sep = sep_factory(out_dir)
+                logger.warning(
+                    "[UVR] Primary output dir full — retrying with fallback: %s", out_dir)
+            return current_sep.separate(audio_path)
+        except OSError as exc:
+            last_err = exc
+            if exc.errno != errno.ENOSPC:
+                # Not a disk-space error — propagate immediately
+                raise
+            try:
+                free_mb = shutil.disk_usage(out_dir).free // (1024 * 1024)
+            except OSError:
+                free_mb = 0
+            logger.error(
+                "[UVR] No space left on %s (%d MB free) — trying next fallback.",
+                out_dir, free_mb)
+
+    # All candidates exhausted
+    raise OSError(errno.ENOSPC,
+                  "No space left on any candidate output directory") from last_err
 
 
 # pylint: disable=global-statement  # Required for lazy loading pattern
@@ -172,6 +249,7 @@ class PreprocessingManager:
                 model_file_dir=config.UVR_MODEL_DIR,
                 output_format="WAV",
                 normalization_threshold=0.01,
+                output_single_stem="Vocals",
                 log_level=logging.INFO
             )
 
@@ -270,6 +348,7 @@ class PreprocessingManager:
             if yield_cb:
                 yield_cb()
 
+            audio_dur = utils.get_audio_duration(audio_path)
             unit_name = self._unit["name"] if self._unit else self._device_id
             logger.info("[UVR] Starting vocal isolation on %s...", unit_name)
             p_start = time.time()
@@ -286,18 +365,38 @@ class PreprocessingManager:
                 else:
                     utils.THREAD_CONTEXT.ov_options = None
 
+                def _make_separator(output_dir):
+                    """Build a fresh Separator pinned to a specific output directory."""
+                    new_sep = _lazy_import_separator()(
+                        output_dir=output_dir,
+                        model_file_dir=config.UVR_MODEL_DIR,
+                        output_format="WAV",
+                        normalization_threshold=0.01,
+                        output_single_stem="Vocals",
+                        log_level=logging.INFO
+                    )
+                    new_sep.onnx_execution_provider = sep.onnx_execution_provider
+                    return new_sep
+
                 try:
                     if use_cpu_lock:
                         with utils.cpu_lock_ctx():
-                            stems = sep.separate(audio_path)
+                            stems = _separate_with_fallback(sep, _make_separator, audio_path)
                     else:
-                        stems = sep.separate(audio_path)
+                        stems = _separate_with_fallback(sep, _make_separator, audio_path)
                 finally:
                     # CRITICAL: Clear hardware options to prevent leaking into VAD/Whisper logic
                     utils.THREAD_CONTEXT.ov_options = None
 
             dur = time.time() - p_start
-            logger.info("[UVR] Isolation complete on %s (Duration: %.2fs)", unit_name, dur)
+            speed_val = audio_dur / dur if dur > 0 else 0.0
+            logger.info(
+                "[UVR] Isolation complete on %s (Duration: %s | Audio: %s | Speed: %.2fx)",
+                unit_name,
+                utils.format_duration(dur),
+                utils.format_duration(audio_dur),
+                speed_val
+            )
 
             if yield_cb:
                 yield_cb()
@@ -311,19 +410,13 @@ class PreprocessingManager:
                 # Register for request-local cleanup
                 utils.track_file(stem_path)
 
-                # Cleanup unused stems to prevent disk/memory leakage
+                # Eagerly delete any extra stems; track first so route cleanup catches failures
                 for extra_stem in stems[1:]:
-                    try:
-                        extra_path = extra_stem if os.path.isabs(
-                            extra_stem) else str(CACHE_DIR / extra_stem)
-
-                        # Also track extra stems just in case they fail to remove here
-                        utils.track_file(extra_path)
-
-                        if os.path.exists(extra_path) and extra_path != stem_path:
-                            os.remove(extra_path)
-                    except (IOError, OSError) as cleanup_err:
-                        logger.debug("[UVR] Failed to cleanup extra stem: %s", cleanup_err)
+                    extra_path = extra_stem if os.path.isabs(extra_stem) \
+                        else str(CACHE_DIR / extra_stem)
+                    utils.track_file(extra_path)
+                    if extra_path != stem_path:
+                        utils.secure_remove(extra_path)
 
                 return stem_path
             return audio_path

@@ -83,3 +83,109 @@ def test_vad_exception_handling(mock_vad_components):
 
     results = vad.get_speech_timestamps(np.zeros(16000))
     assert results == []
+
+
+def test_lazy_import_vad_monkeypatching():
+    """Test that _lazy_import_vad properly monkeypatches get_speech_timestamps."""
+    # Reset VAD state to simulate first load
+    vad._VAD_STATE["wrapped"] = False
+    vad._VAD_STATE["wrapped_func"] = None
+
+    # Mock fw_get_ts
+    mock_orig_get_ts = mock.MagicMock()
+    mock_orig_get_ts.return_value = [{"start": 16000, "end": 32000}]
+
+    # Backup original fw_get_ts
+    orig_fw_get_ts = vad.fw_get_ts
+    vad.fw_get_ts = mock_orig_get_ts
+
+    try:
+        # Run _lazy_import_vad
+        fw_get_ts_wrapped, _, _ = vad._lazy_import_vad()
+
+        assert vad._VAD_STATE["wrapped"] is True
+        assert vad._VAD_STATE["wrapped_func"] is not None
+        assert fw_get_ts_wrapped is not mock_orig_get_ts
+
+        # Test calling the wrapped function with mock logger
+        audio = np.zeros(48000)
+        with mock.patch("modules.inference.vad.logger") as mock_logger:
+            res = fw_get_ts_wrapped(audio)
+
+            # Verify the original get_speech_timestamps was called
+            mock_orig_get_ts.assert_called_once_with(audio)
+            assert res == [{"start": 16000, "end": 32000}]
+            mock_logger.info.assert_called_once()
+            log_arg = mock_logger.info.call_args[0][0]
+            assert "[VAD] Speech detection complete" in log_arg
+
+    finally:
+        # Restore original state
+        vad.fw_get_ts = orig_fw_get_ts
+        vad._VAD_STATE["wrapped"] = False
+        vad._VAD_STATE["wrapped_func"] = None
+
+
+def test_lazy_import_vad_sys_modules_patching():
+    """Test that _lazy_import_vad patches sys.modules['faster_whisper.vad']."""
+    vad._VAD_STATE["wrapped"] = False
+    vad._VAD_STATE["wrapped_func"] = None
+
+    mock_orig_get_ts = mock.MagicMock()
+    orig_fw_get_ts = vad.fw_get_ts
+    vad.fw_get_ts = mock_orig_get_ts
+
+    mock_module = mock.MagicMock()
+
+    with mock.patch.dict("sys.modules", {"faster_whisper.vad": mock_module}):
+        try:
+            vad._lazy_import_vad()
+            assert mock_module.get_speech_timestamps == vad._VAD_STATE["wrapped_func"]
+        finally:
+            vad.fw_get_ts = orig_fw_get_ts
+            vad._VAD_STATE["wrapped"] = False
+            vad._VAD_STATE["wrapped_func"] = None
+
+
+def test_lazy_import_vad_none():
+    """Test _lazy_import_vad behavior when fw_get_ts is None."""
+    vad._VAD_STATE["wrapped"] = False
+    vad._VAD_STATE["wrapped_func"] = None
+
+    orig_fw_get_ts = vad.fw_get_ts
+    vad.fw_get_ts = None
+
+    try:
+        fw_get_ts_ret, _, _ = vad._lazy_import_vad()
+        assert fw_get_ts_ret is None
+        assert vad._VAD_STATE["wrapped"] is False
+    finally:
+        vad.fw_get_ts = orig_fw_get_ts
+
+
+def test_get_speech_timestamps_wrapped_exceptions():
+    """Test that get_speech_timestamps_wrapped handles exceptions gracefully."""
+    vad._VAD_STATE["wrapped"] = False
+    vad._VAD_STATE["wrapped_func"] = None
+
+    # Mock fw_get_ts to return non-iterable to trigger exception in speech_sec sum
+    mock_orig_get_ts = mock.MagicMock()
+    mock_orig_get_ts.return_value = 123  # Non-iterable
+
+    orig_fw_get_ts = vad.fw_get_ts
+    vad.fw_get_ts = mock_orig_get_ts
+
+    try:
+        fw_get_ts_wrapped, _, _ = vad._lazy_import_vad()
+
+        # Call with mock logger
+        audio = np.zeros(16000)
+        with mock.patch("modules.inference.vad.logger") as mock_logger:
+            res = fw_get_ts_wrapped(audio)
+            assert res == 123
+            # Verify no warning/error crashed the function, and it logged debug info
+            mock_logger.debug.assert_not_called()  # since it returned 123, which is not list/tuple, it skipped sum
+    finally:
+        vad.fw_get_ts = orig_fw_get_ts
+        vad._VAD_STATE["wrapped"] = False
+        vad._VAD_STATE["wrapped_func"] = None

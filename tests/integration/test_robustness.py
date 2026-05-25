@@ -34,7 +34,32 @@ def test_hardware_path_resolution():
                     bootstrap.initialize_hardware_path()
                     assert "/app/libs/intel" in fake_path
 
-    # 3. Test Unknown platform fallback
+    # 3. Test Intel path auto-detection via /dev/accel
+    with mock.patch.dict(os.environ, {"ASR_DEVICE": "auto"}):
+        def mock_exists(path):
+            return path in ["/dev/accel", "/app/libs/intel"]
+        with mock.patch("os.path.exists", side_effect=mock_exists):
+            fake_path = []
+            with mock.patch.object(sys, "path", fake_path):
+                with mock.patch("importlib.reload"):
+                    bootstrap.initialize_hardware_path()
+                    assert "/app/libs/intel" in fake_path
+
+    # 4. Test Intel path auto-detection via OpenVINO fallback query
+    with mock.patch.dict(os.environ, {"ASR_DEVICE": "auto"}):
+        def mock_exists_ov(path):
+            return path == "/app/libs/intel"
+        with mock.patch("os.path.exists", side_effect=mock_exists_ov):
+            mock_core = mock.MagicMock()
+            mock_core.available_devices = ["NPU"]
+            with mock.patch("openvino.Core", return_value=mock_core):
+                fake_path = []
+                with mock.patch.object(sys, "path", fake_path):
+                    with mock.patch("importlib.reload"):
+                        bootstrap.initialize_hardware_path()
+                        assert "/app/libs/intel" in fake_path
+
+    # 5. Test Unknown platform fallback
     with mock.patch("platform.system", return_value="Unknown"):
         bootstrap.initialize_hardware_path()
 
@@ -47,10 +72,11 @@ def test_media_utilities_resilience():
         mock_torch.cuda.empty_cache.side_effect = Exception("CUDA Fail")
         utils.clear_gpu_cache()
 
-    # 2. FFmpeg progress parsing failures
+    # 2. FFmpeg progress parsing failures and speed parsing
     process = mock.MagicMock()
-    process.stdout.readline.side_effect = ["out_time_ms=invalid\n", ""]
-    utils._parse_ffmpeg_progress(process, 10.0)
+    process.stdout.readline.side_effect = ["out_time_ms=invalid\n", "speed= 1.25x\n", ""]
+    speed = utils._parse_ffmpeg_progress(process, 10.0)
+    assert speed == "1.25x"
 
     # 3. Subtitle generation fallbacks
     res_text = {"text": "hello"}

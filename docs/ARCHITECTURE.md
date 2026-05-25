@@ -1,6 +1,6 @@
 # Technical Architecture
 
-Whisper Pro v1.0.5 implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX).
+Whisper Pro v1.0.6 implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX).
 
 ## 🧬 Module Ecosystem
 
@@ -90,8 +90,11 @@ The system implements a **Thread-Local Re-entrant Locking Pattern** via `model_l
 This prevents deadlocks where a task might release a unit between stages and be unable to reclaim it due to high queue volume.
 
 ### 2. Deadlock-Free Priority Resumption
-The system utilizes a **Cooperative Yielding** pattern combined with an automated `release_priority` cleanup. High-priority tasks (like `/detect-language`) can signal active transcriptions to pause. Once the priority task completes, the `early_task_registration` context manager automatically triggers a system-wide resumption signal (`resume_event`), ensuring that paused tasks continue immediately exactly where they left off.
+The system utilizes a **Cooperative Yielding** pattern combined with an automated `release_priority` cleanup. High-priority tasks (like `/detect-language`) can signal active transcriptions to pause. As of v1.0.6, priority tasks are strictly serialized using `STATE.priority_sequential_lock` during the entire execution lifetime of the `early_task_registration` context manager. This prevents concurrent preemption races. Once the priority task completes, the context manager automatically triggers a system-wide resumption signal (`resume_event`), ensuring that paused tasks continue immediately exactly where they left off.
 
+- **Standard Task Yielding**: Standard tasks yield resource acquisition and loop-sleep instead of blocking on the model lock semaphore whenever priority tasks are present in the registry, preventing priority starvation.
+- **Priority Preemption Bypass**: Running priority tasks ignore preemption requests, preventing them from pausing themselves if multiple priority tasks are queued.
+- **Preemption Visibility**: Preempted tasks temporarily transition to `"queued"` status with a `"Paused for Priority Task"` stage, ensuring they display in the dashboard queue.
 - **Centralized Storage Hygiene**: Implements a `tracked_files` registry within the thread context. Every transient file (uploaded media, standardized WAVs, HQ prepared files, and isolated stems) is registered upon creation. A mandatory `cleanup_files()` call in the request's `finally` block ensures a **100% deletion rate**, eliminating storage leaks even after fatal errors.
 
 ### 4. Real-time Observability Engine
@@ -99,7 +102,7 @@ The system features a thread-aware logging and telemetry engine designed for ind
 - **Hardened Diagnostic Logging**: Implements a persistent, idempotent logging architecture. The `whisper_pro.log` stream is guaranteed across application lifecycles via a hardened initialization sequence that survives global resets.
 - **Thread-Isolated Buffers**: Utilizing a custom `TaskLogFilter`, logs are redirected to a thread-local buffer (`TASK_LOGS`) in real-time. This allows the dashboard to display execution logs specific to an active task without inter-thread noise.
 - **Real-Time Synchronization**: The log download endpoint features a mandatory flush-to-disk sequence and zero-caching headers, ensuring diagnostics are always current.
-- **Industrial Quality Standard**: The entire ecosystem is maintained at a **10.0/10 Pylint score**, representing a zero-regression baseline for enterprise deployments.
+- **Industrial Quality Standard**: The entire ecosystem is maintained at a **10.0/10 Pylint score** and strict **>90% test coverage** across all modules, representing a zero-regression baseline for enterprise deployments.
 - **Incremental Dashboard Updates**: The monitoring UI utilizes an incremental DOM update pattern to maintain scroll positions in log buffers and live streams while polling the `/status` endpoint every 2 seconds.
 
 ---

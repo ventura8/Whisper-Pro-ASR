@@ -24,8 +24,15 @@ def test_log_completed_task(clean_history_cache):
     """Test logging a task to history."""
     task_data = {
         "task_id": "123",
+        "type": "Transcription",
         "video_duration": 120,
-        "start_time": time.time() - 10
+        "start_time": time.time() - 10,
+        "result": {
+            "segments": [
+                {"start": 0, "end": 10, "text": "Hello"},
+                {"start": 10, "end": 20, "text": "World"}
+            ]
+        }
     }
     history_manager.log_completed_task(task_data)
 
@@ -33,7 +40,22 @@ def test_log_completed_task(clean_history_cache):
     assert len(history) == 1
     assert history[0]["task_id"] == "123"
     assert history[0]["total_elapsed_sec"] >= 10
+    assert history[0]["segments_processed"] == 2
     assert "completed_at" in history[0]
+
+    # Test language detection type
+    ld_data = {
+        "task_id": "456",
+        "type": "Language Detection",
+        "start_time": time.time() - 2,
+        "result": {
+            "segments_processed": 5
+        }
+    }
+    history_manager.log_completed_task(ld_data)
+    history = history_manager.get_history()
+    assert history[0]["task_id"] == "456"
+    assert history[0]["segments_processed"] == 5
 
 
 def test_history_stats(clean_history_cache):

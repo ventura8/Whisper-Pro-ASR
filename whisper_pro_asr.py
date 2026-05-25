@@ -5,6 +5,7 @@ Main entry point for the Whisper Pro ASR Flask application.
 import importlib
 import logging
 import time
+import json
 from flask import Flask, request, jsonify
 from flasgger import Swagger  # pylint: disable=import-error
 
@@ -43,6 +44,15 @@ def _setup_request_lifecycle(flask_app):
         log_func = logger.debug if request.path in ["/status", "/"] else logger.info
         log_func(">>> %s %s [Source: %s]%s",
                  request.method, request.path, client_ip, body_log)
+
+        # Log full request parameters for ASR and LD calls
+        if request.path in ("/asr", "/detect-language",
+                            "/v1/audio/transcriptions", "/v1/audio/translations"):
+            params = {**request.args.to_dict(), **request.form.to_dict()}
+            file_keys = list(request.files.keys())
+            if file_keys:
+                params["_files"] = file_keys
+            logger.info("    Request JSON: %s", json.dumps(params, ensure_ascii=False))
 
     @flask_app.after_request
     def log_request_done(response):
@@ -86,7 +96,14 @@ def _setup_swagger(flask_app):
         'uiversion': 3,
         'openapi': '3.0.1'
     }
-    Swagger(flask_app, config=swagger_config)
+    template = {
+        "info": {
+            "title": "Whisper Pro ASR API",
+            "description": "Enterprise-grade Whisper Automatic Speech Recognition web service",
+            "version": config.VERSION,
+        }
+    }
+    Swagger(flask_app, config=swagger_config, template=template)
 
 
 def create_app():

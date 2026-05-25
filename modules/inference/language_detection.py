@@ -119,22 +119,26 @@ def _execute_batch_scan(audio_path, offsets, model_manager, scans, start_time=No
             isolated_path = _step_isolate_vocals(montage_path, model_manager, unit_id, perf)
 
             # Phase 3: Inference
-            res = _step_run_inference((model, model_manager), isolated_path, scans,
-                                      audio_path, perf)
+            res = _step_run_inference((model, model_manager), isolated_path, scans, perf)
 
-            return res
+            if res is not None:
+                return res
 
     except (ValueError, RuntimeError, IOError) as e:
         logger.error("[LD] Batch consensus scan failed: %s", e)
-        return model_manager.run_language_detection(audio_path)
     finally:
         _cleanup_batch_assets(montage_path, isolated_path)
+
+    return model_manager.run_language_detection(audio_path)
 
 
 def _step_create_montage(audio_path, offsets, _scans, perf):
     perf['start_montage'] = time.time()
     scheduler.update_task_progress(10, "Montage")
     path = _prepare_montage(audio_path, offsets)
+    # Also register with request-level tracker so outer cleanup catches it too
+    if path:
+        utils.track_file(path)
     perf['dur_montage'] = time.time() - perf['start_montage']
     return path
 
@@ -147,22 +151,39 @@ def _step_isolate_vocals(montage_path, model_manager, unit_id, perf):
     perf['start_iso'] = time.time()
     scheduler.update_task_progress(20, "Vocal Isolation")
     path = model_manager.run_vocal_isolation_direct(montage_path, unit_id, force=True)
+    # Register with request-level tracker as a second safety net
+    if path and path != montage_path:
+        utils.track_file(path)
     perf['dur_iso'] = time.time() - perf['start_iso']
     return path
 
 
-def _step_run_inference(model_context, isolated_path, scans, audio_path, perf):
+def _step_run_inference(model_context, isolated_path, scans, perf):
     model, model_manager = model_context
     perf['start_inf'] = time.time()
     scheduler.update_task_progress(60, "Inference")
     results = model_manager.run_batch_language_detection_direct(model, isolated_path, scans)
     perf['dur_inf'] = time.time() - perf['start_inf']
 
-    probs = [r['all_probabilities'] for r in results if r and 'all_probabilities' in r]
+    probs = []
+    for i, r in enumerate(results):
+        if r and 'all_probabilities' in r:
+            conf = r.get('confidence', 0.0)
+            if conf >= config.LD_MIN_CONFIDENCE:
+                probs.append(r['all_probabilities'])
+            else:
+                logger.warning(
+                    "[Engine] Skipping segment %d vote due to low confidence: %s (%.1f%% < %.1f%%)",
+                    i + 1,
+                    r.get('detected_language', 'unknown'),
+                    conf * 100,
+                    config.LD_MIN_CONFIDENCE * 100
+                )
     voting_details = _aggregate_language_probs(probs)
 
     if not voting_details:
-        return model_manager.run_language_detection(audio_path)
+        logger.info("[Engine] No high-confidence voting details found, falling back to full file detection.")
+        return None
 
     res = _format_detection_result(voting_details, scans)
     res['performance'] = {
@@ -220,11 +241,10 @@ def _prepare_montage(source_path, offsets):
 
 
 def _cleanup_batch_assets(montage_path, isolated_path):
-    """Ensure temporary montage files are purged."""
-    if montage_path and os.path.exists(montage_path):
-        os.remove(montage_path)
-    if isolated_path and isolated_path != montage_path and os.path.exists(isolated_path):
-        os.remove(isolated_path)
+    """Ensure temporary montage files are purged, tolerating errors."""
+    utils.secure_remove(montage_path)
+    if isolated_path and isolated_path != montage_path:
+        utils.secure_remove(isolated_path)
 
 
 def _generate_sampling_tasks(audio_path, duration, scans):

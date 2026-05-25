@@ -20,6 +20,9 @@ class SchedulerState:  # pylint: disable=too-few-public-methods
 
     # pylint: disable=too-many-instance-attributes
     def __init__(self):
+        if not config.HARDWARE_UNITS:
+            logger.warning("[Scheduler] No hardware units configured. Falling back to Host CPU.")
+            config.HARDWARE_UNITS.append({"type": "CPU", "id": "CPU", "name": "Host CPU"})
         self.hw_pool = queue.Queue()
         for unit_item in config.HARDWARE_UNITS:
             self.hw_pool.put(unit_item)
@@ -127,8 +130,23 @@ def wait_for_priority():
     do_pause = False
     with STATE.priority_lock:
         STATE.priority_requests += 1
-        # Only pause others if we are actually at capacity (no free units)
-        if STATE.active_sessions > STATE.accel_limit:
+
+        # Calculate has_active_standard within the lock to ensure synchronization
+        has_active_standard = False
+        with STATE.task_registry_lock:
+            if STATE.task_registry:
+                thread_id = threading.get_ident()
+                for tid, task in STATE.task_registry.items():
+                    if tid != thread_id and task.get('status') == 'active' and not task.get('is_priority', False):
+                        has_active_standard = True
+                        break
+            else:
+                # Fallback if registry is empty (e.g. during some unit tests)
+                # Since we already incremented priority_requests, both priority requests are counted.
+                has_active_standard = (STATE.active_sessions - STATE.priority_requests) > 0
+
+        # Only pause others if we are actually at capacity (no free units) and there is a running standard task to pause
+        if STATE.active_sessions > STATE.accel_limit and has_active_standard:
             do_pause = True
             logger.info("[Scheduler] Priority request: Pausing other tasks...")
             STATE.pause_requested.set()
@@ -169,17 +187,13 @@ def release_priority():
 @contextlib.contextmanager
 def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=None, is_priority=False):
     """Registers a task immediately for dashboard visibility."""
-    # 1. Hardware-aware enforcement for priority tasks
-    # Using 'with' satisfies Pylint R1732 (consider-using-with)
-    lock_ctx = STATE.priority_sequential_lock if is_priority else contextlib.nullcontext()
-
-    with lock_ctx:
-        thread_id = threading.get_ident()
+    thread_id = threading.get_ident()
     task_id = str(uuid.uuid4())
     display_name = filename or getattr(utils.THREAD_CONTEXT, "filename", "Unknown")
 
     # Determine initial status
-    initial_status = "initializing"
+    initial_status = "queued" if is_priority else "initializing"
+    initial_stage = "Waiting for Priority Slot" if is_priority else stage
 
     with STATE.task_registry_lock:
         if thread_id not in logging_setup.TASK_LOGS:
@@ -190,16 +204,34 @@ def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=N
             "start_time": time.time(),
             "status": initial_status,
             "progress": 0,
-            "stage": stage,
+            "stage": initial_stage,
             "type": task_type,
+            "is_priority": is_priority,
             "video_duration": getattr(utils.THREAD_CONTEXT, "total_duration", 0),
             "caller_info": getattr(utils.THREAD_CONTEXT, "caller_info", {}),
             "request_json": getattr(utils.THREAD_CONTEXT, "request_json", {}),
             "live_text": "",
             "logs": []
         }
+
+    # 1. Hardware-aware enforcement for priority tasks
+    # Using 'with' satisfies Pylint R1732 (consider-using-with)
+    lock_ctx = STATE.priority_sequential_lock if is_priority else contextlib.nullcontext()
+
     try:
-        yield
+        if is_priority:
+            increment_queued_session()
+        with lock_ctx:
+            if is_priority:
+                decrement_queued_session()
+                with STATE.task_registry_lock:
+                    if thread_id in STATE.task_registry:
+                        STATE.task_registry[thread_id]["status"] = "initializing"
+                        STATE.task_registry[thread_id]["stage"] = stage
+            try:
+                yield
+            finally:
+                pass
     finally:
         # Ensure priority is released if this task was a priority task
         # Since initialize_task_context calls wait_for_priority, we should always try to release

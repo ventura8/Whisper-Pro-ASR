@@ -1,6 +1,6 @@
 # Concurrency & Resource Orchestration
 
-This document provides a technical reference for the multithreading and resource management strategies implemented in **Whisper Pro ASR v1.0.5**.
+This document provides a technical reference for the multithreading and resource management strategies implemented in **Whisper Pro ASR v1.0.6**.
 
 ---
 
@@ -60,6 +60,13 @@ Whisper Pro implements a **Zero-Wait Detection** system that allows high-priorit
 4. **Cooperative Yield**: Active transcription threads check this event at segment boundaries. They release their claimed hardware units, confirm the pause (`STATE.pause_confirmed`), and wait.
 5. **Priority Execution**: The priority task claims the now-free unit and executes its batch montage pipeline.
 6. **Automated Resumption**: Once the priority task completes, the `release_priority()` function is called (integrated into the `early_task_registration` cleanup). This clears the `pause_requested` state and sets the `resume_event`. The transcription threads re-acquire their units and continue exactly where they left off.
+
+> [!NOTE]
+> **v1.0.6 Strict Priority Serialization & Yielding**:
+> - **Strict Priority Serialization**: The `STATE.priority_sequential_lock` is held for the entire context lifetime of `early_task_registration`. This ensures that concurrent priority requests are scheduled and executed sequentially, preventing race conditions that could lead to double-preemption and deadlocking standard tasks in a permanent paused state.
+> - **Standard Task Yielding**: Standard tasks yield resource acquisition and loop-sleep instead of blocking on the model lock semaphore whenever priority tasks are present in the registry, preventing priority starvation.
+> - **Priority Preemption Bypass**: Running priority tasks ignore preemption requests, preventing them from pausing themselves if multiple priority tasks are queued.
+> - **Preemption Visibility**: Preempted tasks temporarily transition to `"queued"` status with a `"Paused for Priority Task"` stage, ensuring they display in the dashboard queue.
 
 ---
 

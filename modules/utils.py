@@ -207,8 +207,9 @@ def _run_ffmpeg_standardization(source_path, output_path, duration, flags=None):
     with subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True
     ) as process:
-        _parse_ffmpeg_progress(process, duration)
+        final_speed = _parse_ffmpeg_progress(process, duration)
         process.wait()
+        logger.info("[Prep] FFmpeg finished | Speed: %s", final_speed)
 
         if process.returncode != 0:
             raise RuntimeError(f"FFmpeg failed with return code {process.returncode}")
@@ -217,10 +218,17 @@ def _run_ffmpeg_standardization(source_path, output_path, duration, flags=None):
 def _parse_ffmpeg_progress(process, duration):
     """Parse FFmpeg stdout for progress updates."""
     last_logged_pct = -10
+    final_speed = "N/A"
     while True:
         line = process.stdout.readline()
         if not line:
             break
+
+        if "speed=" in line:
+            try:
+                final_speed = line.split("=")[1].strip()
+            except (ValueError, IndexError):
+                pass
 
         if "out_time_ms=" in line and duration > 0:
             try:
@@ -233,6 +241,7 @@ def _parse_ffmpeg_progress(process, duration):
                     last_logged_pct = pct
             except (ValueError, IndexError):
                 pass
+    return final_speed
 
 
 def get_audio_duration(file_path):
