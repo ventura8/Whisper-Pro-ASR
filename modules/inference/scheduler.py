@@ -20,6 +20,9 @@ class SchedulerState:  # pylint: disable=too-few-public-methods
 
     # pylint: disable=too-many-instance-attributes
     def __init__(self):
+        if not config.HARDWARE_UNITS:
+            logger.warning("[Scheduler] No hardware units configured. Falling back to Host CPU.")
+            config.HARDWARE_UNITS.append({"type": "CPU", "id": "CPU", "name": "Host CPU"})
         self.hw_pool = queue.Queue()
         for unit_item in config.HARDWARE_UNITS:
             self.hw_pool.put(unit_item)
@@ -175,46 +178,46 @@ def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=N
 
     with lock_ctx:
         thread_id = threading.get_ident()
-    task_id = str(uuid.uuid4())
-    display_name = filename or getattr(utils.THREAD_CONTEXT, "filename", "Unknown")
+        task_id = str(uuid.uuid4())
+        display_name = filename or getattr(utils.THREAD_CONTEXT, "filename", "Unknown")
 
-    # Determine initial status
-    initial_status = "initializing"
-
-    with STATE.task_registry_lock:
-        if thread_id not in logging_setup.TASK_LOGS:
-            logging_setup.TASK_LOGS[thread_id] = []
-        STATE.task_registry[thread_id] = {
-            "task_id": task_id,
-            "filename": display_name,
-            "start_time": time.time(),
-            "status": initial_status,
-            "progress": 0,
-            "stage": stage,
-            "type": task_type,
-            "video_duration": getattr(utils.THREAD_CONTEXT, "total_duration", 0),
-            "caller_info": getattr(utils.THREAD_CONTEXT, "caller_info", {}),
-            "request_json": getattr(utils.THREAD_CONTEXT, "request_json", {}),
-            "live_text": "",
-            "logs": []
-        }
-    try:
-        yield
-    finally:
-        # Ensure priority is released if this task was a priority task
-        # Since initialize_task_context calls wait_for_priority, we should always try to release
-        release_priority()
+        # Determine initial status
+        initial_status = "initializing"
 
         with STATE.task_registry_lock:
-            if thread_id in STATE.task_registry:
-                task = STATE.task_registry[thread_id]
-                task['logs'] = logging_setup.TASK_LOGS.get(thread_id, [])
-                task['status'] = 'completed' if task.get('status') != 'failed' else 'failed'
-                task['progress'] = 100
-                history_manager.log_completed_task(task.copy())
-                del STATE.task_registry[thread_id]
-            if thread_id in logging_setup.TASK_LOGS:
-                del logging_setup.TASK_LOGS[thread_id]
+            if thread_id not in logging_setup.TASK_LOGS:
+                logging_setup.TASK_LOGS[thread_id] = []
+            STATE.task_registry[thread_id] = {
+                "task_id": task_id,
+                "filename": display_name,
+                "start_time": time.time(),
+                "status": initial_status,
+                "progress": 0,
+                "stage": stage,
+                "type": task_type,
+                "video_duration": getattr(utils.THREAD_CONTEXT, "total_duration", 0),
+                "caller_info": getattr(utils.THREAD_CONTEXT, "caller_info", {}),
+                "request_json": getattr(utils.THREAD_CONTEXT, "request_json", {}),
+                "live_text": "",
+                "logs": []
+            }
+        try:
+            yield
+        finally:
+            # Ensure priority is released if this task was a priority task
+            # Since initialize_task_context calls wait_for_priority, we should always try to release
+            release_priority()
+
+            with STATE.task_registry_lock:
+                if thread_id in STATE.task_registry:
+                    task = STATE.task_registry[thread_id]
+                    task['logs'] = logging_setup.TASK_LOGS.get(thread_id, [])
+                    task['status'] = 'completed' if task.get('status') != 'failed' else 'failed'
+                    task['progress'] = 100
+                    history_manager.log_completed_task(task.copy())
+                    del STATE.task_registry[thread_id]
+                if thread_id in logging_setup.TASK_LOGS:
+                    del logging_setup.TASK_LOGS[thread_id]
 
 
 def cleanup_failed_task():

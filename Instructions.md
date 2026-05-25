@@ -99,6 +99,16 @@ docker run --rm whisper-npu-test
 ```
 *Note: The test suite enforces 90%+ code coverage for all critical modules.*
 
+## Release Notes v1.0.6
+- **FIX**: Resolved a critical deadlock/livelock bug in the preemption scheduler where concurrent priority requests (like Language Detection) could race and permanently lock standard transcription tasks in a paused state.
+- **STAB**: Implemented graceful fallback to Host CPU execution if the hardware unit registry is empty on startup, preventing worker threads from blocking indefinitely.
+- **TEST**: Added exhaustive concurrency test suite covering 0, 1, 2, and 3 hardware unit configurations to prevent scheduling regressions.
+
+## Release Notes v1.0.5
+- **FEAT**: Implemented request-local file tracking registry for 100% reclamation of temporary files (uploaded media, standardized WAVs, isolated stems, and HQ prep files) on error/success.
+- **STAB**: Hardened persistent diagnostic logging to survive container updates and app restarts.
+- **STAB**: Added real-time log flushing and zero-caching headers for the log download endpoint.
+
 ## Release Notes v1.0.4
 - **FIX**: Resolved "nn" (Nynorsk) language hallucination on silent or non-speech audio segments.
 - **FEAT**: Implemented **High-Performance Batch Montage**. Consolidated all sampling targets into a single high-density montage with **30s Grid Padding**, enabling single-pass UVR isolation and reducing identification latency by up to 80%.

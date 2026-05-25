@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 HARDWARE_UNITS = []  # Global registry for accelerator orchestration
 
 # --- [RESOURCE POOL LIMITS] ---
