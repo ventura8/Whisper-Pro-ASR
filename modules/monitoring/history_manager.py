@@ -15,14 +15,17 @@ from modules import config
 logger = logging.getLogger(__name__)
 
 HISTORY_FILE = os.path.join(config.STATE_DIR, "task_history.json")
+ANALYTICS_FILE = os.path.join(config.STATE_DIR, "analytics_stats.json")
 MAX_HISTORY_DISK = 1000  # Persistent storage limit
 MAX_HISTORY_RAM = 20    # RAM cache limit (match disk limit for accurate stats)
 
 # --- [DEFERRED PERSISTENCE ENGINE] ---
 _HISTORY_CACHE: List[Dict[str, Any]] = []
+_ANALYTICS_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
 _UNSAVED_COUNT = 0
 _LAST_SYNC = time.time()
 _STATS_CACHE: Optional[Dict[str, Any]] = None
+_STATS_CACHE_DATE: Optional[str] = None
 
 
 def _ensure_loaded() -> None:
@@ -39,6 +42,55 @@ def _ensure_loaded() -> None:
             except (IOError, json.JSONDecodeError) as e:
                 logger.warning("[History] Failed to load history file: %s", e)
                 _HISTORY_CACHE = []
+
+
+def _ensure_analytics_loaded() -> None:
+    """
+    Lazy load analytics stats from SSD into RAM cache.
+    """
+    global _ANALYTICS_CACHE  # pylint: disable=global-statement
+    if _ANALYTICS_CACHE is None:
+        if os.path.exists(ANALYTICS_FILE):
+            try:
+                with open(ANALYTICS_FILE, 'r', encoding='utf-8') as f:
+                    _ANALYTICS_CACHE = json.load(f)
+            except (IOError, json.JSONDecodeError) as e:
+                logger.warning("[Analytics] Failed to load analytics file: %s", e)
+                _ANALYTICS_CACHE = {}
+        else:
+            _ANALYTICS_CACHE = {}
+
+
+def _update_analytics(task_data: Dict[str, Any]) -> None:
+    """
+    Updates the persistent analytics stats with a completed task's duration.
+    """
+    try:
+        _ensure_analytics_loaded()
+        dur = float(task_data.get("video_duration", 0.0))
+
+        # Get completion date or current date
+        c_at = task_data.get("completed_at", "")
+        if c_at:
+            # Format: 2026-05-26 11:43:36 -> date: 2026-05-26
+            date_str = c_at.split(" ")[0]
+        else:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        if date_str not in _ANALYTICS_CACHE:
+            _ANALYTICS_CACHE[date_str] = {"count": 0, "duration": 0.0}
+
+        _ANALYTICS_CACHE[date_str]["count"] += 1
+        _ANALYTICS_CACHE[date_str]["duration"] += dur
+
+        # Save to disk atomically
+        os.makedirs(config.STATE_DIR, exist_ok=True)
+        tmp_file = f"{ANALYTICS_FILE}.tmp"
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(_ANALYTICS_CACHE, f, indent=2)
+        os.replace(tmp_file, ANALYTICS_FILE)
+    except (IOError, OSError, ValueError, TypeError) as e:
+        logger.error("[Analytics] Failed to update analytics: %s", e)
 
 
 def log_completed_task(task_data: Dict[str, Any]) -> None:
@@ -111,6 +163,9 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
         # Immediate persistence: Save to SSD after every task completion as requested
         flush_history()
 
+        # Update analytics stats
+        _update_analytics(task_data)
+
     except (KeyError, ValueError, TypeError) as e:
         logger.error("[History] Failed to log task history: %s", e)
 
@@ -179,11 +234,16 @@ def get_history_stats() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     Returns:
         Tuple of (history_list, stats_dict).
     """
-    global _STATS_CACHE  # pylint: disable=global-statement
+    global _STATS_CACHE, _STATS_CACHE_DATE  # pylint: disable=global-statement
     history = get_history()
 
-    if _STATS_CACHE:
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+
+    if _STATS_CACHE and _STATS_CACHE_DATE == today_str:
         return history, _STATS_CACHE
+
+    _ensure_analytics_loaded()
 
     stats = {
         "all_time": 0.0,
@@ -194,37 +254,50 @@ def get_history_stats() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         "count_today": 0
     }
 
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
     month_str = now.strftime("%Y-%m")
     year_str = now.strftime("%Y")
 
-    for item in history:
-        dur = item.get("video_duration", 0)
-        c_at = item.get("completed_at", "")  # Format: 2026-04-27 20:31:17
+    if _ANALYTICS_CACHE:
+        for date_str, daily_data in _ANALYTICS_CACHE.items():
+            dur = daily_data.get("duration", 0.0)
+            cnt = daily_data.get("count", 0)
 
-        stats["all_time"] += dur
-        stats["count_all_time"] += 1
+            stats["all_time"] += dur
+            stats["count_all_time"] += cnt
 
-        if c_at.startswith(today_str):
-            stats["today"] += dur
-            stats["count_today"] += 1
-        if c_at.startswith(month_str):
-            stats["this_month"] += dur
-        if c_at.startswith(year_str):
-            stats["this_year"] += dur
+            if date_str == today_str:
+                stats["today"] += dur
+                stats["count_today"] += cnt
+            if date_str.startswith(month_str):
+                stats["this_month"] += dur
+            if date_str.startswith(year_str):
+                stats["this_year"] += dur
 
     _STATS_CACHE = stats
+    _STATS_CACHE_DATE = today_str
     return history, stats
+
+
+def get_analytics_data() -> Dict[str, Any]:
+    """
+    Retrieves the detailed daily analytics and cumulative summary stats.
+    """
+    _ensure_analytics_loaded()
+    _, stats = get_history_stats()
+    return {
+        "cumulative": stats,
+        "daily": _ANALYTICS_CACHE or {}
+    }
 
 
 def clear_history() -> None:
     """
     Purges all history from RAM cache and SSD.
     """
-    global _HISTORY_CACHE, _STATS_CACHE, _UNSAVED_COUNT  # pylint: disable=global-statement
+    global _HISTORY_CACHE, _STATS_CACHE, _STATS_CACHE_DATE, _UNSAVED_COUNT  # pylint: disable=global-statement
     _HISTORY_CACHE = []
     _STATS_CACHE = None
+    _STATS_CACHE_DATE = None
     _UNSAVED_COUNT = 0
     if os.path.exists(HISTORY_FILE):
         try:

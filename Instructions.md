@@ -15,22 +15,27 @@
 
 | Document | Description |
 |----------|-------------|
-| [docs/SETUP.md](docs/SETUP.md) | Installation & configuration |
-| [docs/API.md](docs/API.md) | API endpoint reference |
-| [docs/TUNING.md](docs/TUNING.md) | Performance optimization guide |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical module documentation |
+| [docs/SETUP.md](docs/SETUP.md) | Installation & configuration (includes diarization setup) |
+| [docs/API.md](docs/API.md) | API endpoint reference (diarization, ASR params, subtitle layout) |
+| [docs/TUNING.md](docs/TUNING.md) | Performance optimization guide (idle timeout, initial prompt) |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical module documentation (pipelines, caching, lifecycle) |
 
 ## Key Features
 - **Industrial Hardware Acceleration**: Native support for **Intel NPU**, **Intel iGPU**, and **NVIDIA CUDA**.
+- **Speaker Diarization**: Identify who said what using WhisperX alignment and PyAnnote speaker segmentation. Requires `HF_TOKEN` for PyAnnote model access.
 - **Hardware Compatibility Matrix**:
     | Engine | CPU | NVIDIA (CUDA) | Intel GPU | Intel NPU |
     | :--- | :---: | :---: | :---: | :---: |
     | **Vocal Separation** | ✅ | ✅ | ✅ | ✅ |
     | **Whisper ASR** | ✅ | ✅ | ❌ (CPU Fallback) | ❌ (CPU Fallback) |
+    | **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
 - **Hybrid Device Support**: Simultaneously utilize multiple accelerators (e.g., Intel for isolation and NVIDIA for transcription).
 - **Advanced Preprocessing Stack**: Integrated **UVR/MDX-NET** (Vocal Isolation) with hardware acceleration and dedicated thread pooling (`ASR_PREPROCESS_THREADS`).
 - **OpenAI Compatible**: Native support for `/v1/audio/transcriptions` and `/v1/audio/translations` OpenAI API format.
 - **Swagger Documentation**: Interactive API testing available at `/docs`.
+- **Customizable ASR Parameters**: `initial_prompt`, `vad_filter`, and `word_timestamps` can be set per-request or via environment variables.
+- **Subtitle Layout Control**: `max_line_width` and `max_line_count` for SRT/VTT formatting.
+- **Smart Model Lifecycle**: Configurable `MODEL_IDLE_TIMEOUT` keeps models warm in memory for rapid response, with background idle monitoring.
 - **Probabilistic Language ID**: Robust identification using **Strategic Uniform Sampling** and **Weighted Voting**. The system automatically samples up to 5 non-overlapping zones across the media and aggregates high-confidence evidence to eliminate false positives.
 
 - **Sequential Priority Queue**: Multiple high-priority requests (Language Detection) are automatically queued and processed one-by-one, ensuring hardware stability.
@@ -97,7 +102,12 @@ docker build -t whisper-npu-test -f Dockerfile.test .
 # Run the suite (Pylint + Pytest + Coverage)
 docker run --rm whisper-npu-test
 ```
-*Note: The test suite enforces 90%+ code coverage for all critical modules.*
+## Release Notes v1.1.0
+- **FEAT**: Integrated automatic Speaker Diarization using the WhisperX alignment, PyAnnote diarization, and speaker assignment pipeline, including per-device pools caching.
+- **FEAT**: Added custom subtitle formatting controls (`max_line_width`, `max_line_count`) across SRT and VTT formatters.
+- **FEAT**: Added a background daemon idle model timeout monitor (`MODEL_IDLE_TIMEOUT`) to automatically offload warm models after inactivity.
+- **FEAT**: Extended API support with standard OpenAI-compatible and query parameters (`initial_prompt`, `vad_filter`, `word_timestamps`, `diarize`, `min_speakers`, `max_speakers`, `hf_token`, `max_line_width`, `max_line_count`).
+- **TEST**: Verified coverage to 94.77% (exceeding 90% target) with 323/323 unit and integration tests passing.
 
 ## Release Notes v1.0.6
 - **FIX**: Resolved a critical deadlock/livelock bug in the preemption scheduler where concurrent priority requests (like Language Detection) could race and permanently lock standard transcription tasks in a paused state.

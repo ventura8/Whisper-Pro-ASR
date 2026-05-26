@@ -46,10 +46,40 @@ logger = logging.getLogger(__name__)
 
 _MODEL_POOL = {}
 _PREPROCESSOR_POOL = {}
+_DIARIZE_POOL = {}
+_ALIGN_POOL = {}
+
+_LIFECYCLE_STATE = {
+    "last_activity": time.time(),
+    "monitor_started": False
+}
+_MONITOR_LOCK = threading.Lock()
+
+
+def _monitor_idleness():
+    while True:
+        time.sleep(5)
+        # Check if active sessions are zero and idle timeout has elapsed
+        if scheduler.STATE.active_sessions == 0:
+            elapsed = time.time() - _LIFECYCLE_STATE["last_activity"]
+            if elapsed > config.MODEL_IDLE_TIMEOUT:
+                logger.info("[Engine] Models idle for %.1fs. Purging from memory...", elapsed)
+                unload_models()
+
+
+def _ensure_monitor_thread():
+    if config.MODEL_IDLE_TIMEOUT <= 0:
+        return
+    with _MONITOR_LOCK:
+        if not _LIFECYCLE_STATE["monitor_started"]:
+            t = threading.Thread(target=_monitor_idleness, daemon=True, name="ModelIdleMonitor")
+            t.start()
+            _LIFECYCLE_STATE["monitor_started"] = True
 
 
 def load_model():
     """Initializes hardware resource mapping without eager RAM loading."""
+    _ensure_monitor_thread()
     for unit in config.HARDWARE_UNITS:
         # Initialize preprocessor managers (they are lazy and won't load models yet)
         _PREPROCESSOR_POOL[unit['id']] = preprocessing.PreprocessingManager(unit)
@@ -105,8 +135,14 @@ def _init_unit(unit):
         logger.error("[Engine] Failed to load %s (Unexpected): %s", unit['id'], e)
 
 
-def run_transcription(audio_path, language, task, **_kwargs):
+# pylint: disable=too-many-locals,too-many-positional-arguments
+def run_transcription(
+    audio_path, language, task, diarize=False, min_speakers=None,
+    max_speakers=None, hf_token=None, initial_prompt=None,
+    vad_filter=True, word_timestamps=False, **_kwargs
+):
     """Executes ASR inference with hardware locking."""
+    _LIFECYCLE_STATE["last_activity"] = time.time()
     perf = {'dur_iso': 0}
     with model_lock_ctx() as (model, unit_id):
         processed_path = audio_path
@@ -126,32 +162,154 @@ def run_transcription(audio_path, language, task, **_kwargs):
                 language=language,
                 task=task,
                 beam_size=config.DEFAULT_BEAM_SIZE,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS}
+                initial_prompt=initial_prompt,
+                vad_filter=vad_filter,
+                vad_parameters={"min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS},
+                word_timestamps=word_timestamps
             )
 
             # Consumption of generator with progress updates
-            results = []
-            for segment in segments:
-                _check_preemption()
-                seg_text = segment.text.strip()
-                results.append({
-                    "start": round(segment.start, 2),
-                    "end": round(segment.end, 2),
-                    "text": seg_text
-                })
+            if diarize:
+                try:
+                    # 1. Consume generator to collect all raw segments first
+                    raw_segments = []
+                    for segment in segments:
+                        _check_preemption()
+                        raw_segments.append({
+                            "start": segment.start,
+                            "end": segment.end,
+                            "text": segment.text
+                        })
 
-                # Generate live SRT content (includes timestamps and newlines)
-                live_srt = utils.generate_srt({"segments": results})
-                logger.debug("[Live] Updating SRT for %d segments", len(results))
-                scheduler.update_task_metadata(live_text=live_srt)
+                        # Live updates during transcription
+                        live_results = [{
+                            "start": round(s["start"], 2),
+                            "end": round(s["end"], 2),
+                            "text": s["text"].strip()
+                        } for s in raw_segments]
+                        live_srt = utils.generate_srt({"segments": live_results})
+                        scheduler.update_task_metadata(live_text=live_srt)
 
-                if info.duration > 0:
-                    progress = min(95, int((segment.end / info.duration) * 100))
-                    time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
-                    verb = "Translating" if task == "translate" else "Transcribing"
-                    scheduler.update_task_progress(
-                        progress, f"{verb} (Seg {len(results)} | {time_ratio})")
+                        if info.duration > 0:
+                            progress = min(80, int((segment.end / info.duration) * 80))
+                            time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
+                            verb = "Translating" if task == "translate" else "Transcribing"
+                            scheduler.update_task_progress(
+                                progress, f"{verb} (Seg {len(raw_segments)} | {time_ratio})")
+
+                    if raw_segments:
+                        # Find hardware unit to resolve device
+                        unit = next((u for u in config.HARDWARE_UNITS if u['id'] == unit_id), None)
+                        unit_type = unit['type'] if unit else 'CPU'
+                        whisperx_device = 'cuda' if unit_type == 'CUDA' else 'cpu'
+
+                        # Lazy import whisperx
+                        import whisperx  # pylint: disable=import-outside-toplevel,import-error
+
+                        # 2. Get/load alignment model
+                        scheduler.update_task_progress(83, "Loading Alignment Model")
+                        lang_code = info.language or language or "en"
+                        align_key = (unit_id, lang_code)
+                        if align_key in _ALIGN_POOL:
+                            model_a, metadata = _ALIGN_POOL[align_key]
+                        else:
+                            logger.info("[Diarization] Loading alignment model for language: %s on %s", lang_code, whisperx_device)
+                            model_a, metadata = whisperx.load_align_model(
+                                language_code=lang_code,
+                                device=whisperx_device
+                            )
+                            _ALIGN_POOL[align_key] = (model_a, metadata)
+
+                        # 3. Align segments
+                        scheduler.update_task_progress(85, "Aligning Transcription")
+                        logger.info("[Diarization] Aligning segments...")
+                        audio = whisperx.load_audio(processed_path)
+                        alignment_result = whisperx.align(
+                            raw_segments,
+                            model_a,
+                            metadata,
+                            audio,
+                            device=whisperx_device,
+                            return_char_alignments=False
+                        )
+
+                        # 4. Diarization pipeline
+                        token = hf_token or config.HF_TOKEN
+                        if not token:
+                            raise ValueError(
+                                "HF_TOKEN is required for speaker diarization. "
+                                "Please set HF_TOKEN environment variable or pass hf_token parameter."
+                            )
+
+                        if unit_id in _DIARIZE_POOL:
+                            diarize_pipeline = _DIARIZE_POOL[unit_id]
+                        else:
+                            scheduler.update_task_progress(90, "Loading Diarization Model")
+                            logger.info("[Diarization] Loading diarization pipeline on %s...", whisperx_device)
+                            diarize_pipeline = whisperx.diarization.DiarizationPipeline(  # pylint: disable=no-member
+                                use_auth_token=token,
+                                device=whisperx_device
+                            )
+                            _DIARIZE_POOL[unit_id] = diarize_pipeline
+
+                        # Run diarization
+                        scheduler.update_task_progress(93, "Diarizing Speakers")
+                        logger.info("[Diarization] Running speaker diarization...")
+                        diarize_segments = diarize_pipeline(
+                            audio,
+                            min_speakers=min_speakers,
+                            max_speakers=max_speakers
+                        )
+
+                        # 5. Assign speakers
+                        scheduler.update_task_progress(97, "Assigning Speakers")
+                        logger.info("[Diarization] Assigning speakers to segments...")
+                        alignment_result = whisperx.assign_word_speakers(diarize_segments, alignment_result)
+
+                        # 6. Format back to results
+                        results = []
+                        for seg in alignment_result["segments"]:
+                            seg_text = seg.get("text", "").strip()
+                            results.append({
+                                "start": round(seg.get("start", 0.0), 2),
+                                "end": round(seg.get("end", 0.0), 2),
+                                "text": seg_text,
+                                "speaker": seg.get("speaker")
+                            })
+                    else:
+                        results = []
+                except Exception as diarize_err:  # pylint: disable=broad-exception-caught
+                    logger.error("[Diarization] Diarization failed: %s. Falling back to non-diarized output.", diarize_err)
+                    # Fallback to formatting raw_segments without diarization
+                    results = []
+                    for s in raw_segments:
+                        results.append({
+                            "start": round(s["start"], 2),
+                            "end": round(s["end"], 2),
+                            "text": s["text"].strip()
+                        })
+            else:
+                results = []
+                for segment in segments:
+                    _check_preemption()
+                    seg_text = segment.text.strip()
+                    results.append({
+                        "start": round(segment.start, 2),
+                        "end": round(segment.end, 2),
+                        "text": seg_text
+                    })
+
+                    # Generate live SRT content (includes timestamps and newlines)
+                    live_srt = utils.generate_srt({"segments": results})
+                    logger.debug("[Live] Updating SRT for %d segments", len(results))
+                    scheduler.update_task_metadata(live_text=live_srt)
+
+                    if info.duration > 0:
+                        progress = min(95, int((segment.end / info.duration) * 100))
+                        time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
+                        verb = "Translating" if task == "translate" else "Transcribing"
+                        scheduler.update_task_progress(
+                            progress, f"{verb} (Seg {len(results)} | {time_ratio})")
 
             perf['dur_inf'] = time.time() - perf['start_inf']
 
@@ -244,7 +402,7 @@ def run_vocal_isolation_direct(audio_path, unit_id, force=False):
     if not preprocessor:
         return audio_path
 
-    result_path = preprocessor.preprocess_audio(audio_path, force=force)
+    result_path = preprocessor.preprocess_audio(audio_path, force=force, yield_cb=_check_preemption)
     if preprocessor.separator:
         scheduler.STATE.uvr_loaded = True
 
@@ -519,6 +677,18 @@ def unload_models():
         del pm
     _PREPROCESSOR_POOL.clear()
 
+    # 3. Clear WhisperX Diarize/Align models
+    for unit_id in list(_DIARIZE_POOL.keys()):
+        model_d = _DIARIZE_POOL.pop(unit_id)
+        del model_d
+    _DIARIZE_POOL.clear()
+
+    for key in list(_ALIGN_POOL.keys()):
+        model_a, metadata = _ALIGN_POOL.pop(key)
+        del model_a
+        del metadata
+    _ALIGN_POOL.clear()
+
     # 3. Aggressive GC and cache flushing
     gc.collect()
     gc.collect()  # Second pass for circular references
@@ -553,17 +723,23 @@ def unload_models():
 
 def increment_active_session():
     """Tracks active session count."""
+    _LIFECYCLE_STATE["last_activity"] = time.time()
     scheduler.increment_active_session()
+    _ensure_monitor_thread()
 
 
 def decrement_active_session():
     """Tracks active session count and unloads if idle."""
+    _LIFECYCLE_STATE["last_activity"] = time.time()
     scheduler.decrement_active_session()
     current_active = scheduler.STATE.active_sessions
     logger.debug("[Engine] Session decrement. Active sessions remaining: %d", current_active)
 
-    if config.AGGRESSIVE_OFFLOAD and current_active == 0:
-        unload_models()
+    if current_active == 0:
+        if config.MODEL_IDLE_TIMEOUT > 0:
+            _ensure_monitor_thread()
+        elif config.AGGRESSIVE_OFFLOAD:
+            unload_models()
 
 
 def wait_for_priority():

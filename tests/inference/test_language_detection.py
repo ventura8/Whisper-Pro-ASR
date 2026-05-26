@@ -201,3 +201,34 @@ def test_ld_low_confidence_filtering():
                 (mock.MagicMock(), mock_mm), "isolated.wav", 2, perf
             )
             mock_agg.assert_called_once_with([{"fr": 0.8, "en": 0.2}])
+
+
+def test_prepare_montage_success():
+    """Test successful montage generation."""
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.MagicMock(returncode=0)
+        with mock.patch("modules.inference.language_detection.utils.track_file", side_effect=lambda x: x):
+            res = language_detection._prepare_montage("dummy.wav", [10, 50])
+            assert res is not None
+            mock_run.assert_called_once()
+
+
+def test_prepare_montage_failure():
+    """Test montage generation failure with exception."""
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.MagicMock(returncode=1, stderr="FFmpeg error")
+        with pytest.raises(RuntimeError):
+            language_detection._prepare_montage("dummy.wav", [10, 50])
+
+
+def test_find_best_offset_exceeds_duration():
+    """Test finding best offset when offset + 30 exceeds total duration."""
+    mock_sf = mock.MagicMock()
+    mock_sf.info.return_value = mock.MagicMock(samplerate=16000)
+    mock_sf.read.return_value = (np.ones(16000) * 0.1, 16000)
+
+    with mock.patch("modules.inference.language_detection._get_sf", return_value=mock_sf):
+        # base_offset = 90, total_duration = 100. offset + 30 = 120 > 100
+        # Expected offset = max(0, 100 - 30) = 70
+        res = language_detection._find_best_offset_in_zone("test.wav", 90, 20, 100)
+        assert res == 70

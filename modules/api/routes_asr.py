@@ -64,6 +64,45 @@ def transcribe():
         type: integer
         default: 1
         description: Number of parallel segments for inference.
+      - name: diarize
+        in: formData
+        type: boolean
+        default: false
+        description: Whether to perform speaker diarization.
+      - name: min_speakers
+        in: formData
+        type: integer
+        description: Minimum number of speakers.
+      - name: max_speakers
+        in: formData
+        type: integer
+        description: Maximum number of speakers.
+      - name: hf_token
+        in: formData
+        type: string
+        description: Hugging Face authentication token (overrides env).
+      - name: initial_prompt
+        in: formData
+        type: string
+        description: Text to guide transcription spelling/style.
+      - name: vad_filter
+        in: formData
+        type: boolean
+        default: true
+        description: Whether to enable voice activity detection.
+      - name: word_timestamps
+        in: formData
+        type: boolean
+        default: false
+        description: Generate word-level timestamps.
+      - name: max_line_width
+        in: formData
+        type: integer
+        description: Maximum characters per subtitle line.
+      - name: max_line_count
+        in: formData
+        type: integer
+        description: Maximum lines per subtitle block.
     responses:
       200:
         description: Transcription successfully completed.
@@ -117,16 +156,34 @@ def _perform_transcription_task(params, task_type):
             return None, None, err
 
         model_manager.update_task_progress(None, f"{task_type} Initializing")
-        lang = _detect_lang_if_needed(params.get('language'), source_path)
 
+        # --- Stage 1: FFmpeg normalization ---
         clean_wav = None
         if not config.ENABLE_VOCAL_SEPARATION:
             clean_wav, err = routes_utils.get_clean_wav_or_error(source_path)
             if err:
                 return None, source_path, err
 
+        # --- Stage 2: Language detection on clean audio (post-FFmpeg, pre-vocal separation) ---
+        # Use the clean WAV when available for the most accurate fast detection.
+        # Falls back to source_path when vocal separation is enabled (ffmpeg runs inside UVR).
+        detection_target = clean_wav if clean_wav else source_path
+        lang = _detect_lang_if_needed(params.get('language'), detection_target)
+
+        # --- Stage 3: run_transcription (vocal separation → inference) ---
         target_audio = clean_wav if clean_wav else source_path
-        result = model_manager.run_transcription(target_audio, lang, params['task'])
+        result = model_manager.run_transcription(
+            target_audio,
+            lang,
+            params['task'],
+            diarize=params.get('diarize', False),
+            min_speakers=params.get('min_speakers'),
+            max_speakers=params.get('max_speakers'),
+            hf_token=params.get('hf_token'),
+            initial_prompt=params.get('initial_prompt'),
+            vad_filter=params.get('vad_filter', True),
+            word_timestamps=params.get('word_timestamps', False)
+        )
 
         if result:
             model_manager.update_task_metadata(result=result)
@@ -157,13 +214,60 @@ def _get_request_params():
         params['batch_size'] = int(bs) if bs else config.DEFAULT_BATCH_SIZE
     except (ValueError, TypeError):
         params['batch_size'] = config.DEFAULT_BATCH_SIZE
+
+    # Speaker Diarization parameters
+    diarize_val = request.args.get('diarize') or request.form.get('diarize') or 'false'
+    params['diarize'] = str(diarize_val).lower() == 'true'
+
+    try:
+        min_spk = request.args.get('min_speakers') or request.form.get('min_speakers')
+        params['min_speakers'] = int(min_spk) if min_spk else None
+    except (ValueError, TypeError):
+        params['min_speakers'] = None
+
+    try:
+        max_spk = request.args.get('max_speakers') or request.form.get('max_speakers')
+        params['max_speakers'] = int(max_spk) if max_spk else None
+    except (ValueError, TypeError):
+        params['max_speakers'] = None
+
+    params['hf_token'] = request.args.get('hf_token') or request.form.get('hf_token') or request.headers.get('X-HF-Token')
+
+    # New ASR parameters
+    params['initial_prompt'] = request.args.get('initial_prompt') or request.form.get('initial_prompt')
+
+    vad_val = request.args.get('vad_filter') or request.form.get('vad_filter') or 'true'
+    params['vad_filter'] = str(vad_val).lower() == 'true'
+
+    word_ts_val = request.args.get('word_timestamps') or request.form.get('word_timestamps') or 'false'
+    params['word_timestamps'] = str(word_ts_val).lower() == 'true'
+
+    try:
+        mlw = request.args.get('max_line_width') or request.form.get('max_line_width')
+        params['max_line_width'] = int(mlw) if mlw else None
+    except (ValueError, TypeError):
+        params['max_line_width'] = None
+
+    try:
+        mlc = request.args.get('max_line_count') or request.form.get('max_line_count')
+        params['max_line_count'] = int(mlc) if mlc else None
+    except (ValueError, TypeError):
+        params['max_line_count'] = None
+
     return params
 
 
 def _detect_lang_if_needed(lang, path):
-    """Run detection if language is unknown."""
+    """Run voting language detection on the provided audio path if no language was specified.
+
+    This is called on the post-FFmpeg normalised WAV (when available) so that
+    the detector operates on clean, standardised audio rather than the raw
+    source upload, improving identification accuracy before vocal separation begins.
+    """
     if not lang:
         model_manager.update_task_progress(0, "Language Detection")
+        logger.info("[LD] Running language detection on post-FFmpeg audio: %s",
+                    os.path.basename(path))
         res = language_detection.run_voting_detection(path, model_manager)
         loggable = {k: v for k, v in res.items() if k != 'logs'}
         logger.info("LD Response JSON: %s", json.dumps(loggable, ensure_ascii=False, indent=None))
@@ -189,11 +293,21 @@ def _build_response(result, params, stats, path, start):
 
     content = ""
     if fmt == 'vtt':
-        content = utils.generate_vtt(result)
+        content = utils.generate_vtt(
+            result,
+            max_line_width=params.get('max_line_width'),
+            max_line_count=params.get('max_line_count')
+        )
     elif fmt == 'txt':
         content = utils.generate_txt(result)
+    elif fmt == 'tsv':
+        content = utils.generate_tsv(result)
     else:
-        content = utils.generate_srt(result)
+        content = utils.generate_srt(
+            result,
+            max_line_width=params.get('max_line_width'),
+            max_line_count=params.get('max_line_count')
+        )
 
     resp = Response(content, mimetype='text/plain')
     fname = os.path.splitext(os.path.basename(path))[0]

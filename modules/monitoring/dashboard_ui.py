@@ -1,4 +1,4 @@
-# pylint: disable=too-many-lines
+# pylint: disable=too-many-lines,duplicate-code
 """
 Dashboard UI Components
 """
@@ -462,6 +462,12 @@ def get_dashboard_html():
                     <div class="card">
                         <div class="section-title"><span class="material-icons-sharp">bar_chart</span> Output Analytics</div>
                         <div class="stat-grid-inner" id="analytics-grid"></div>
+                        <div style="margin-top: 24px; display: flex; justify-content: flex-end;">
+                            <a href="/analytics" class="btn-swagger" id="btn-full-analytics">
+                                <span class="material-icons-sharp" style="font-size: 18px">query_stats</span>
+                                View Full Analytics Report
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -837,15 +843,21 @@ def get_dashboard_html():
                 }
 
                 const resText = (result.error || finalSrt || isAsr) ? `
-                    <div style="display:flex; align-items:center; justify-content:space-between; margin-top:12px;">
-                        <details ${expandedElements.has(`${id}_trans`) ? 'open' : ''} style="flex:1;" ontoggle="handleToggle('${id}_trans', this.open)">
-                            <summary><span class="material-icons-sharp">subtitles</span> View Transcription Result</summary>
-                            ${contentHtml}
+                    <div style="margin-top:12px; width:100%;">
+                        <details ${expandedElements.has(`${id}_trans`) ? 'open' : ''} style="width:100%;" ontoggle="handleToggle('${id}_trans', this.open)">
+                            <summary style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+                                <span style="display:flex; align-items:center; gap:4px;">
+                                    <span class="material-icons-sharp">subtitles</span> View Transcription Result
+                                </span>
+                                ${finalSrt ? `
+                                <button class="btn-time" style="display:flex; align-items:center; gap:4px; padding:6px 12px;" onclick="event.stopPropagation(); downloadSrtById('${id}')">
+                                    <span class="material-icons-sharp" style="font-size:16px">download</span> SRT
+                                </button>` : ''}
+                            </summary>
+                            <div style="margin-top:8px; width:100%;">
+                                ${contentHtml}
+                            </div>
                         </details>
-                        ${finalSrt ? `
-                        <button class="btn-time" style="margin-left:8px; display:flex; align-items:center; gap:4px; padding:6px 12px;" onclick="downloadSrtById('${id}')">
-                            <span class="material-icons-sharp" style="font-size:16px">download</span> SRT
-                        </button>` : ''}
                     </div>` : '';
 
                 const langCode = result.language || result.detected_language;

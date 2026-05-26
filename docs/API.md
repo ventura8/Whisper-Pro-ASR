@@ -8,6 +8,7 @@ Health check. Returns JSON with service identity.
 ### `GET /status`
 Returns hardware pool status, active sessions, and version.
 
+### `POST /detect-language`
 Detect audio language with **High Priority**. All media inputs are automatically standardized to **16kHz Mono/Stereo WAV** before entering the voting consensus, ensuring maximum compatibility across Intel iGPU/NPU and NVIDIA backends.
 
 **Parameters**: `audio_file` (upload) OR `local_path` (server path)
@@ -27,7 +28,7 @@ curl -X POST -F "audio_file=@movie.mp4" http://localhost:9000/detect-language
 ```
 
 ### `POST /asr`
-Transcribe audio to SRT/JSON. All incoming media is automatically standardized to **16kHz Mono WAV** via an optimized FFmpeg pipeline before inference.
+Transcribe audio to SRT/VTT/JSON with optional speaker diarization. All incoming media is automatically standardized to **16kHz Mono WAV** via an optimized FFmpeg pipeline before inference.
 
 **Parameters**:
 | Param | Type | Default | Description |
@@ -36,8 +37,29 @@ Transcribe audio to SRT/JSON. All incoming media is automatically standardized t
 | `local_path` | string | - | Server file path (faster) |
 | `task` | string | `transcribe` | `transcribe` or `translate` |
 | `language` | string | auto | Source language (`en`, `es`, etc.) |
-| `output` | string | `srt` | `srt` or `json` |
-| `batch_size` | int | config | Override batch size |
+| `output` | string | `srt` | `srt`, `vtt`, `txt`, `tsv`, or `json` |
+| `initial_prompt` | string | config | Context prompt to guide transcription |
+| `vad_filter` | bool | `true` | Enable Voice Activity Detection filtering |
+| `word_timestamps` | bool | `false` | Include word-level timestamps |
+| `diarize` | bool | `false` | Enable speaker diarization (WhisperX) |
+| `min_speakers` | int | - | Minimum expected speakers (diarization) |
+| `max_speakers` | int | - | Maximum expected speakers (diarization) |
+| `hf_token` | string | config | Hugging Face token (required for diarization) |
+| `max_line_width` | int | - | Max characters per subtitle line |
+| `max_line_count` | int | - | Max lines per subtitle block |
+
+**Speaker Diarization**:
+When `diarize=true`, the service runs the WhisperX post-processing pipeline:
+1. **Alignment**: Aligns transcription segments to audio using `whisperx.align`.
+2. **Diarization**: Identifies speakers using `whisperx.diarization.DiarizationPipeline` (requires `HF_TOKEN`).
+3. **Speaker Assignment**: Maps speaker IDs to segments via `whisperx.assign_word_speakers`.
+
+Output formats (SRT, VTT, TXT, TSV) will include speaker labels (e.g., `[SPEAKER_00]: Hello world`).
+
+**Subtitle Customization**:
+Use `max_line_width` and `max_line_count` to control subtitle layout for SRT and VTT formats:
+- `max_line_width=42` wraps text at 42 characters per line.
+- `max_line_count=2` limits each subtitle block to 2 lines maximum.
 
 **Observability**: 
 - **Live Stream**: Monitor progress via real-time SRT stream on the dashboard.
@@ -55,6 +77,15 @@ curl -X POST "http://localhost:9000/asr?local_path=/movies/avatar.mkv&language=e
 
 # Upload
 curl -X POST -F "audio_file=@video.mp4" http://localhost:9000/asr
+
+# With speaker diarization
+curl -X POST -F "audio_file=@meeting.mp3" "http://localhost:9000/asr?diarize=true&min_speakers=2&max_speakers=5"
+
+# With custom subtitles
+curl -X POST -F "audio_file=@video.mp4" "http://localhost:9000/asr?output=vtt&max_line_width=42&max_line_count=2"
+
+# With ASR tuning
+curl -X POST -F "audio_file=@video.mp4" "http://localhost:9000/asr?initial_prompt=Medical%20terminology&vad_filter=true&word_timestamps=true"
 ```
 
 ## Bazarr Integration

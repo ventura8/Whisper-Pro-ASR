@@ -1,17 +1,17 @@
 # Technical Architecture
 
-Whisper Pro v1.0.6 implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX).
+Whisper Pro ASR implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX), with integrated speaker diarization and configurable model lifecycle management.
 
 ## 🧬 Module Ecosystem
 
 | Component | Responsibility |
 |:---|:---|
-| `modules/config.py` | Centralized hardware detection (CUDA/NPU/iGPU) and unit pool initialization. |
+| `modules/config.py` | Centralized hardware detection (CUDA/NPU/iGPU), unit pool initialization, and feature flags (`HF_TOKEN`, `MODEL_IDLE_TIMEOUT`, `INITIAL_PROMPT`). |
 | `modules/logging_setup.py` | Orchestrates hardware banners and thread-local context filtering. |
-| `modules/inference/` | Core logic for `model_manager`, `scheduler` (re-entrant locks), `preprocessing` (UVR), `vad`, and `intel_engine`. |
+| `modules/inference/` | Core logic for `model_manager` (transcription, diarization, idle monitoring), `scheduler` (re-entrant locks), `preprocessing` (UVR), `vad`, and `intel_engine`. |
 | `modules/api/` | Flask API layer implementing `routes_asr`, `routes_detect`, and `routes_system`. |
 | `modules/monitoring/` | `dashboard`, `telemetry`, and `metrics_discovery` for real-time observability. |
-| `modules/utils.py` | Managed FFmpeg normalization and **16kHz WAV Standardization**. |
+| `modules/utils.py` | Managed FFmpeg normalization, **16kHz WAV Standardization**, subtitle generation with `_wrap_text()` layout control, and speaker label formatting. |
 
 ### 🧩 Hardware Compatibility Matrix
 | Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
@@ -20,6 +20,7 @@ Whisper Pro v1.0.6 implements a **Heterogeneous Model Pool** architecture design
 | **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
 | **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
 | **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
 
 ---
 
@@ -48,8 +49,30 @@ graph TD
     G -->|Heterogeneous Parallel| H{"Unit Pool"}
     H -->|NVIDIA| I["CUDA Acceleration"]
     H -->|Intel| J["OpenVINO/CPU Pipeline"]
-    I --> K["Final Assembly"]
+    I --> K["Segment Assembly"]
     J --> K
+    end
+
+    K --> DIAR{"Diarize?"}
+    DIAR -->|No| FMT["Format Output"]
+    DIAR -->|Yes| ALIGN["WhisperX Alignment"]
+    ALIGN --> SPEAK["Speaker Diarization (PyAnnote)"]
+    SPEAK --> ASSIGN["Speaker Assignment"]
+    ASSIGN --> FMT
+    FMT --> OUT["SRT / VTT / JSON / TXT / TSV"]
+```
+
+### Speaker Diarization Pipeline
+```mermaid
+graph LR
+    SEG["Raw Segments"] --> ALIGN["whisperx.align()"]
+    ALIGN --> DIAR["DiarizationPipeline (HF_TOKEN)"]
+    DIAR --> ASSIGN["assign_word_speakers()"]
+    ASSIGN --> LABELED["Speaker-Labeled Segments"]
+    
+    subgraph CACHE ["Model Cache Pools"]
+    AP["_ALIGN_POOL (per unit)"]
+    DP["_DIARIZE_POOL (per unit)"]
     end
 ```
 
@@ -86,6 +109,7 @@ The system implements a **Thread-Local Re-entrant Locking Pattern** via `model_l
 1.  **Vocal Isolation (UVR)**
 2.  **Language Identification (Whisper)**
 3.  **ASR Transcription (Whisper)**
+4.  **Speaker Diarization (WhisperX)**
 
 This prevents deadlocks where a task might release a unit between stages and be unable to reclaim it due to high queue volume.
 
@@ -95,7 +119,33 @@ The system utilizes a **Cooperative Yielding** pattern combined with an automate
 - **Standard Task Yielding**: Standard tasks yield resource acquisition and loop-sleep instead of blocking on the model lock semaphore whenever priority tasks are present in the registry, preventing priority starvation.
 - **Priority Preemption Bypass**: Running priority tasks ignore preemption requests, preventing them from pausing themselves if multiple priority tasks are queued.
 - **Preemption Visibility**: Preempted tasks temporarily transition to `"queued"` status with a `"Paused for Priority Task"` stage, ensuring they display in the dashboard queue.
+- **FFmpeg Standardization Synchronization**: Priority tasks dynamically yield to active standard FFmpeg processes. Using the public condition variable `STANDARD_FFMPEG_COND` and count state `STANDARD_FFMPEG_STATE`, a priority language detection request blocks if a standard task is performing media standardization. It resumes immediately after FFmpeg completes, while the standard task yields resource acquisition before entering subsequent heavy vocal separation and model execution stages.
 - **Centralized Storage Hygiene**: Implements a `tracked_files` registry within the thread context. Every transient file (uploaded media, standardized WAVs, HQ prepared files, and isolated stems) is registered upon creation. A mandatory `cleanup_files()` call in the request's `finally` block ensures a **100% deletion rate**, eliminating storage leaks even after fatal errors.
+
+### 3. Model Lifecycle & Idle Timeout
+The system supports two model lifecycle strategies, configured via environment variables:
+
+| Strategy | Config | Behavior |
+|:---|:---|:---|
+| **Aggressive Offload** | `AGGRESSIVE_OFFLOAD=false` | Models are unloaded from memory immediately when active sessions drop to zero. |
+| **Idle Timeout** | `MODEL_IDLE_TIMEOUT=300` (default) | A background daemon thread (`ModelIdleMonitor`) monitors inactivity. Models are only purged after the configured idle period (in seconds) elapses with zero active sessions. |
+
+When `MODEL_IDLE_TIMEOUT > 0` (or defaults to `300`), it takes precedence over `AGGRESSIVE_OFFLOAD`. The monitor thread is started lazily on the first session decrement or model load.
+
+```mermaid
+graph TD
+    DEC["Session Decrement"] --> CHK{"Active == 0?"}
+    CHK -->|No| DONE["Continue"]
+    CHK -->|Yes| TIMEOUT{"IDLE_TIMEOUT > 0?"}
+    TIMEOUT -->|Yes| MON["Start/Ensure Monitor Thread"]
+    TIMEOUT -->|No| AGG{"AGGRESSIVE_OFFLOAD?"}
+    AGG -->|Yes| UNLOAD["unload_models()"]
+    AGG -->|No| DONE
+    MON --> POLL["Poll every 5s"]
+    POLL --> ELAPSED{"Idle > Timeout?"}
+    ELAPSED -->|Yes| UNLOAD
+    ELAPSED -->|No| POLL
+```
 
 ### 4. Real-time Observability Engine
 The system features a thread-aware logging and telemetry engine designed for industrial reliability:
@@ -113,3 +163,4 @@ The system features a thread-aware logging and telemetry engine designed for ind
 - **NVIDIA CUDA**: Requires the **NVIDIA Container Toolkit** on the host.
 - **SSD Optimization**: All transient I/O is redirected to a RAM-backed `tmpfs` volume to prevent physical wear.
 - **Standardization Layer**: All incoming media (MKV, AVI, MP4, etc.) is standardized to 16kHz Mono WAV before entering the pipeline, ensuring consistent results across all formats.
+- **Diarization Models**: WhisperX alignment and PyAnnote diarization models are cached per hardware unit in `_ALIGN_POOL` and `_DIARIZE_POOL`. These are purged alongside Whisper models during `unload_models()`.

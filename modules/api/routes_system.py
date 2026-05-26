@@ -253,6 +253,27 @@ def update_settings():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route('/analytics', methods=['GET'])
+@bp.route('/system/analytics', methods=['GET'])
+def get_analytics():
+    """
+    Retrieve service usage analytics
+    ---
+    tags:
+      - System
+    summary: Get cumulative and daily breakdown of tasks and durations.
+    description: Returns JSON stats or HTML page depending on the Accept header.
+    responses:
+      200:
+        description: Current cumulative and daily task statistics.
+    """
+    if 'text/html' in request.headers.get('Accept', ''):
+        return dashboard.get_analytics_html()
+
+    data = history_manager.get_analytics_data()
+    return jsonify(data)
+
+
 @bp.route('/help', methods=['GET'])
 def help_endpoint():
     """
@@ -268,6 +289,6 @@ def help_endpoint():
     return jsonify({
         "app": config.APP_NAME,
         "version": config.VERSION,
-        "endpoints": ["/status", "/asr", "/detect-language", "/dashboard", "/logs/download", "/settings"],
+        "endpoints": ["/status", "/asr", "/detect-language", "/dashboard", "/logs/download", "/settings", "/analytics"],
         "docs": f"{request.host_url}docs"
     })

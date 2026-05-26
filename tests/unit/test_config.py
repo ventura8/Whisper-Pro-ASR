@@ -96,7 +96,7 @@ class TestConfigEnv:
     def test_app_constants(self):
         """Test app name and version constants."""
         assert "Whisper" in config_module.APP_NAME
-        assert config_module.VERSION == "1.0.6"
+        assert config_module.VERSION == "1.1.0"
 
     def test_device_constant_exists(self):
         """Test DEVICE constant exists."""

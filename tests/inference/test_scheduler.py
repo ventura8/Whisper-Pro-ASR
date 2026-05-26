@@ -12,9 +12,8 @@ from modules import utils, config
 @pytest.fixture(autouse=True)
 def reset_state():
     """Reset global state and threading primitives before each test."""
-    from modules.inference.scheduler import SchedulerState
     with mock.patch("modules.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
-        scheduler.STATE = SchedulerState()
+        scheduler.STATE = scheduler.SchedulerState()
 
     # Reset thread context
     utils.THREAD_CONTEXT.is_priority = False
@@ -24,7 +23,7 @@ def reset_state():
     yield
 
     with mock.patch("modules.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
-        scheduler.STATE = SchedulerState()
+        scheduler.STATE = scheduler.SchedulerState()
 
 
 def simulate_confirmation():
@@ -33,7 +32,8 @@ def simulate_confirmation():
         while True:
             if scheduler.STATE.pause_requested.is_set() and not scheduler.STATE.pause_confirmed.is_set():
                 scheduler.STATE.pause_confirmed.set()
-            if scheduler.STATE.priority_requests == 0 and not any(t.is_alive() for t in threading.enumerate() if t.name.startswith("p_task")):
+            is_any_ptask = any(t.is_alive() for t in threading.enumerate() if t.name.startswith("p_task"))
+            if scheduler.STATE.priority_requests == 0 and not is_any_ptask:
                 break
             time.sleep(0.01)
 
@@ -156,6 +156,7 @@ def test_get_preemptible_unit():
 
 def test_priority_sequential_enforcement():
     """Test that priority tasks respect the sequential lock."""
+    # pylint: disable=consider-using-with
     # 1. Manually acquire the lock to block the next task
     scheduler.STATE.priority_sequential_lock.acquire()
 
@@ -177,3 +178,33 @@ def test_priority_sequential_enforcement():
     scheduler.STATE.priority_sequential_lock.release()
     t.join(timeout=2.0)
     assert len(results) == 1
+
+
+def test_priority_waits_for_standard_ffmpeg():
+    """Test that a priority task wait_for_priority() blocks until active standard FFmpeg count is 0."""
+    # 1. Set standard FFmpeg count to 1 (simulating active standard FFmpeg processing)
+    with utils.STANDARD_FFMPEG_COND:
+        utils.STANDARD_FFMPEG_STATE["count"] = 1
+
+    results = []
+
+    def priority_task():
+        scheduler.wait_for_priority()
+        results.append("priority_started")
+        scheduler.release_priority()
+
+    t = threading.Thread(target=priority_task)
+    t.start()
+
+    time.sleep(0.1)
+    # The priority task should be waiting/blocked
+    assert len(results) == 0
+
+    # 2. Set standard FFmpeg count to 0 and notify
+    with utils.STANDARD_FFMPEG_COND:
+        utils.STANDARD_FFMPEG_STATE["count"] = 0
+        utils.STANDARD_FFMPEG_COND.notify_all()
+
+    t.join(timeout=2.0)
+    assert len(results) == 1
+    assert results[0] == "priority_started"

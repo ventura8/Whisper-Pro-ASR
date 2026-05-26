@@ -344,9 +344,9 @@ class PreprocessingManager:
             if not audio_path:
                 return original_path
 
-            sep = self._init_separator()
             if yield_cb:
                 yield_cb()
+            sep = self._init_separator()
 
             audio_dur = utils.get_audio_duration(audio_path)
             unit_name = self._unit["name"] if self._unit else self._device_id

@@ -60,6 +60,45 @@ As of v1.0.4, you can control exactly how many hardware units the service utiliz
 - **`MAX_GPU_UNITS` / `MAX_NPU_UNITS`**: Caps Intel Silicon units.
 - **`MAX_CPU_UNITS`**: Caps concurrent multi-threaded CPU tasks (VAD, FFmpeg). Set to `AUTO` to let the system decide based on your core count.
 
+## 🧠 Model Lifecycle Management
+
+The service provides two strategies for managing model memory when the system is idle:
+
+### Aggressive Offload (Default)
+```yaml
+environment:
+  - AGGRESSIVE_OFFLOAD=true
+```
+Models are immediately unloaded from memory when all active sessions complete. This is ideal for shared-resource environments where RAM must be reclaimed as fast as possible.
+
+### Idle Timeout
+```yaml
+environment:
+  - MODEL_IDLE_TIMEOUT=300
+```
+When set to a positive value (in seconds), models remain warm in memory after the last session completes. A background daemon thread monitors inactivity and only purges models after the timeout elapses. This is ideal for environments with bursty workloads where you want fast response times for subsequent requests within the timeout window.
+
+> [!TIP]
+> Set `MODEL_IDLE_TIMEOUT=300` (5 minutes) for a good balance between memory efficiency and response latency. The idle monitor thread has negligible CPU overhead (polling every 5 seconds).
+
+When `MODEL_IDLE_TIMEOUT > 0`, it takes precedence over `AGGRESSIVE_OFFLOAD`.
+
+## 🗣 Transcription Tuning
+
+### Initial Prompt
+Use `INITIAL_PROMPT` to provide context that guides the transcription model:
+```yaml
+environment:
+  - INITIAL_PROMPT=This video contains speech in English with technical terminology.
+```
+This can also be overridden per-request using the `initial_prompt` query parameter.
+
+### VAD Filter
+The `vad_filter` parameter (default: `true`) enables Voice Activity Detection to suppress silence and reduce hallucinations. You can disable it per-request with `vad_filter=false` if you need timestamps for silent segments.
+
+### Word Timestamps
+Enable `word_timestamps=true` in API calls to get word-level timing information in JSON output. This is useful for precise subtitle alignment and karaoke-style displays.
+
 ## SSD Protection (RAM-disk)
 
 For high-volume transcription, it is highly recommended to use a `tmpfs` mount to protect your SSD from write wear.

@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.0.6"
+VERSION = "1.1.0"
 HARDWARE_UNITS = []  # Global registry for accelerator orchestration
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 # --- [RESOURCE POOL LIMITS] ---
 CPU_CORE_LIMIT = int(os.environ.get("CPU_CORE_LIMIT", 4))
@@ -40,7 +41,8 @@ MAX_NPU = _get_unit_limit("MAX_NPU_UNITS", 1)
 MAX_CPU = _get_unit_limit("MAX_CPU_UNITS", 1)
 
 # Memory reclamation behavior (unloads models when idle if True)
-AGGRESSIVE_OFFLOAD = os.environ.get("AGGRESSIVE_OFFLOAD", "true").lower() == "true"
+AGGRESSIVE_OFFLOAD = os.environ.get("AGGRESSIVE_OFFLOAD", "false").lower() == "true"
+MODEL_IDLE_TIMEOUT = int(os.environ.get("MODEL_IDLE_TIMEOUT", 300))
 
 # --- [HARDWARE DETECTION & DEVICE MAPPING] ---
 # ASR_ENGINE can be: AUTO (default), FASTER-WHISPER, INTEL-WHISPER
@@ -223,7 +225,7 @@ DEFAULT_BEAM_SIZE = int(os.environ.get("ASR_BEAM_SIZE", 5))
 # Debug and Logging
 DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"
 TEXT_LOGS = os.environ.get("TEXT_LOGS", "false").lower() == "true"
-AGGRESSIVE_OFFLOAD = os.environ.get("AGGRESSIVE_OFFLOAD", "true").lower() == "true"
+AGGRESSIVE_OFFLOAD = os.environ.get("AGGRESSIVE_OFFLOAD", "false").lower() == "true"
 VERIFY_RUNTIME = os.environ.get("VERIFY_RUNTIME", "true").lower() == "true"
 
 TELEMETRY_RETENTION_HOURS = int(os.environ.get("TELEMETRY_RETENTION_HOURS", 24))

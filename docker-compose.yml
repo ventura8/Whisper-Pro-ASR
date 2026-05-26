@@ -68,8 +68,10 @@ services:
       - ASR_PREPROCESS_THREADS=4
       # Core limit for Media Normalization (0 = auto-detect system-wide)
       - FFMPEG_THREADS=4
-      # Aggressive RAM/VRAM offloading (Default: true)
-      - AGGRESSIVE_OFFLOAD=true
+      # Aggressive RAM/VRAM offloading (Default: false)
+      - AGGRESSIVE_OFFLOAD=false
+      # Idle timeout before unloading models (Default: 300 seconds)
+      - MODEL_IDLE_TIMEOUT=300
       # --- [ACCELERATOR ORCHESTRATION] ---
       # Control how many physical hardware units are utilized. 
       # Default: 1 (Safest for multi-service environments). Set to 'ALL' to use everything.

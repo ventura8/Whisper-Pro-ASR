@@ -1,5 +1,5 @@
 """Tests for modules/routes.py"""
-# pylint: disable=redefined-outer-name, unused-argument, import-outside-toplevel
+# pylint: disable=redefined-outer-name, unused-argument, import-outside-toplevel, protected-access
 # pylint: disable=too-few-public-methods
 import json
 from unittest import mock
@@ -472,3 +472,35 @@ class TestRequestLogging:
             response = client.post('/asr', data={})
             # Request should still be processed
             assert response.status_code in [400, 500]
+
+
+def test_routes_extract_new_params():
+    """Verify that ASR routes correctly parse new parameters."""
+    app = Flask(__name__)
+    app.register_blueprint(routes_asr.bp)
+
+    # Test full parameters extraction
+    with app.test_request_context(
+        '/asr?initial_prompt=testprompt&vad_filter=false&word_timestamps=true&max_line_width=40&max_line_count=2'
+    ):
+        params = routes_asr._get_request_params()
+        assert params['initial_prompt'] == 'testprompt'
+        assert params['vad_filter'] is False
+        assert params['word_timestamps'] is True
+        assert params['max_line_width'] == 40
+        assert params['max_line_count'] == 2
+
+    # Test default values when omitted
+    with app.test_request_context('/asr'):
+        params = routes_asr._get_request_params()
+        assert params['initial_prompt'] is None
+        assert params['vad_filter'] is True
+        assert params['word_timestamps'] is False
+        assert params['max_line_width'] is None
+        assert params['max_line_count'] is None
+
+    # Test malformed width/count integers fallback to None
+    with app.test_request_context('/asr?max_line_width=invalid&max_line_count=invalid'):
+        params = routes_asr._get_request_params()
+        assert params['max_line_width'] is None
+        assert params['max_line_count'] is None

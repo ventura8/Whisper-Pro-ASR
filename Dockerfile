@@ -80,6 +80,7 @@ RUN --mount=type=cache,target=/root/.cache \
 WORKDIR /app
 COPY modules/ ./modules/
 COPY scripts/ ./scripts/
+COPY static/ ./static/
 COPY whisper_pro_asr.py .
 
 # Create persistent storage directory

@@ -1,5 +1,5 @@
 """Tests for modules/inference/model_manager.py"""
-# pylint: disable=protected-access, too-few-public-methods, redefined-outer-name, unused-import
+# pylint: disable=protected-access, too-few-public-methods, redefined-outer-name, unused-import, import-outside-toplevel, consider-using-with, broad-exception-caught, unused-variable, wrong-import-order
 import threading
 import time
 import os
@@ -149,7 +149,9 @@ class TestRunTranscription:
                 with mock.patch("os.remove") as mock_remove:
                     model_manager.run_transcription(
                         "original.wav", language="en", task="transcribe", batch_size=1)
-                    pm.preprocess_audio.assert_called_with("original.wav", force=False)
+                    pm.preprocess_audio.assert_called_with(
+                        "original.wav", force=False, yield_cb=model_manager._check_preemption
+                    )
                     mock_remove.assert_called_with("isolated.wav")
 
 
@@ -194,6 +196,7 @@ class TestResourceManagement:
         scheduler.STATE.active_sessions = 1
 
         with mock.patch("modules.config.AGGRESSIVE_OFFLOAD", True), \
+                mock.patch("modules.config.MODEL_IDLE_TIMEOUT", 0), \
                 mock.patch("modules.inference.model_manager.utils.get_system_telemetry", return_value={}):
             model_manager.decrement_active_session()
             assert scheduler.STATE.active_sessions == 0
@@ -219,6 +222,18 @@ class TestPreemptionAndPriority:
         """Test priority registration."""
         model_manager.wait_for_priority()
         assert utils.THREAD_CONTEXT.is_priority is True
+
+    def test_run_vocal_isolation_direct_passes_preemption_callback(self):
+        """Test that run_vocal_isolation_direct passes _check_preemption callback to preprocess_audio."""
+        pm = mock.MagicMock()
+        model_manager._PREPROCESSOR_POOL["CPU"] = pm
+
+        model_manager.run_vocal_isolation_direct("test.wav", "CPU")
+
+        # Verify preprocess_audio was called with yield_cb=_check_preemption
+        pm.preprocess_audio.assert_called_once_with(
+            "test.wav", force=False, yield_cb=model_manager._check_preemption
+        )
 
     def test_check_preemption_waits_if_paused(self):
         """Test that _check_preemption waits for resume."""
@@ -304,7 +319,7 @@ def test_model_manager_booster_edge_cases():
     # 285: break in batch LD
     with mock.patch("modules.inference.vad.decode_audio", return_value=np.zeros(0)):
         res = model_manager.run_batch_language_detection_direct(mock_model, "test.wav", 5)
-        assert res == []
+        assert not res
 
     # 409: RuntimeError if engine pool is empty
     with mock.patch("modules.inference.model_manager._MODEL_POOL", {}), \
@@ -312,3 +327,61 @@ def test_model_manager_booster_edge_cases():
         with pytest.raises(RuntimeError):
             with model_manager.model_lock_ctx() as (m, u):
                 pass
+
+
+def test_model_manager_forwards_new_params():
+    """Verify that model_manager.run_transcription forwards new parameters to transcribe call."""
+    mock_model = mock.MagicMock()
+    mock_info = mock.MagicMock(language="en", language_probability=0.95, duration=5.0)
+    mock_segment = mock.MagicMock(start=0.0, end=1.0, text="hello")
+    mock_model.transcribe.return_value = ([mock_segment], mock_info)
+
+    model_manager._MODEL_POOL["CPU"] = mock_model
+
+    model_manager.run_transcription(
+        "test.wav",
+        language="en",
+        task="transcribe",
+        initial_prompt="hello test",
+        vad_filter=False,
+        word_timestamps=True
+    )
+
+    mock_model.transcribe.assert_called_once_with(
+        "test.wav",
+        language="en",
+        task="transcribe",
+        beam_size=config.DEFAULT_BEAM_SIZE,
+        initial_prompt="hello test",
+        vad_filter=False,
+        vad_parameters={"min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS},
+        word_timestamps=True
+    )
+
+
+def test_model_idle_timeout_reclamation():
+    """Verify that the background idle timeout thread successfully offloads models."""
+    pm = mock.MagicMock()
+    model_manager._PREPROCESSOR_POOL["CPU"] = pm
+    model_manager._MODEL_POOL["CPU"] = mock.MagicMock()
+    scheduler.STATE.active_sessions = 1
+
+    model_manager._MONITOR_THREAD_STARTED = False
+
+    # Configure timeout of 1 second
+    with mock.patch("modules.config.MODEL_IDLE_TIMEOUT", 1), \
+            mock.patch("modules.inference.model_manager.utils.get_system_telemetry", return_value={}):
+
+        # Simulates task registration/completion lifecycle
+        model_manager.decrement_active_session()
+        assert scheduler.STATE.active_sessions == 0
+
+        # Model should still be in pool initially
+        assert len(model_manager._MODEL_POOL) == 1
+
+        # Sleep to allow idle timeout monitor thread to run and trigger offload
+        time.sleep(6)
+
+        # Monitor thread should have cleared the pools
+        assert len(model_manager._MODEL_POOL) == 0
+        pm.unload_model.assert_called_once()

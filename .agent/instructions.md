@@ -21,7 +21,17 @@
 - **I/O Optimization**: Avoid using `soundfile` (`sf.read`) directly on non-WAV video containers as it causes expensive full-file probes. Use FFmpeg to extract small chunks to temporary WAV files first if signal analysis (RMS) is required.
 - **Priority Yielding**: Maintain "Full-Pipeline Priority Yielding" logic—high-priority tasks (LD) must pause batch operations (ASR).
 - **Silent Status**: Ensure hardware acceleration warnings (ONNX, OpenVINO) are suppressed in favor of custom authoritative status logs.
- 
+- **Model Lifecycle**: Respect `MODEL_IDLE_TIMEOUT` and `AGGRESSIVE_OFFLOAD` settings in `modules/config.py`. If `MODEL_IDLE_TIMEOUT > 0`, models are purged by a background monitor thread after the configured idle period instead of immediate unloading.
+
+## Speaker Diarization
+- **WhisperX Pipeline**: Speaker diarization uses `whisperx` (alignment → diarization → speaker assignment). The pipeline caches alignment and diarization models in `_ALIGN_POOL` and `_DIARIZE_POOL` per hardware unit.
+- **HF_TOKEN Requirement**: Diarization requires a valid Hugging Face token (`HF_TOKEN` environment variable) for access to PyAnnote speaker segmentation models.
+- **Graceful Fallback**: If diarization fails or `HF_TOKEN` is missing, the system must fall back to standard transcription without speaker labels.
+
+## ASR Parameters
+- **Forwarding**: `initial_prompt`, `vad_filter`, and `word_timestamps` parameters from the API must be forwarded to `model.transcribe()` in `model_manager.run_transcription()`.
+- **Subtitle Layout**: `max_line_width` and `max_line_count` parameters control text wrapping in SRT/VTT formatters via `_wrap_text()` in `modules/utils.py`.
+
 ## Code Style
 - Follow PEP 8 and use type hints.
 - Maintain high test coverage (min 90%).

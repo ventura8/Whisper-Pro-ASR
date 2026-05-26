@@ -4,9 +4,9 @@
 ![Coverage](assets/coverage.svg)
 ![Pylint](https://img.shields.io/badge/Pylint-10.0%2F10-brightgreen)
 
-**Whisper Pro ASR** is a high-performance transcription microservice optimized for the **Whisper Large V3** model. It delivers enterprise-grade performance with native hardware acceleration for **Intel Core Ultra NPUs**, **Integrated GPUs**, and **NVIDIA CUDA** environments.
+**Whisper Pro ASR** is a high-performance transcription microservice with **speaker diarization**, optimized for the **Whisper Large V3** model. It delivers enterprise-grade performance with native hardware acceleration for **Intel Core Ultra NPUs**, **Integrated GPUs**, and **NVIDIA CUDA** environments.
 
-Engineered for seamless integration with **Bazarr** and the broader media automation stack, it offloads computationally intensive AI tasks from your primary system resources, providing industrial-strength transcription with rapid hardware context switching.
+Engineered for seamless integration with **Bazarr** and the broader media automation stack, it offloads computationally intensive AI tasks from your primary system resources, providing industrial-strength transcription with speaker identification and rapid hardware context switching.
 
 ---
 
@@ -66,15 +66,24 @@ services:
 
 ## 🚀 Key Features
 
+### 🗣 Speaker Diarization
+- **WhisperX Integration**: Identify who said what with automatic speaker diarization powered by WhisperX alignment and PyAnnote speaker segmentation.
+- **Speaker Labels**: Output formats (SRT, VTT, TXT, TSV) include speaker identification labels (e.g., `[SPEAKER_00]: Hello world`).
+- **Configurable Speakers**: Control diarization with `min_speakers` and `max_speakers` parameters for optimal speaker count estimation.
+- **Graceful Fallback**: If diarization fails or `HF_TOKEN` is not configured, the system seamlessly falls back to standard transcription.
+
 ### Precision Architecture
 - **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA**, **Intel OpenVINO**, and **Generic CPU** runtimes.
-- **Re-entrant Hardware Orchestration**: Utilizes a sophisticated thread-local locking system (`model_lock_ctx` in `scheduler.py`) that allows complex pipelines (UVR -> ASR) to share a single hardware claim without deadlocking.
+- **Re-entrant Hardware Orchestration**: Utilizes a sophisticated thread-local locking system (`model_lock_ctx` in `scheduler.py`) that allows complex pipelines (UVR → ASR → Diarization) to share a single hardware claim without deadlocking.
 - **FFmpeg 8.1.0 Integration**: Features optimized hardware-accelerated decoding. All media (MKV, AVI, MP4, etc.) is automatically standardized to **16kHz Mono WAV** using the `utils.py` core before entering the AI pipeline for maximum accuracy.
 
 ### Advanced Intelligence
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
 - **Consolidated Batch Montage**: Consolidates multiple sampling targets into a single high-density montage. This allows for a **single-pass UVR isolation** across multiple non-contiguous segments, eliminating repeated model loading overhead.
 - **Global VAD & In-Memory Slicing**: Features a unified Voice Activity Detection scan across the entire montage. segments are then sliced as **NumPy arrays in memory**, eliminating temporary file I/O and reducing VAD overhead by up to 900%.
+- **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt` (context guidance), `vad_filter` (silence suppression), and `word_timestamps` (word-level timing).
+- **Subtitle Layout Control**: Custom character-per-line wrapping (`max_line_width`) and max line block limits (`max_line_count`) for SRT/VTT output.
+- **Smart Model Lifecycle**: Configurable `MODEL_IDLE_TIMEOUT` keeps models warm in memory for rapid response to bursty workloads, with a background monitor thread that purges idle models after the timeout.
 - **Deferred Persistence Engine**: Protects SSD longevity by buffering task history and telemetry in RAM, only syncing to physical storage after 10 tasks or 1 hour of activity.
 - **Fail-Safe Dual-Path VAD**: Intelligent logic that verifies speech presence on both isolated and raw audio, selecting the optimal path automatically based on signal clarity.
 - **Confusion-Matrix Tie Breaking**: Resolves linguistic ambiguities between similar pairs (e.g., NO/NN) with a weighted bias, eliminating common identification hallucinations.
@@ -106,9 +115,10 @@ services:
 | **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
 | **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
 | **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
 
 ### System Architecture
-The service utilizes a **Heterogeneous Model Pool** to orchestrate tasks across NVIDIA GPUs, Intel NPUs, and CPUs simultaneously. For a deep dive into the processing pipelines, resource locking, and hardware acceleration logic, see the [Technical Architecture](docs/ARCHITECTURE.md) documentation.
+The service utilizes a **Heterogeneous Model Pool** to orchestrate tasks across NVIDIA GPUs, Intel NPUs, and CPUs simultaneously, with integrated WhisperX diarization and configurable model lifecycle management. For a deep dive into the processing pipelines, resource locking, and hardware acceleration logic, see the [Technical Architecture](docs/ARCHITECTURE.md) documentation.
 
 > [!TIP]
 > View the [Concurrency & Resource Orchestration](docs/CONCURRENCY.md) guide for details on parallel preprocessing and pre-emption.
@@ -134,6 +144,12 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | `ASR_BATCH_SIZE` | `1` | Number of segments processed per pass. |
 | `ASR_BEAM_SIZE` | `5` | Decoding beam width (Search depth). |
 | `DEBUG` | `false` | Enables verbose stack traces and debug logging. |
+| **Diarization** | | |
+| `HF_TOKEN` | *(empty)* | Hugging Face token for speaker diarization (PyAnnote models). |
+| **Transcription Tuning** | | |
+| `INITIAL_PROMPT` | *(multilingual)* | Default context prompt to guide Whisper transcription. |
+| `MODEL_IDLE_TIMEOUT` | `300` | Seconds to keep models loaded after last task (0 = immediate offload). |
+| `AGGRESSIVE_OFFLOAD` | `false` | Immediately unload models when idle (overridden by `MODEL_IDLE_TIMEOUT`). |
 | **Optimization** | | |
 | `OV_PERFORMANCE_HINT` | `LATENCY` | OpenVINO scheduling hint (Latency/Throughput). |
 | `OV_CACHE_DIR` | `./model_cache` | Persistent directory for compiled hardware blobs. |
@@ -258,8 +274,11 @@ Performs multi-zone analysis to identify source language metadata. Returns full 
 ### 2. Transcribe Media
 **POST** `/asr`  
 **POST** `/v1/audio/transcriptions`  
-Main entry point for generating subtitles.
+Main entry point for generating subtitles with optional speaker diarization.
 - **Formats**: `srt` (default), `vtt`, `txt`, `tsv`, `json` (with segments).
+- **Diarization**: Add `diarize=true` to enable speaker identification (requires `HF_TOKEN`).
+- **ASR Tuning**: `initial_prompt`, `vad_filter`, `word_timestamps` for fine-grained control.
+- **Subtitle Layout**: `max_line_width` and `max_line_count` for custom subtitle formatting.
 - **Optimization**: Prioritizes local file access if the path exists (via volume mapping), otherwise accepts file uploads.
 
 ### 3. Service Analytics & Dashboard
@@ -298,12 +317,13 @@ To use this service with **Bazarr**:
 ├── whisper_pro_asr.py        # Master entry point
 ├── modules/                 # Service Logic
 │   ├── api/                 # API Routes (ASR, Detection, System)
-│   ├── inference/           # ML Engine (Model Manager, Scheduler, VAD, UVR)
+│   ├── inference/           # ML Engine (Model Manager, Scheduler, VAD, UVR, Diarization)
 │   ├── monitoring/          # Dashboard, Telemetry & Metrics
-│   ├── config.py            # Global Settings
+│   ├── config.py            # Global Settings (HF_TOKEN, MODEL_IDLE_TIMEOUT, etc.)
 │   ├── logging_setup.py     # Task-specific Logging
-│   └── utils.py             # System & Audio Utilities
+│   └── utils.py             # System & Audio Utilities (subtitle wrapping, speaker labels)
 ├── tests/                   # Performance & Unit Test Suites
+│   └── inference/           # Diarization, Improvements, Concurrency tests
 ├── Dockerfile               # Packaging Definition
 └── docker-compose.yml       # Orchestration Template
 ```

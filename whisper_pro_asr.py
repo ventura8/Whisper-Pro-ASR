@@ -94,7 +94,8 @@ def _setup_swagger(flask_app):
     flask_app.config['SWAGGER'] = {
         'title': 'Whisper Pro ASR API',
         'uiversion': 3,
-        'openapi': '3.0.1'
+        'openapi': '3.0.1',
+        'head_text': '<link rel="stylesheet" href="/static/swagger-theme.css">'
     }
     template = {
         "info": {

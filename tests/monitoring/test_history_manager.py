@@ -12,11 +12,14 @@ from modules import config
 def clean_history_cache(tmp_path):
     """Reset history cache and use a temporary file."""
     history_manager._HISTORY_CACHE = []
+    history_manager._ANALYTICS_CACHE = None
     history_manager._STATS_CACHE = None
 
     # Use tmp_path for persistent file
     temp_file = tmp_path / "task_history.json"
-    with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(temp_file)):
+    temp_analytics_file = tmp_path / "analytics_stats.json"
+    with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(temp_file)), \
+            mock.patch("modules.monitoring.history_manager.ANALYTICS_FILE", str(temp_analytics_file)):
         yield temp_file
 
 
@@ -114,10 +117,14 @@ def test_history_manager_exceptions():
 
 def test_history_manager_stats_cache():
     """Cover stats cache hit branch."""
+    import datetime
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     history_manager._STATS_CACHE = {"cached": True}
+    history_manager._STATS_CACHE_DATE = today_str
     history, stats = history_manager.get_history_stats()
     assert stats["cached"] is True
     history_manager._STATS_CACHE = None
+    history_manager._STATS_CACHE_DATE = None
 
 
 def test_history_manager_clear_logic(tmp_path):
@@ -135,10 +142,58 @@ def test_history_manager_clear_logic(tmp_path):
         history_manager.clear_history()
 
 
-def test_history_manager_stats_aggregation():
+def test_history_manager_stats_aggregation(clean_history_cache):
     """Cover history stats logic with actual aggregation."""
-    history = [{"video_duration": 10, "task_id": "1"}, {"video_duration": 20, "task_id": "2"}]
-    with mock.patch("modules.monitoring.history_manager.get_history", return_value=history):
-        history_manager._STATS_CACHE = None
-        _, stats = history_manager.get_history_stats()
-        assert stats["all_time"] == 30
+    history_manager._ANALYTICS_CACHE = {
+        "2026-05-26": {"count": 2, "duration": 30.0}
+    }
+    history_manager._STATS_CACHE = None
+    _, stats = history_manager.get_history_stats()
+    assert stats["all_time"] == 30.0
+    assert stats["count_all_time"] == 2
+
+
+def test_history_stats_persistent_on_clear(clean_history_cache):
+    """Test that analytics stats are preserved when history is cleared."""
+    task_data = {
+        "task_id": "1",
+        "video_duration": 60.0,
+        "completed_at": "2026-05-26 12:00:00"
+    }
+    history_manager.log_completed_task(task_data)
+
+    # Verify history is saved and stats calculate correctly
+    history = history_manager.get_history()
+    assert len(history) == 1
+    _, stats = history_manager.get_history_stats()
+    assert stats["count_all_time"] == 1
+    assert stats["all_time"] == 60.0
+
+    # Clear history
+    history_manager.clear_history()
+
+    # History list should be empty
+    assert len(history_manager.get_history()) == 0
+
+    # Stats should still be present!
+    _, stats_after_clear = history_manager.get_history_stats()
+    assert stats_after_clear["count_all_time"] == 1
+    assert stats_after_clear["all_time"] == 60.0
+
+
+def test_get_analytics_data(clean_history_cache):
+    """Test retrieving combined cumulative and daily analytics data."""
+    history_manager.log_completed_task({
+        "task_id": "analytics_test_1",
+        "video_duration": 45.0,
+        "completed_at": "2026-05-26 12:00:00"
+    })
+
+    data = history_manager.get_analytics_data()
+    assert "cumulative" in data
+    assert "daily" in data
+    assert data["cumulative"]["count_all_time"] == 1
+    assert data["cumulative"]["all_time"] == 45.0
+    assert "2026-05-26" in data["daily"]
+    assert data["daily"]["2026-05-26"]["count"] == 1
+    assert data["daily"]["2026-05-26"]["duration"] == 45.0

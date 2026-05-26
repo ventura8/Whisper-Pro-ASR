@@ -1,4 +1,5 @@
 """Comprehensive coverage for the main Flask server logic."""
+# pylint: disable=protected-access
 import os
 import sys
 from io import BytesIO
@@ -126,3 +127,32 @@ def test_request_logging_exception():
                     # Directly call the handler to test its try-except
                     log_func()
                     # If it reached here without raising RuntimeError, it's successful
+
+
+def test_error_handlers_and_teardown_exception():
+    """Test 404, 500 error handlers and request teardown exception handling."""
+    app = whisper_pro_asr.create_app()
+    with app.test_client() as client:
+        # 1. Test 404 not found handler
+        resp = client.get("/nonexistent-endpoint-xyz")
+        assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Endpoint not found"}
+
+        # 2. Test 500 server error and teardown exception handler
+        # Mock modules.monitoring.dashboard.get_dashboard_html to raise an exception
+        with mock.patch("modules.monitoring.dashboard.get_dashboard_html", side_effect=ValueError("Simulated server error")):
+            resp = client.get("/", headers={"Accept": "text/html"})
+            assert resp.status_code == 500
+            assert resp.get_json() == {"error": "Internal server error"}
+
+
+def test_verify_runtime_integrity_with_onnx():
+    """Test _verify_runtime_integrity covers the ONNX success case when present."""
+    mock_ort = mock.MagicMock()
+    mock_ort.__version__ = "1.24.1"
+    mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+    with mock.patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        whisper_pro_asr._verify_runtime_integrity()
+        # Ensure it successfully called onnxruntime properties
+        mock_ort.get_available_providers.assert_called_once()

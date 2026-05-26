@@ -17,6 +17,11 @@ def test_get_status_data():
 
 def test_get_dashboard_html():
     """Test dashboard HTML retrieval."""
-    with mock.patch("modules.monitoring.dashboard_ui.get_dashboard_html", return_value="<html>"):
-        html = dashboard.get_dashboard_html()
-        assert html == "<html>"
+    html = dashboard.get_dashboard_html()
+    assert "<html" in html
+
+
+def test_get_analytics_html():
+    """Test analytics HTML retrieval."""
+    html = dashboard.get_analytics_html()
+    assert "<html" in html

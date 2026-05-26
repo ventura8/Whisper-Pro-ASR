@@ -1,5 +1,5 @@
 """Tests for preprocessing.py (UVR/MDX-NET Vocal Separation)."""
-# pylint: disable=missing-function-docstring, protected-access, redefined-outer-name, too-few-public-methods, unused-argument, import-error
+# pylint: disable=missing-function-docstring, protected-access, redefined-outer-name, too-few-public-methods, unused-argument, import-error, import-outside-toplevel, missing-class-docstring, multiple-statements, redefined-builtin, unused-variable
 import time
 import logging
 from unittest import mock
@@ -459,3 +459,130 @@ class TestSeparateWithFallback:
             with pytest.raises(OSError) as exc_info:
                 preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
         assert exc_info.value.args[0] == _errno.ENOSPC
+
+
+def test_apply_onnx_optimizations_no_separator():
+    """Cover lines 186-187 where audio_separator import fails during optimization."""
+    class MockSession:
+        _is_patched = False
+        def __init__(self, *args, **kwargs): pass
+
+    mock_ort = mock.MagicMock()
+    mock_ort.InferenceSession = MockSession
+    # Ensure apply_onnx_optimizations runs the patch logic
+    mock_ort.InferenceSession._is_patched = False
+
+    # We must patch builtins.__import__ to fail when importing audio_separator.separator
+    original_import = __import__
+
+    def failing_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "audio_separator.separator":
+            raise ImportError("Mocked ImportError")
+        return original_import(name, globals, locals, fromlist, level)
+
+    with mock.patch("modules.inference.preprocessing.ort", mock_ort):
+        with mock.patch("builtins.__import__", side_effect=failing_import):
+            preprocessing.apply_onnx_optimizations()
+            assert MockSession._is_patched is True
+
+
+def test_init_separator_already_initialized(prep_manager):
+    """Cover line 226 where separator is returned immediately if already initialized."""
+    mock_sep = mock.MagicMock()
+    prep_manager.separator = mock_sep
+    assert prep_manager._init_separator() is mock_sep
+
+
+def test_init_separator_accelerated(prep_manager):
+    """Cover lines 270-271 where hardware_acceleration_enabled is forced."""
+    mock_ort = mock.MagicMock()
+    mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider"]
+    mock_ort.__version__ = "1.24.1"
+
+    with mock.patch("modules.inference.preprocessing.ort", mock_ort):
+        with mock.patch("modules.inference.preprocessing._lazy_import_separator") as mock_imp:
+            mock_sep_cls = mock.MagicMock()
+            mock_imp.return_value = mock_sep_cls
+            mock_sep_inst = mock_sep_cls.return_value
+
+            prep_manager._device_type = "CUDA"
+            prep_manager._device_id = "CUDA"
+            sep = prep_manager._init_separator()
+
+            assert sep is not None
+            assert sep.hardware_acceleration_enabled is True
+
+
+def test_preprocess_audio_with_yield_cb(prep_manager):
+    """Cover lines 349 and 402 where yield_cb is called."""
+    with mock.patch("modules.inference.preprocessing.config") as mock_cfg:
+        mock_cfg.ENABLE_VOCAL_SEPARATION = True
+        mock_sep = mock.MagicMock()
+        mock_sep.separate.return_value = ["vocal.wav"]
+        prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+
+        mock_ort = mock.MagicMock()
+        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+        yield_called = [0]
+
+        def yield_cb():
+            yield_called[0] += 1
+
+        with mock.patch("modules.inference.preprocessing.ort", mock_ort):
+            with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
+                res = prep_manager.preprocess_audio("test.wav", yield_cb=yield_cb)
+                assert "vocal.wav" in res
+                assert yield_called[0] == 2
+
+
+def test_preprocess_audio_non_cpu_make_separator(prep_manager):
+    """Cover lines 370-379 (_make_separator) and 386 (non-CPU path)."""
+    with mock.patch("modules.inference.preprocessing.config") as mock_cfg:
+        mock_cfg.ENABLE_VOCAL_SEPARATION = True
+        mock_sep = mock.MagicMock()
+        # Mock separate to raise ENOSPC to trigger _make_separator logic
+        import errno
+        mock_sep.separate.side_effect = OSError(errno.ENOSPC, "No space")
+        prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+
+        mock_ort = mock.MagicMock()
+        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider"]
+        prep_manager._device_type = "CUDA"
+
+        # The fallback sep factory should be called.
+        # We need _make_separator to actually run and instantiate a new sep.
+        with mock.patch("modules.inference.preprocessing.ort", mock_ort):
+            with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
+                with mock.patch("modules.inference.preprocessing._lazy_import_separator") as mock_lazy_sep:
+                    # Provide a mock fallback separator
+                    mock_fallback_cls = mock.MagicMock()
+                    mock_lazy_sep.return_value = mock_fallback_cls
+                    mock_fallback_inst = mock.MagicMock()
+                    mock_fallback_inst.separate.return_value = ["fallback_vocal.wav"]
+                    mock_fallback_cls.return_value = mock_fallback_inst
+
+                    # Force candidate dirs to have a fallback
+                    with mock.patch("modules.inference.preprocessing._candidate_output_dirs", return_value=["/dir1", "/dir2"]):
+                        with mock.patch("os.makedirs"):
+                            with mock.patch("shutil.disk_usage", return_value=mock.MagicMock(free=0)):
+                                res = prep_manager.preprocess_audio("test.wav")
+                                assert "fallback_vocal.wav" in res
+                                mock_fallback_cls.assert_called_once()
+
+
+def test_preprocess_audio_no_stems(prep_manager):
+    """Cover line 422 where stems list is empty."""
+    with mock.patch("modules.inference.preprocessing.config") as mock_cfg:
+        mock_cfg.ENABLE_VOCAL_SEPARATION = True
+        mock_sep = mock.MagicMock()
+        mock_sep.separate.return_value = []
+        prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+
+        mock_ort = mock.MagicMock()
+        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+        with mock.patch("modules.inference.preprocessing.ort", mock_ort):
+            with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
+                res = prep_manager.preprocess_audio("test.wav")
+                assert res == "test.wav"

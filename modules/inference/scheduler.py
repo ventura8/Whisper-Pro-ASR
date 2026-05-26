@@ -123,10 +123,7 @@ def wait_for_priority():
     # Mark this thread as a priority thread for the duration of the task
     utils.THREAD_CONTEXT.is_priority = True
 
-    # 1. Hardware-aware enforcement: Limit concurrent priority tasks to available units
-    # The lock is now acquired by the caller via early_task_registration context manager
-    # to satisfy Pylint's structured 'with' block requirements.
-
+    # 1. Register priority request and request pause immediately to prevent race conditions
     do_pause = False
     with STATE.priority_lock:
         STATE.priority_requests += 1
@@ -151,6 +148,15 @@ def wait_for_priority():
             logger.info("[Scheduler] Priority request: Pausing other tasks...")
             STATE.pause_requested.set()
             STATE.resume_event.clear()
+
+    # 2. Wait until all active standard (non-priority) FFmpeg processes have completed.
+    # While we wait, standard tasks will see pause_requested as True and will not proceed to isolation/inference.
+    with utils.STANDARD_FFMPEG_COND:
+        while utils.STANDARD_FFMPEG_STATE["count"] > 0:
+            logger.info("[Scheduler] Priority task waiting for %d active standard FFmpeg processes to complete...",
+                        utils.STANDARD_FFMPEG_STATE["count"])
+            utils.STANDARD_FFMPEG_COND.wait()
+        logger.info("[Scheduler] All active standard FFmpeg processes completed. Proceeding with priority task.")
 
     if do_pause:
         # Wait for others to confirm they are paused

@@ -4,6 +4,7 @@ Service Monitoring Dashboard Template
 from modules.monitoring import telemetry
 from modules import utils
 from modules.monitoring import dashboard_ui
+from modules.monitoring import analytics_ui
 
 
 def get_status_data():
@@ -18,3 +19,8 @@ def get_status_data():
 def get_dashboard_html():
     """Returns the rendered HTML for the monitoring dashboard."""
     return dashboard_ui.get_dashboard_html()
+
+
+def get_analytics_html():
+    """Returns the rendered HTML for the analytics dashboard."""
+    return analytics_ui.get_analytics_html()

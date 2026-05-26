@@ -91,6 +91,11 @@ def clear_gpu_cache():
 # Semaphore to limit CPU-bound tasks (ASR, UVR on CPU, FFmpeg)
 _CPU_LOCK = threading.Semaphore(config.CPU_PARALLEL_LIMIT)
 
+# Track active standard (non-priority) FFmpeg processes to allow priority tasks to yield/wait appropriately
+STANDARD_FFMPEG_LOCK = threading.Lock()
+STANDARD_FFMPEG_STATE = {"count": 0}
+STANDARD_FFMPEG_COND = threading.Condition(STANDARD_FFMPEG_LOCK)
+
 
 @contextlib.contextmanager
 def cpu_lock_ctx():
@@ -182,37 +187,50 @@ def _convert_base(source_path, flags, rate, channels, tag="Prep"):
 
 def _run_ffmpeg_standardization(source_path, output_path, duration, flags=None):
     """Execute FFmpeg command with progress tracking."""
-    if flags is None:
-        flags = STANDARD_AUDIO_FLAGS
+    is_priority = getattr(THREAD_CONTEXT, "is_priority", False)
+    if not is_priority:
+        with STANDARD_FFMPEG_COND:
+            STANDARD_FFMPEG_STATE["count"] += 1
+            logger.debug("[Prep] Incrementing standard FFmpeg count: %d", STANDARD_FFMPEG_STATE["count"])
 
-    command = [
-        "ffmpeg",
-        "-threads", str(config.FFMPEG_THREADS),
-        "-thread_queue_size", "2048",
-        "-y",
-        "-loglevel", "error",
-        "-filter_threads", str(config.FFMPEG_THREADS),
-    ]
+    try:
+        if flags is None:
+            flags = STANDARD_AUDIO_FLAGS
 
-    # Hardware Acceleration Injection
-    if config.FFMPEG_HWACCEL.lower() != "none":
-        command.extend(["-hwaccel", config.FFMPEG_HWACCEL])
+        command = [
+            "ffmpeg",
+            "-threads", str(config.FFMPEG_THREADS),
+            "-thread_queue_size", "2048",
+            "-y",
+            "-loglevel", "error",
+            "-filter_threads", str(config.FFMPEG_THREADS),
+        ]
 
-    command.extend([
-        "-i", source_path,
-        "-progress", "pipe:1"
-    ] + flags + ["-af", STANDARD_NORMALIZATION_FILTERS, output_path])
+        # Hardware Acceleration Injection
+        if config.FFMPEG_HWACCEL.lower() != "none":
+            command.extend(["-hwaccel", config.FFMPEG_HWACCEL])
 
-    # Merge stderr into stdout to avoid deadlock when stderr buffer fills up
-    with subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True
-    ) as process:
-        final_speed = _parse_ffmpeg_progress(process, duration)
-        process.wait()
-        logger.info("[Prep] FFmpeg finished | Speed: %s", final_speed)
+        command.extend([
+            "-i", source_path,
+            "-progress", "pipe:1"
+        ] + flags + ["-af", STANDARD_NORMALIZATION_FILTERS, output_path])
 
-        if process.returncode != 0:
-            raise RuntimeError(f"FFmpeg failed with return code {process.returncode}")
+        # Merge stderr into stdout to avoid deadlock when stderr buffer fills up
+        with subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True
+        ) as process:
+            final_speed = _parse_ffmpeg_progress(process, duration)
+            process.wait()
+            logger.info("[Prep] FFmpeg finished | Speed: %s", final_speed)
+
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg failed with return code {process.returncode}")
+    finally:
+        if not is_priority:
+            with STANDARD_FFMPEG_COND:
+                STANDARD_FFMPEG_STATE["count"] = max(0, STANDARD_FFMPEG_STATE["count"] - 1)
+                logger.debug("[Prep] Decrementing standard FFmpeg count: %d", STANDARD_FFMPEG_STATE["count"])
+                STANDARD_FFMPEG_COND.notify_all()
 
 
 def _parse_ffmpeg_progress(process, duration):
@@ -264,7 +282,39 @@ def format_duration(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def generate_srt(result):
+def _wrap_text(text, max_line_width, max_line_count=None):
+    """Wraps text to max_line_width characters per line, up to max_line_count lines."""
+    if not text or not max_line_width:
+        return text
+
+    words = text.split()
+    lines = []
+    current_line = []
+    current_len = 0
+
+    for word in words:
+        word_len = len(word)
+        needed_space = word_len + (1 if current_line else 0)
+
+        if current_len + needed_space <= max_line_width:
+            current_line.append(word)
+            current_len += needed_space
+        else:
+            if current_line:
+                lines.append(" ".join(current_line))
+            current_line = [word]
+            current_len = word_len
+
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    if max_line_count:
+        lines = lines[:max_line_count]
+
+    return "\n".join(lines)
+
+
+def generate_srt(result, max_line_width=None, max_line_count=None):
     """
     Compose industrial-standard SubRip (SRT) content from segment metadata.
 
@@ -277,6 +327,8 @@ def generate_srt(result):
     if "segments" not in result:
         text = result.get("text", "").strip()
         if text:
+            if max_line_width is not None:
+                text = _wrap_text(text, max_line_width, max_line_count)
             return f"1\n00:00:00,000 --> 00:00:05,000\n{text}\n"
         return "[No dialogue detected]"
 
@@ -300,6 +352,12 @@ def generate_srt(result):
         start_fmt = format_timestamp(start_ts)
         end_fmt = format_timestamp(end_ts)
         text = segment.get("text", "").strip()
+        speaker = segment.get("speaker")
+        if speaker:
+            text = f"[{speaker}]: {text}"
+
+        if max_line_width is not None:
+            text = _wrap_text(text, max_line_width, max_line_count)
 
         # Format SRT block: Index -> Timestamps -> Content
         srt_lines.append(f"{idx}\n{start_fmt} --> {end_fmt}\n{text}\n")
@@ -318,7 +376,7 @@ def format_timestamp(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def generate_vtt(result):
+def generate_vtt(result, max_line_width=None, max_line_count=None):
     """
     Generate WebVTT content for web-native subtitles.
     """
@@ -330,6 +388,8 @@ def generate_vtt(result):
         # Fallback for text-only result
         text = result.get("text", "").strip()
         if text:
+            if max_line_width is not None:
+                text = _wrap_text(text, max_line_width, max_line_count)
             return f"WEBVTT\n\n00:00:00.000 --> 00:00:05.000\n{text}\n"
         return "WEBVTT\n\n[No dialogue detected]"
 
@@ -353,6 +413,12 @@ def generate_vtt(result):
         start_fmt = format_timestamp(start_ts).replace(',', '.')
         end_fmt = format_timestamp(end_ts).replace(',', '.')
         text = segment.get("text", "").strip()
+        speaker = segment.get("speaker")
+        if speaker:
+            text = f"[{speaker}]: {text}"
+
+        if max_line_width is not None:
+            text = _wrap_text(text, max_line_width, max_line_count)
 
         vtt_lines.append(f"{idx}\n{start_fmt} --> {end_fmt}\n{text}\n")
 
@@ -365,6 +431,17 @@ def generate_txt(result):
     """
     if not result:
         return ""
+    segments = result.get("segments")
+    if segments:
+        txt_lines = []
+        for segment in segments:
+            text = segment.get("text", "").strip()
+            speaker = segment.get("speaker")
+            if speaker:
+                txt_lines.append(f"[{speaker}]: {text}")
+            else:
+                txt_lines.append(text)
+        return "\n".join(txt_lines)
     return result.get("text", "").strip()
 
 
@@ -391,8 +468,11 @@ def generate_tsv(result):
 
             start_ms = int(start_ts * 1000)
             end_ms = int(end_ts * 1000)
-            text = segment.get("text", "").strip().replace(
-                "\t", " ").replace("\n", " ")
+            text = segment.get("text", "").strip()
+            speaker = segment.get("speaker")
+            if speaker:
+                text = f"[{speaker}]: {text}"
+            text = text.replace("\t", " ").replace("\n", " ")
 
             tsv_lines.append(f"{start_ms}\t{end_ms}\t{text}")
         except Exception:

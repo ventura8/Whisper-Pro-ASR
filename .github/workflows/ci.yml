@@ -121,3 +121,15 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.event.repository.html_url }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Update Docker Hub Description
+        if: >
+          github.ref == 'refs/heads/main' ||
+          startsWith(github.ref, 'refs/heads/release/') ||
+          startsWith(github.ref, 'refs/tags/v')
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ventura8/whisper-pro-asr
+          readme-filepath: ./docs/DOCKERHUB_DESCRIPTION.md

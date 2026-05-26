@@ -183,3 +183,51 @@ def test_system_routes_update_settings_all_fields(client):
         response = client.post('/system/settings', data=json.dumps(payload), content_type='application/json')
         assert response.status_code == 200
         assert mock_upd.call_count == 3
+
+
+def test_analytics_json(client):
+    """Test /analytics endpoint JSON response."""
+    mock_analytics_data = {
+        "cumulative": {
+            "all_time": 100.0,
+            "today": 10.0,
+            "this_month": 50.0,
+            "this_year": 100.0,
+            "count_all_time": 5,
+            "count_today": 1
+        },
+        "daily": {
+            "2026-05-26": {"count": 1, "duration": 10.0}
+        }
+    }
+    with mock.patch("modules.monitoring.history_manager.get_analytics_data", return_value=mock_analytics_data):
+        response = client.get('/analytics', headers={'Accept': 'application/json'})
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["cumulative"]["count_all_time"] == 5
+        assert "2026-05-26" in data["daily"]
+
+        # Also test with /system/analytics
+        response_sys = client.get('/system/analytics', headers={'Accept': 'application/json'})
+        assert response_sys.status_code == 200
+        data_sys = json.loads(response_sys.data)
+        assert data_sys["cumulative"]["count_all_time"] == 5
+
+
+def test_analytics_html(client):
+    """Test /analytics endpoint HTML response."""
+    with mock.patch("modules.monitoring.dashboard.get_analytics_html", return_value="<h1>Analytics</h1>"):
+        response = client.get('/analytics', headers={'Accept': 'text/html'})
+        assert response.status_code == 200
+        assert b"Analytics" in response.data
+
+        response_sys = client.get('/system/analytics', headers={'Accept': 'text/html'})
+        assert response_sys.status_code == 200
+        assert b"Analytics" in response_sys.data
+
+
+def test_swagger_theme_static(client):
+    """Test retrieving the custom swagger auto dark/light theme CSS."""
+    response = client.get('/static/swagger-theme.css')
+    assert response.status_code == 200
+    assert b"prefers-color-scheme" in response.data

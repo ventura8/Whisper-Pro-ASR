@@ -1,4 +1,5 @@
 """Tests for modules/inference/vad.py."""
+# pylint: disable=protected-access, redefined-outer-name
 from unittest import mock
 import numpy as np
 import pytest
@@ -189,3 +190,66 @@ def test_get_speech_timestamps_wrapped_exceptions():
         vad.fw_get_ts = orig_fw_get_ts
         vad._VAD_STATE["wrapped"] = False
         vad._VAD_STATE["wrapped_func"] = None
+
+
+def test_get_speech_timestamps_wrapped_exception():
+    """Test exception path inside get_speech_timestamps_wrapped."""
+    vad._VAD_STATE["wrapped"] = False
+    vad._VAD_STATE["wrapped_func"] = None
+
+    # Return list of dicts that misses 'end'/'start' keys to raise KeyError during sum
+    mock_orig_get_ts = mock.MagicMock()
+    mock_orig_get_ts.return_value = [{"invalid_key": 100}]
+
+    orig_fw_get_ts = vad.fw_get_ts
+    vad.fw_get_ts = mock_orig_get_ts
+
+    try:
+        fw_get_ts_wrapped, _, _ = vad._lazy_import_vad()
+        audio = np.zeros(16000)
+
+        with mock.patch("modules.inference.vad.logger") as mock_logger:
+            res = fw_get_ts_wrapped(audio)
+            # Should catch exception and log debug message
+            mock_logger.debug.assert_called_once()
+            assert res == [{"invalid_key": 100}]
+    finally:
+        vad.fw_get_ts = orig_fw_get_ts
+        vad._VAD_STATE["wrapped"] = False
+        vad._VAD_STATE["wrapped_func"] = None
+
+
+def test_lazy_import_vad_sys_modules_exception():
+    """Test exception path inside _lazy_import_vad's sys.modules loop."""
+    vad._VAD_STATE["wrapped"] = False
+    vad._VAD_STATE["wrapped_func"] = None
+
+    mock_orig_get_ts = mock.MagicMock()
+    orig_fw_get_ts = vad.fw_get_ts
+    vad.fw_get_ts = mock_orig_get_ts
+
+    # Mock sys.modules.items to raise an exception
+    with mock.patch("sys.modules", mock.MagicMock(items=mock.Mock(side_effect=RuntimeError("sys.modules mock error")))):
+        try:
+            # Should catch exception gracefully and not crash
+            vad._lazy_import_vad()
+        finally:
+            vad.fw_get_ts = orig_fw_get_ts
+            vad._VAD_STATE["wrapped"] = False
+            vad._VAD_STATE["wrapped_func"] = None
+
+
+def test_get_speech_timestamps_from_path_exception():
+    """Test get_speech_timestamps_from_path handles exceptions gracefully."""
+    with mock.patch("modules.inference.vad.decode_audio", side_effect=RuntimeError("Decoding mock error")):
+        with mock.patch("modules.inference.vad.logger") as mock_logger:
+            res = vad.get_speech_timestamps_from_path("dummy.wav")
+            assert res == []
+            mock_logger.error.assert_called_once()
+
+
+def test_get_speech_timestamps_missing_dependencies():
+    """Test get_speech_timestamps returns [] when VAD components are missing."""
+    with mock.patch("modules.inference.vad._lazy_import_vad", return_value=(None, None, None)):
+        res = vad.get_speech_timestamps(np.zeros(16000))
+        assert res == []

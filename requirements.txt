@@ -6,9 +6,10 @@ flasgger~=0.9.7.1
 # Whisper Inference (CPU Optimized)
 faster-whisper~=1.2.1
 tokenizers~=0.21.0
-ctranslate2~=4.7.1
-torch~=2.11.0
-torchaudio~=2.11.0
+ctranslate2>=4.5.0
+torch~=2.8.0
+torchaudio~=2.8.0
+torchvision~=0.23.0
 
 # Configuration & Utilities
 colorlog~=6.10.1
@@ -29,4 +30,5 @@ openvino-genai~=2026.1.0
 openvino-tokenizers~=2026.1.0
 numpy~=2.4.0
 transformers~=4.48.2
-huggingface-hub~=0.27.1
+huggingface-hub~=0.32.6
+whisperx>=3.8.6
