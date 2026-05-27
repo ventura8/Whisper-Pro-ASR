@@ -10,13 +10,15 @@ import logging
 import shutil
 import tempfile
 import importlib
+from modules.constants import HALLUCINATION_PHRASES  # pylint: disable=unused-import
+
 
 # Set up early logger for configuration phase
 logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 HARDWARE_UNITS = []  # Global registry for accelerator orchestration
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
@@ -483,36 +485,3 @@ LD_MIN_CONFIDENCE = float(os.environ.get("LD_MIN_CONFIDENCE", 0.5))
 # Known "silence" or "credit" hallucination phrases for removal during post-processing
 HALLUCINATION_SILENCE_THRESHOLD = float(os.environ.get("HALLUCINATION_SILENCE_THRESHOLD", 0.85))
 HALLUCINATION_REPETITION_THRESHOLD = int(os.environ.get("HALLUCINATION_REPETITION_THRESHOLD", 15))
-
-HALLUCINATION_PHRASES = [
-    # Romanian
-    "nu uitați să dați like", "nu uitati sa dati like",
-    "să lăsați un comentariu", "sa lasati un comentariu",
-    "să distribuiți", "sa distribuiti",
-    "abonați-vă la canal", "abonati-va la canal",
-    "nu uitați să vă abonați", "nu uitati sa va abonati",
-    "pentru a nu rata videoclipurile noastre",
-    "nu uitați să dați like, să lăsați un comentariu și "
-    "să distribuiți acest material video pe alte rețele sociale",
-    "nu uitati sa dati like, sa lasati un comentariu si "
-    "sa distribuiti acest material video pe alte retele sociale",
-    "nu uitați să vă abonați la canal, să vă mulțumim și la rețeta următoare",
-    "abonati-va la canal, sa va multumim si la reteta urmatoare",
-    "vă mulțumim pentru vizionare", "va multumim pentru vizionare",
-    "nu uitați să apăsați butonul de like",
-    # English
-    "thank you for watching", "thanks for watching",
-    "subscribe to my channel", "please subscribe",
-    "like and subscribe", "hit the like button",
-    "leave a comment", "share this video",
-    "see you in the next", "bye bye",
-    # French
-    "merci d'avoir regardé", "n'oubliez pas de vous abonner",
-    "laissez un commentaire", "à bientôt",
-    # German
-    "danke fürs zuschauen", "vergisst nicht zu abonnieren",
-    # Spanish
-    "gracias por ver", "no olvides suscribirte",
-    # Italian
-    "grazie per aver guardato", "non dimenticare di iscriverti",
-]

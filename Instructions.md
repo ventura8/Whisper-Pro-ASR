@@ -102,6 +102,13 @@ docker build -t whisper-npu-test -f Dockerfile.test .
 # Run the suite (Pylint + Pytest + Coverage)
 docker run --rm whisper-npu-test
 ```
+
+## Release Notes v1.1.1
+- **FIX**: Resolved all pylint complexity warnings (`too-many-locals` and `too-many-positional-arguments` in `diarization.py`) by converting `run_diarization` parameters to keyword-only and extracting sub-helpers.
+- **FIX**: Eliminated static and runtime cyclic imports between `model_manager`, `concurrency`, and `language_detection_core` using runtime `sys.modules` lookup.
+- **FEAT**: Standardized duration metrics formatting across analytics pages to a unified, zero-padded `dd:hh:mm:ss` display.
+- **TEST**: Passed all 345 unit/integration tests with a final **95.24%** coverage and a clean **10.00/10** score on all files under `pylint`.
+
 ## Release Notes v1.1.0
 - **FEAT**: Integrated automatic Speaker Diarization using the WhisperX alignment, PyAnnote diarization, and speaker assignment pipeline, including per-device pools caching.
 - **FEAT**: Added custom subtitle formatting controls (`max_line_width`, `max_line_count`) across SRT and VTT formatters.

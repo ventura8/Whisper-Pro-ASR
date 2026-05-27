@@ -91,6 +91,7 @@ services:
 - **Proactive Resource Reclamation**: Automatically offloads heavy models and clears hardware caches (CUDA/NPU) only when the queue is empty.
 - **Weighted Multi-Segment Voting**: Aggregates probabilities from multiple zones with confidence-weighted averaging for industrial-strength accuracy.
 - **Advanced Memory Hygiene**: Implements a "Nuclear Purge" strategy using `malloc_trim` and ctranslate2 cache clearing to ensure idle memory remains below 500MB even after heavy ASR sessions.
+- **Telemetry Downsampling**: Dual-layer downsampling (server-side and client-side) caps telemetry chart data at 300 points, ensuring smooth dashboard rendering even after extended operation.
 - **Centralized Storage Hygiene**: Features a thread-local tracking system that registers every transient asset (uploads, HQ prep files, isolated stems) created during a request. The system ensures a **100% cleanup rate** by purging all tracked files immediately upon request completion or failure.
 - **On-Demand History Tiering**: Implements a dual-tier storage strategy. The dashboard and RAM are strictly capped at the last 20 tasks, while a durable history of up to 1000 tasks is maintained on the persistent volume.
 - **Hardened Diagnostic Logging**: System logs (`whisper_pro.log`) are redirected to the persistent state volume with real-time flush-to-disk logic. Log downloads are optimized with zero-caching headers to ensure the latest diagnostic data is always available.
@@ -288,6 +289,12 @@ Health-check endpoint returning model metadata, hardware status, and versioning 
 **GET** `/dashboard` (or **GET** `/` via Browser)  
 Interactive Material Design interface for real-time monitoring of task progress, hardware utilization, and application memory.
 
+**GET** `/analytics` (or **GET** `/analytics` via Browser)  
+Cumulative and daily analytics dashboard with interactive charts, providing breakdown of task counts, durations, and usage patterns.
+
+**GET/POST** `/settings`  
+View or dynamically update service configuration (model, device, telemetry retention) at runtime without container restart.
+
 ---
 
 ## 📺 Bazarr Configuration
@@ -316,14 +323,36 @@ To use this service with **Bazarr**:
 /
 ├── whisper_pro_asr.py        # Master entry point
 ├── modules/                 # Service Logic
-│   ├── api/                 # API Routes (ASR, Detection, System)
-│   ├── inference/           # ML Engine (Model Manager, Scheduler, VAD, UVR, Diarization)
+│   ├── bootstrap.py         # Hardware path patching & library redirection
+│   ├── api/                 # API Routes
+│   │   ├── routes_asr.py    # /asr, /v1/audio/transcriptions, /v1/audio/translations
+│   │   ├── routes_detect.py # /detect-language
+│   │   ├── routes_system.py # /dashboard, /status, /settings, /analytics, /history
+│   │   └── routes_utils.py  # Shared request utilities & file handling
+│   ├── inference/           # ML Engine
+│   │   ├── model_manager.py # Model pool, transcription, diarization, idle monitoring
+│   │   ├── scheduler.py     # Re-entrant locks & hardware orchestration
+│   │   ├── language_detection.py  # Batch language identification pipeline
+│   │   ├── preprocessing.py # UVR vocal separation
+│   │   ├── vad.py           # Voice Activity Detection
+│   │   └── intel_engine.py  # Intel NPU/GPU engine adapter
 │   ├── monitoring/          # Dashboard, Telemetry & Metrics
+│   │   ├── dashboard.py     # Dashboard entry point
+│   │   ├── dashboard_ui.py  # Material Design HTML dashboard
+│   │   ├── analytics_ui.py  # Analytics dashboard HTML
+│   │   ├── telemetry.py     # Real-time telemetry collection
+│   │   ├── telemetry_manager.py  # Persistent telemetry history
+│   │   ├── history_manager.py    # Task history (dual-tier storage)
+│   │   └── metrics_discovery.py  # Hardware metrics detection
 │   ├── config.py            # Global Settings (HF_TOKEN, MODEL_IDLE_TIMEOUT, etc.)
 │   ├── logging_setup.py     # Task-specific Logging
 │   └── utils.py             # System & Audio Utilities (subtitle wrapping, speaker labels)
 ├── tests/                   # Performance & Unit Test Suites
-│   └── inference/           # Diarization, Improvements, Concurrency tests
+│   ├── inference/           # Diarization, Language Detection, Concurrency tests
+│   ├── integration/         # Route, Server, and Robustness tests
+│   ├── monitoring/          # Dashboard, History, Telemetry tests
+│   ├── performance/         # Coverage, RAM, SSD optimization tests
+│   └── unit/                # Config, Logging, Utils tests
 ├── Dockerfile               # Packaging Definition
 └── docker-compose.yml       # Orchestration Template
 ```

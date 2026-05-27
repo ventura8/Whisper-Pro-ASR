@@ -3,10 +3,10 @@
 ## Endpoints
 
 ### `GET /`
-Health check. Returns JSON with service identity.
+Health check and dashboard entry point. Returns JSON with service identity when called programmatically, or renders the HTML monitoring dashboard when accessed via browser (`Accept: text/html`).
 
 ### `GET /status`
-Returns hardware pool status, active sessions, and version.
+Returns hardware pool status, active sessions, telemetry history, and version.
 
 ### `POST /detect-language`
 Detect audio language with **High Priority**. All media inputs are automatically standardized to **16kHz Mono/Stereo WAV** before entering the voting consensus, ensuring maximum compatibility across Intel iGPU/NPU and NVIDIA backends.
@@ -87,6 +87,82 @@ curl -X POST -F "audio_file=@video.mp4" "http://localhost:9000/asr?output=vtt&ma
 # With ASR tuning
 curl -X POST -F "audio_file=@video.mp4" "http://localhost:9000/asr?initial_prompt=Medical%20terminology&vad_filter=true&word_timestamps=true"
 ```
+
+### `POST /v1/audio/translations`
+OpenAI-compatible translation endpoint. Behaves identically to `/asr` with `task=translate`. Accepts the same parameters.
+
+---
+
+## System Management Endpoints
+
+### `GET /analytics`
+Returns cumulative and daily breakdown of task counts and durations. When accessed via browser (`Accept: text/html`), renders a dedicated analytics dashboard with interactive charts.
+
+```bash
+# JSON response
+curl http://localhost:9000/analytics
+
+# HTML dashboard (open in browser)
+http://localhost:9000/analytics
+```
+
+### `GET/POST /settings`
+View or update service settings at runtime.
+
+**GET**: Returns current configuration values (`ASR_MODEL`, `ASR_DEVICE`, `TELEMETRY_RETENTION_HOURS`).
+
+**POST** (JSON body):
+| Field | Type | Description |
+|:---|:---|:---|
+| `ASR_MODEL` | string | Update the active model (triggers reload) |
+| `ASR_DEVICE` | string | Update inference target |
+| `telemetry_retention_hours` | int | Telemetry history retention |
+| `log_retention_days` | int | Log file retention period |
+
+```bash
+# View settings
+curl http://localhost:9000/settings
+
+# Update model
+curl -X POST -H "Content-Type: application/json" -d '{"ASR_MODEL": "Systran/faster-whisper-large-v3"}' http://localhost:9000/settings
+```
+
+### `GET /history`
+Retrieves the full list of completed and active tasks from persistent storage.
+
+```bash
+curl http://localhost:9000/history
+```
+
+### `POST /system/history/clear`
+Purges all task records from the history manager.
+
+```bash
+curl -X POST http://localhost:9000/system/history/clear
+```
+
+### `POST /system/cleanup`
+Manually triggers removal of old temporary audio files and transient assets.
+
+```bash
+curl -X POST http://localhost:9000/system/cleanup
+```
+
+### `GET /logs/download`
+Downloads the system log file (`whisper_pro.log`) with forced flush-to-disk and zero-caching headers for guaranteed freshness.
+
+```bash
+curl -O http://localhost:9000/logs/download
+```
+
+### `GET /help`
+API discovery endpoint. Returns a list of all available endpoints and a link to the Swagger documentation.
+
+```bash
+curl http://localhost:9000/help
+```
+
+---
 
 ## Bazarr Integration
 1. Settings → Providers → Whisper

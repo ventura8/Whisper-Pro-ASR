@@ -6,11 +6,13 @@ import logging
 import threading
 import time
 import gc
-import contextlib
 import os
 import ctypes
 from modules import config, logging_setup, utils
-from modules.inference import preprocessing, vad, scheduler
+from modules.inference import preprocessing, vad, scheduler, post_processing, diarization
+
+_post_process_results = post_processing.post_process_results
+
 
 # Lazy load containers for engines
 _ENGINES = {
@@ -46,8 +48,8 @@ logger = logging.getLogger(__name__)
 
 _MODEL_POOL = {}
 _PREPROCESSOR_POOL = {}
-_DIARIZE_POOL = {}
-_ALIGN_POOL = {}
+_ALIGN_POOL = diarization._ALIGN_POOL  # pylint: disable=protected-access
+_DIARIZE_POOL = diarization._DIARIZE_POOL  # pylint: disable=protected-access
 
 _LIFECYCLE_STATE = {
     "last_activity": time.time(),
@@ -136,6 +138,8 @@ def _init_unit(unit):
 
 
 # pylint: disable=too-many-locals,too-many-positional-arguments
+
+
 def run_transcription(
     audio_path, language, task, diarize=False, min_speakers=None,
     max_speakers=None, hf_token=None, initial_prompt=None,
@@ -198,84 +202,16 @@ def run_transcription(
                                 progress, f"{verb} (Seg {len(raw_segments)} | {time_ratio})")
 
                     if raw_segments:
-                        # Find hardware unit to resolve device
-                        unit = next((u for u in config.HARDWARE_UNITS if u['id'] == unit_id), None)
-                        unit_type = unit['type'] if unit else 'CPU'
-                        whisperx_device = 'cuda' if unit_type == 'CUDA' else 'cpu'
-
-                        # Lazy import whisperx
-                        import whisperx  # pylint: disable=import-outside-toplevel,import-error
-
-                        # 2. Get/load alignment model
-                        scheduler.update_task_progress(83, "Loading Alignment Model")
-                        lang_code = info.language or language or "en"
-                        align_key = (unit_id, lang_code)
-                        if align_key in _ALIGN_POOL:
-                            model_a, metadata = _ALIGN_POOL[align_key]
-                        else:
-                            logger.info("[Diarization] Loading alignment model for language: %s on %s", lang_code, whisperx_device)
-                            model_a, metadata = whisperx.load_align_model(
-                                language_code=lang_code,
-                                device=whisperx_device
-                            )
-                            _ALIGN_POOL[align_key] = (model_a, metadata)
-
-                        # 3. Align segments
-                        scheduler.update_task_progress(85, "Aligning Transcription")
-                        logger.info("[Diarization] Aligning segments...")
-                        audio = whisperx.load_audio(processed_path)
-                        alignment_result = whisperx.align(
-                            raw_segments,
-                            model_a,
-                            metadata,
-                            audio,
-                            device=whisperx_device,
-                            return_char_alignments=False
-                        )
-
-                        # 4. Diarization pipeline
-                        token = hf_token or config.HF_TOKEN
-                        if not token:
-                            raise ValueError(
-                                "HF_TOKEN is required for speaker diarization. "
-                                "Please set HF_TOKEN environment variable or pass hf_token parameter."
-                            )
-
-                        if unit_id in _DIARIZE_POOL:
-                            diarize_pipeline = _DIARIZE_POOL[unit_id]
-                        else:
-                            scheduler.update_task_progress(90, "Loading Diarization Model")
-                            logger.info("[Diarization] Loading diarization pipeline on %s...", whisperx_device)
-                            diarize_pipeline = whisperx.diarization.DiarizationPipeline(  # pylint: disable=no-member
-                                use_auth_token=token,
-                                device=whisperx_device
-                            )
-                            _DIARIZE_POOL[unit_id] = diarize_pipeline
-
-                        # Run diarization
-                        scheduler.update_task_progress(93, "Diarizing Speakers")
-                        logger.info("[Diarization] Running speaker diarization...")
-                        diarize_segments = diarize_pipeline(
-                            audio,
+                        results = diarization.run_diarization(
+                            processed_path=processed_path,
+                            raw_segments=raw_segments,
+                            info=info,
+                            language=language,
                             min_speakers=min_speakers,
-                            max_speakers=max_speakers
+                            max_speakers=max_speakers,
+                            hf_token=hf_token,
+                            unit_id=unit_id
                         )
-
-                        # 5. Assign speakers
-                        scheduler.update_task_progress(97, "Assigning Speakers")
-                        logger.info("[Diarization] Assigning speakers to segments...")
-                        alignment_result = whisperx.assign_word_speakers(diarize_segments, alignment_result)
-
-                        # 6. Format back to results
-                        results = []
-                        for seg in alignment_result["segments"]:
-                            seg_text = seg.get("text", "").strip()
-                            results.append({
-                                "start": round(seg.get("start", 0.0), 2),
-                                "end": round(seg.get("end", 0.0), 2),
-                                "text": seg_text,
-                                "speaker": seg.get("speaker")
-                            })
                     else:
                         results = []
                 except Exception as diarize_err:  # pylint: disable=broad-exception-caught
@@ -334,7 +270,7 @@ def run_transcription(
             }
 
             # Apply hallucination filters
-            res = _post_process_results(res)
+            res = post_processing.post_process_results(res)
 
             res["text"] = utils.generate_srt(res)
             scheduler.update_task_metadata(result=res, status="completed", progress=100)
@@ -345,49 +281,6 @@ def run_transcription(
                     os.remove(processed_path)
                 except (IOError, OSError) as cleanup_err:
                     logger.debug("[Engine] Failed to clean up isolated file: %s", cleanup_err)
-
-
-def _post_process_results(result, _audio_path=None):
-    """Applies quality filters to the raw transcription output."""
-    if not result or "segments" not in result:
-        return result
-
-    segments = result["segments"]
-    if not segments:
-        return result
-
-    processed_segments = []
-    repetition_count = 0
-    last_text = ""
-
-    for seg in segments:
-        text = seg.get("text", "").strip()
-        prob = seg.get("probability", 1.0)  # probability might not be in all engines
-
-        # 1. Silence/Low confidence filter
-        if prob < config.HALLUCINATION_SILENCE_THRESHOLD:
-            seg["text"] = ""
-            logger.debug("[Filter] Dropped segment due to low confidence (%.2f)", prob)
-
-        # 2. Phrase filter
-        elif any(phrase.lower() in text.lower() for phrase in config.HALLUCINATION_PHRASES):
-            seg["text"] = ""
-            logger.debug("[Filter] Dropped segment containing hallucination phrase")
-
-        # 3. Repetition filter
-        elif text == last_text and text != "":
-            repetition_count += 1
-            if repetition_count >= config.HALLUCINATION_REPETITION_THRESHOLD:
-                seg["text"] = ""
-                logger.debug("[Filter] Dropped repetitive segment")
-        else:
-            repetition_count = 0
-            last_text = text
-
-        processed_segments.append(seg)
-
-    result["segments"] = processed_segments
-    return result
 
 
 def run_vocal_isolation(audio_path, force=False):
@@ -413,100 +306,14 @@ def run_vocal_isolation_direct(audio_path, unit_id, force=False):
     return result_path
 
 
-def run_language_detection(audio_path):
-    """Optimized language detection using the faster detect_language API."""
-    start_time = time.time()
-    with model_lock_ctx() as (model, _):
-        scheduler.update_task_progress(5, "Detection")
-        res = run_language_detection_core(model, audio_path)
-        res['performance'] = {"inference_sec": round(time.time() - start_time, 2)}
-        res['segments_processed'] = 1
-        scheduler.update_task_metadata(result=res)
-        return res
-
-
-def run_batch_language_detection(audio_path, segment_count):
-    """High-performance multi-segment identification scan."""
-    with model_lock_ctx() as (model, _):
-        return run_batch_language_detection_direct(model, audio_path, segment_count)
-
-
-def run_batch_language_detection_direct(model, audio_path, segment_count):
-    """Direct batch detection without re-acquiring the lock."""
-    full_audio = None
-    try:
-        full_audio = vad.decode_audio(audio_path)
-        # Split montage into individual 30s segments
-        results = []
-        segment_len = int(30 * 16000)
-        for i in range(segment_count):
-            start = i * segment_len
-            end = min(start + segment_len, len(full_audio))
-            if start >= len(full_audio):
-                break
-
-            # Use .copy() to avoid keeping the full array alive via views
-            chunk = full_audio[start:end].copy()
-            results.append(run_language_detection_core(model, chunk, skip_vad=False))
-
-            # Granular progress for voting (Maps 60% -> 95%)
-            progress = 60 + int(((i + 1) / segment_count) * 35)
-            stage = f"Inference ({i+1}/{segment_count})"
-            logger.info("[Engine] %s...", stage)
-            scheduler.update_task_progress(progress, stage)
-        return results
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("[Engine] Batch detection failed: %s", e)
-        return []
-    finally:
-        if full_audio is not None:
-            del full_audio
-        # Ensure results don't hold any references to the original buffer
-        gc.collect()
-
-
-def run_language_detection_core(model, audio_input, skip_vad=False):
-    """Internal core using detect_language optimization."""
-    if not skip_vad:
-        if isinstance(audio_input, str):
-            speech_ts = vad.get_speech_timestamps_from_path(audio_input, threshold=config.LD_VAD_THRESHOLD)
-        else:
-            speech_ts = vad.get_speech_timestamps(audio_input, threshold=config.LD_VAD_THRESHOLD)
-
-        if not speech_ts:
-            return {
-                "detected_language": "en",
-                "language": "en",
-                "confidence": 0.0,
-                "all_probabilities": {"en": 0.0}
-            }
-
-    try:
-        # Optimization: Use detect_language to avoid full decoding
-        if isinstance(audio_input, str):
-            audio_input = vad.decode_audio(audio_input)
-
-        if hasattr(audio_input, 'astype'):
-            audio_input = audio_input.astype('float32')
-
-        lang_code, lang_prob, all_probs_list = model.detect_language(audio_input)
-        logger.info("[Engine] Identified: %s (%.1f%%)", lang_code, lang_prob * 100)
-        return {
-            "detected_language": lang_code,
-            "language": lang_code,
-            "confidence": lang_prob,
-            "all_probabilities": dict(all_probs_list) if all_probs_list else {lang_code: lang_prob}
-        }
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.info("[Engine] detect_language fallback: %s", e)
-        # Fallback to minimal transcribe
-        _, info = model.transcribe(audio_input, beam_size=1, task="transcribe")
-        return {
-            "detected_language": info.language,
-            "language": info.language,
-            "confidence": info.language_probability,
-            "all_probabilities": dict(info.all_language_probs) if info.all_language_probs else {}
-        }
+# fmt: off
+from modules.inference.language_detection_core import (  # pylint: disable=wrong-import-position, unused-import
+    run_language_detection,
+    run_batch_language_detection,
+    run_batch_language_detection_direct,
+    run_language_detection_core
+)
+# fmt: on
 
 
 def update_task_result(_audio_path, result):
@@ -514,136 +321,9 @@ def update_task_result(_audio_path, result):
     scheduler.update_task_metadata(result=result)
 
 
-@contextlib.contextmanager
-def model_lock_ctx(priority=None):
-    """Hardware resource acquisition context with priority borrowing support."""
-    is_priority = priority if priority is not None else getattr(
-        utils.THREAD_CONTEXT, "is_priority", False)
-    unit = None
-    borrowed = False
-
-    # 1. Acquisition logic
-    queued_added = False
-    try:
-        while not unit:
-            if is_priority:
-                borrowed_unit_id = scheduler.get_preemptible_unit()
-                if borrowed_unit_id:
-                    unit = next(
-                        (u for u in config.HARDWARE_UNITS if u['id'] == borrowed_unit_id), None)
-                    if unit:
-                        logger.info("[Engine] Priority task borrowed unit %s", unit['id'])
-                        borrowed = True
-                        break
-
-            # If there are any priority tasks queued or running, standard tasks must yield
-            has_priority = False
-            with scheduler.STATE.task_registry_lock:
-                has_priority = any(t.get('is_priority', False) for t in scheduler.STATE.task_registry.values())
-
-            if not is_priority and has_priority:
-                if not queued_added:
-                    scheduler.update_task_metadata(status="queued")
-                    scheduler.update_task_progress(None, "Waiting for Hardware")
-                    scheduler.increment_queued_session()
-                    queued_added = True
-                time.sleep(0.5)
-                continue
-
-            if scheduler.STATE.model_lock.acquire(blocking=False):
-                unit = scheduler.STATE.hw_pool.get()
-                break
-
-            if not queued_added:
-                scheduler.update_task_metadata(status="queued")
-                scheduler.update_task_progress(None, "Waiting for Hardware")
-                scheduler.increment_queued_session()
-                queued_added = True
-
-            if not is_priority:
-                # Standard task: Wait on semaphore with a short timeout to check for new priority tasks
-                if scheduler.STATE.model_lock.acquire(timeout=0.5):
-                    unit = scheduler.STATE.hw_pool.get()
-                    break
-            else:
-                # Priority task: Loop until a unit is preempted or a slot opens
-                time.sleep(0.5)
-    finally:
-        if queued_added:
-            scheduler.decrement_queued_session()
-
-    scheduler.update_task_metadata(status="active", start_active=time.time(), unit_id=unit['id'])
-    try:
-        if unit['id'] not in _MODEL_POOL:
-            _init_unit(unit)
-
-        if unit['id'] not in _PREPROCESSOR_POOL:
-            _PREPROCESSOR_POOL[unit['id']] = preprocessing.PreprocessingManager(unit)
-
-        model = _MODEL_POOL.get(unit['id'])
-        if model is None:
-            raise RuntimeError(f"Engine pool for {unit['id']} is empty after initialization.")
-
-        scheduler.update_task_metadata(
-            unit_id=unit['id'],
-            unit_type=unit['type'],
-            unit_name=unit['name'],
-            status="active"
-        )
-        yield model, unit['id']
-    finally:
-        if borrowed:
-            # Return unit to preemptible pool so the original task can take it back
-            scheduler.mark_unit_preemptible(unit['id'])
-            logger.info("[Engine] Priority task finished with borrowed unit %s", unit['id'])
-        else:
-            scheduler.STATE.hw_pool.put(unit)
-            scheduler.STATE.model_lock.release()
-
-
-def _check_preemption():
-    """Yields execution if a priority task is waiting."""
-    if scheduler.STATE.pause_requested.is_set():
-        thread_id = threading.get_ident()
-        unit_id = None
-        old_status = "active"
-        is_priority = False
-        with scheduler.STATE.task_registry_lock:
-            task = scheduler.STATE.task_registry.get(thread_id)
-            if task:
-                unit_id = task.get('unit_id')
-                old_status = task.get('status', 'active')
-                is_priority = task.get('is_priority', False)
-
-        if is_priority:
-            # Priority tasks are never preempted
-            return
-
-        if unit_id:
-            logger.info("[Engine] Preempting task on %s...", unit_id)
-            old_stage = task.get('stage')
-
-            # Temporarily mark task as queued during preemption/pause
-            scheduler.update_task_metadata(status="queued")
-            scheduler.update_task_progress(task.get('progress'), "Paused for Priority Task")
-
-            scheduler.mark_unit_preemptible(unit_id)
-            scheduler.STATE.pause_confirmed.set()
-            scheduler.STATE.resume_event.wait()
-
-            # Wait until our unit is no longer "borrowed"
-            while True:
-                with scheduler.STATE.task_registry_lock:
-                    if unit_id in scheduler.STATE.preemptible_units:
-                        # It's back in the pool, we can take it
-                        scheduler.STATE.preemptible_units.remove(unit_id)
-                        break
-                time.sleep(0.5)
-
-            scheduler.STATE.pause_confirmed.clear()
-            scheduler.update_task_metadata(status=old_status)
-            scheduler.update_task_progress(task.get('progress'), old_stage)
-            logger.info("[Engine] Resuming task on %s", unit_id)
+# fmt: off
+from modules.inference.concurrency import model_lock_ctx, _check_preemption  # pylint: disable=wrong-import-position, unused-import
+# fmt: on
 
 
 def unload_models():

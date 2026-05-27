@@ -74,6 +74,10 @@ def get_service_stats():
     with _TELEMETRY_LOCK:
         telemetry_snap = TELEMETRY_HISTORY[:]
 
+    # Downsample telemetry history to a maximum of 300 points for dashboard rendering performance
+    if len(telemetry_snap) > 300:
+        telemetry_snap = [telemetry_snap[int(i * len(telemetry_snap) / 299.0)] for i in range(299)] + [telemetry_snap[-1]]
+
     # Precise counters based on task registry status
     actual_active = sum(1 for t in tasks if t.get('status') in ['active', 'initializing'])
     actual_queued = sum(1 for t in tasks if t.get('status') == 'queued')

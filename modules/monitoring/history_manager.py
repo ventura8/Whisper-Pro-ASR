@@ -105,7 +105,8 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
         _ensure_loaded()
 
         # Add completion metadata
-        task_data["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if "completed_at" not in task_data:
+            task_data["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         start_time = task_data.get("start_time", time.time())
         start_active = task_data.get("start_active")
 

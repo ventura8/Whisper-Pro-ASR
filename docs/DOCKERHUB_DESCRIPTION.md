@@ -92,6 +92,9 @@ To use this service with **Bazarr**:
 - **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt`, `vad_filter`, and `word_timestamps`.
 - **Subtitle Layout Control**: Custom character-per-line wrapping (`max_line_width`) and max line limits (`max_line_count`) for SRT/VTT output.
 - **Smart Model Lifecycle**: Configurable idle timeout (`MODEL_IDLE_TIMEOUT`) keeps models warm in memory for rapid response to bursty workloads.
+- **Service Analytics Dashboard**: Dedicated `/analytics` page with interactive charts showing cumulative and daily breakdown of task counts and durations.
+- **Runtime Configuration**: Dynamic `/settings` endpoint allows model, device, and retention changes without container restart.
+- **Telemetry Downsampling**: Dual-layer downsampling (server + client) caps chart data at 300 points for smooth dashboard rendering during extended operation.
 
 ### 🧩 Hardware Compatibility Matrix
 | Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
@@ -108,6 +111,7 @@ To use this service with **Bazarr**:
 - **Bazarr Ready**: Direct compatibility with the full media automation stack via standard formats (SRT, VTT, JSON).
 - **Industrial Telemetry**: Real-time speed multipliers, ETA calculation, and detailed hardware state reporting.
 - **Interactive Documentation**: Full OpenAPI/Swagger interface available at `/docs`.
+- **Live SRT Streaming**: Real-time auto-scrolling subtitle display during processing for immediate visual feedback.
 
 ---
 
