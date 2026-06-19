@@ -1,5 +1,5 @@
 """Tests for speaker diarization integration and WhisperX orchestration."""
-# pylint: disable=protected-access, redefined-outer-name
+
 from modules.api import routes_asr
 from modules import utils, config
 from modules.inference import model_manager, scheduler
@@ -25,10 +25,10 @@ sys.modules["whisperx"] = mock_whisperx
 @pytest.fixture(autouse=True)
 def reset_state():
     """Reset model_manager pools and scheduler states between tests."""
-    model_manager._MODEL_POOL.clear()
-    model_manager._PREPROCESSOR_POOL.clear()
-    model_manager._DIARIZE_POOL.clear()
-    model_manager._ALIGN_POOL.clear()
+    model_manager.MODEL_POOL.clear()
+    model_manager.PREPROCESSOR_POOL.clear()
+    model_manager.DIARIZE_POOL.clear()
+    model_manager.ALIGN_POOL.clear()
 
     with mock.patch("modules.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
         from modules.inference.scheduler import SchedulerState
@@ -49,7 +49,7 @@ def test_diarization_success():
     mock_segment = mock.MagicMock(start=0.0, end=1.0, text="hello")
     mock_model.transcribe.return_value = ([mock_segment], mock_info)
 
-    model_manager._MODEL_POOL["CPU"] = mock_model
+    model_manager.MODEL_POOL["CPU"] = mock_model
 
     # Reset mock calls
     mock_whisperx.load_audio.reset_mock()
@@ -91,7 +91,7 @@ def test_diarization_caching_and_unloading():
     mock_segment = mock.MagicMock(start=0.0, end=1.0, text="hello")
     mock_model.transcribe.return_value = ([mock_segment], mock_info)
 
-    model_manager._MODEL_POOL["CPU"] = mock_model
+    model_manager.MODEL_POOL["CPU"] = mock_model
 
     # Run twice
     for _ in range(2):
@@ -104,16 +104,16 @@ def test_diarization_caching_and_unloading():
         )
 
     # Verify loading functions only called once
-    assert len(model_manager._DIARIZE_POOL) == 1
-    assert len(model_manager._ALIGN_POOL) == 1
+    assert len(model_manager.DIARIZE_POOL) == 1
+    assert len(model_manager.ALIGN_POOL) == 1
 
     # Unload models
     with mock.patch("modules.inference.model_manager.utils.get_system_telemetry", return_value={}):
         model_manager.unload_models()
 
     # Verify pools are cleared
-    assert len(model_manager._DIARIZE_POOL) == 0
-    assert len(model_manager._ALIGN_POOL) == 0
+    assert len(model_manager.DIARIZE_POOL) == 0
+    assert len(model_manager.ALIGN_POOL) == 0
 
 
 def test_diarization_missing_token_fallback():
@@ -123,7 +123,7 @@ def test_diarization_missing_token_fallback():
     mock_segment = mock.MagicMock(start=0.0, end=1.0, text="hello")
     mock_model.transcribe.return_value = ([mock_segment], mock_info)
 
-    model_manager._MODEL_POOL["CPU"] = mock_model
+    model_manager.MODEL_POOL["CPU"] = mock_model
 
     # Ensure config token is empty
     with mock.patch("modules.config.HF_TOKEN", ""):
@@ -147,7 +147,7 @@ def test_diarization_failure_fallback():
     mock_segment = mock.MagicMock(start=0.0, end=1.0, text="hello")
     mock_model.transcribe.return_value = ([mock_segment], mock_info)
 
-    model_manager._MODEL_POOL["CPU"] = mock_model
+    model_manager.MODEL_POOL["CPU"] = mock_model
 
     # Force an exception during alignment
     with mock.patch("whisperx.align", side_effect=RuntimeError("Align fail")):
@@ -170,7 +170,7 @@ def test_routes_extract_diarize_params():
     app.register_blueprint(routes_asr.bp)
 
     with app.test_request_context('/asr?diarize=true&min_speakers=2&max_speakers=4&hf_token=test_tok'):
-        params = routes_asr._get_request_params()
+        params = routes_asr.get_request_params()
         assert params['diarize'] is True
         assert params['min_speakers'] == 2
         assert params['max_speakers'] == 4
@@ -178,7 +178,7 @@ def test_routes_extract_diarize_params():
 
     # Test default fallback values
     with app.test_request_context('/asr'):
-        params = routes_asr._get_request_params()
+        params = routes_asr.get_request_params()
         assert params['diarize'] is False
         assert params['min_speakers'] is None
         assert params['max_speakers'] is None
@@ -186,13 +186,13 @@ def test_routes_extract_diarize_params():
 
     # Test invalid int params fallback to None
     with app.test_request_context('/asr?min_speakers=invalid&max_speakers=invalid'):
-        params = routes_asr._get_request_params()
+        params = routes_asr.get_request_params()
         assert params['min_speakers'] is None
         assert params['max_speakers'] is None
 
     # Test X-HF-Token header fallback
     with app.test_request_context('/asr', headers={'X-HF-Token': 'header_tok'}):
-        params = routes_asr._get_request_params()
+        params = routes_asr.get_request_params()
         assert params['hf_token'] == 'header_tok'
 
 

@@ -1,5 +1,5 @@
 """Comprehensive coverage for utility functions."""
-# pylint: disable=protected-access
+
 import time
 from unittest import mock
 from modules import utils
@@ -182,15 +182,15 @@ def test_clear_gpu_cache():
 
 def test_subtitle_wrapping_logic():
     """Verify text wrapping utilities and layout constraints in SRT/VTT writers."""
-    # Test _wrap_text directly
+    # Test wrap_text directly
     long_text = "This is a very long text that we want to wrap to a maximum width of characters."
-    wrapped = utils._wrap_text(long_text, max_line_width=20)
+    wrapped = utils.wrap_text(long_text, max_line_width=20)
     lines = wrapped.split("\n")
     for line in lines:
         assert len(line) <= 20
 
     # Test max_line_count limit
-    limited = utils._wrap_text(long_text, max_line_width=20, max_line_count=2)
+    limited = utils.wrap_text(long_text, max_line_width=20, max_line_count=2)
     assert len(limited.split("\n")) == 2
 
     # Test SRT/VTT formatters wrapping

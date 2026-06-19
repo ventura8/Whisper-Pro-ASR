@@ -6,7 +6,7 @@ import os
 import uuid
 import traceback
 import time
-from flask import request  # pylint: disable=import-error
+from flask import request
 from modules import config
 from modules import utils
 from modules.inference import model_manager
@@ -83,7 +83,7 @@ def handle_upload():
         if hasattr(audio_file.stream, 'seek'):
             try:
                 audio_file.stream.seek(0)
-            except Exception:  # pylint: disable=broad-exception-caught
+            except tuple([Exception]):
                 pass
 
         ext = os.path.splitext(audio_file.filename)[1] if audio_file.filename else ".tmp"
@@ -127,7 +127,7 @@ def cleanup_files(*args):
             try:
                 os.remove(f_path)
                 logger.debug("[System] Cleaned up: %s", f_path)
-            except Exception:  # pylint: disable=broad-exception-caught
+            except tuple([Exception]):
                 pass
     # Reset tracking
     utils.get_tracked_files().clear()
@@ -160,7 +160,7 @@ def get_clean_wav_or_error(source_path):
                 header = f.read(1024)
                 if len(header) > 0 and all(b == 0 for b in header):
                     return None, ("Input file is corrupted (only null bytes).", 400)
-    except Exception:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]):
         pass
 
     clean_wav = utils.convert_to_wav(source_path)

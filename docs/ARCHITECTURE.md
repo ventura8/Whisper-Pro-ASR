@@ -12,7 +12,7 @@ Whisper Pro ASR implements a **Heterogeneous Model Pool** architecture designed 
 | `modules/inference/` | Core logic for `model_manager` (transcription, diarization, idle monitoring), `scheduler` (re-entrant locks), `preprocessing` (UVR), `vad`, `language_detection` (batch language ID pipeline), and `intel_engine`. |
 | `modules/api/` | Flask API layer: `routes_asr` (transcription), `routes_detect` (language detection), `routes_system` (dashboard, settings, analytics, history), and `routes_utils` (shared request utilities, file upload handling, cleanup). |
 | `modules/monitoring/` | `dashboard` & `dashboard_ui` (Material Design UI), `analytics_ui` (analytics dashboard), `telemetry` & `telemetry_manager` (persistent telemetry history), `history_manager` (task history with dual-tier storage), and `metrics_discovery` (hardware metrics). |
-| `modules/utils.py` | Managed FFmpeg normalization, **16kHz WAV Standardization**, subtitle generation with `_wrap_text()` layout control, and speaker label formatting. |
+| `modules/utils.py` | Managed FFmpeg normalization, **16kHz WAV Standardization**, subtitle generation with `wrap_text()` layout control, and speaker label formatting. |
 
 ### 🧩 Hardware Compatibility Matrix
 | Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
@@ -129,23 +129,26 @@ The system supports two model lifecycle strategies, configured via environment v
 | Strategy | Config | Behavior |
 |:---|:---|:---|
 | **Aggressive Offload** | `AGGRESSIVE_OFFLOAD=false` | Models are unloaded from memory immediately when active sessions drop to zero. |
-| **Idle Timeout** | `MODEL_IDLE_TIMEOUT=300` (default) | A background daemon thread (`ModelIdleMonitor`) monitors inactivity. Models are only purged after the configured idle period (in seconds) elapses with zero active sessions. |
+| **Idle Timeout** | `MODEL_IDLE_TIMEOUT=300` (default) | A deferred `threading.Timer` is started after the last task completes. Models are only purged after the configured idle period (in seconds) elapses with zero active sessions. New incoming tasks cancel the pending timer, keeping models warm for bursty workloads. |
 
-When `MODEL_IDLE_TIMEOUT > 0` (or defaults to `300`), it takes precedence over `AGGRESSIVE_OFFLOAD`. The monitor thread is started lazily on the first session decrement or model load.
+When `MODEL_IDLE_TIMEOUT > 0` (or defaults to `300`), it takes precedence over `AGGRESSIVE_OFFLOAD`. The timer is started lazily on the first session decrement that brings the active count to zero. If a new task arrives while the cleanup routine is actively executing, the system allows the cleanup to complete and re-initializes models on demand.
 
 ```mermaid
 graph TD
     DEC["Session Decrement"] --> CHK{"Active == 0?"}
     CHK -->|No| DONE["Continue"]
     CHK -->|Yes| TIMEOUT{"IDLE_TIMEOUT > 0?"}
-    TIMEOUT -->|Yes| MON["Start/Ensure Monitor Thread"]
+    TIMEOUT -->|Yes| CANCEL["Cancel Existing Timer (if any)"]
+    CANCEL --> START["Start Deferred Timer"]
     TIMEOUT -->|No| AGG{"AGGRESSIVE_OFFLOAD?"}
     AGG -->|Yes| UNLOAD["unload_models()"]
     AGG -->|No| DONE
-    MON --> POLL["Poll every 5s"]
-    POLL --> ELAPSED{"Idle > Timeout?"}
-    ELAPSED -->|Yes| UNLOAD
-    ELAPSED -->|No| POLL
+    START --> WAIT["Wait (IDLE_TIMEOUT seconds)"]
+    WAIT -->|Timer Fires| LOCKCHK{"Active still == 0?"}
+    LOCKCHK -->|Yes| UNLOAD
+    LOCKCHK -->|No| DONE
+    WAIT -->|New Task Arrives| CANCEL2["Timer Cancelled"]
+    CANCEL2 --> DONE
 ```
 
 ### 4. Real-time Observability Engine

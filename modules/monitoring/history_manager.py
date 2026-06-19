@@ -7,6 +7,7 @@ persistent storage on disk and a RAM cache for fast access.
 import os
 import json
 import time
+import sys
 from datetime import datetime
 import logging
 from typing import List, Dict, Any, Tuple, Optional
@@ -20,53 +21,54 @@ MAX_HISTORY_DISK = 1000  # Persistent storage limit
 MAX_HISTORY_RAM = 20    # RAM cache limit (match disk limit for accurate stats)
 
 # --- [DEFERRED PERSISTENCE ENGINE] ---
-_HISTORY_CACHE: List[Dict[str, Any]] = []
-_ANALYTICS_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
-_UNSAVED_COUNT = 0
-_LAST_SYNC = time.time()
-_STATS_CACHE: Optional[Dict[str, Any]] = None
-_STATS_CACHE_DATE: Optional[str] = None
+HISTORY_CACHE: List[Dict[str, Any]] = []
+ANALYTICS_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+UNSAVED_COUNT = 0
+LAST_SYNC = time.time()
+STATS_CACHE: Optional[Dict[str, Any]] = None
+STATS_CACHE_DATE: Optional[str] = None
 
 
-def _ensure_loaded() -> None:
+def ensure_loaded() -> None:
     """
     Lazy load history from SSD into RAM cache.
     """
-    global _HISTORY_CACHE  # pylint: disable=global-statement
-    if not _HISTORY_CACHE:
+    module = sys.modules[__name__]
+    if not module.HISTORY_CACHE:
         if os.path.exists(HISTORY_FILE):
             try:
                 with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                _HISTORY_CACHE = data
+                module.HISTORY_CACHE = data
             except (IOError, json.JSONDecodeError) as e:
                 logger.warning("[History] Failed to load history file: %s", e)
-                _HISTORY_CACHE = []
+                module.HISTORY_CACHE = []
 
 
-def _ensure_analytics_loaded() -> None:
+def ensure_analytics_loaded() -> None:
     """
     Lazy load analytics stats from SSD into RAM cache.
     """
-    global _ANALYTICS_CACHE  # pylint: disable=global-statement
-    if _ANALYTICS_CACHE is None:
+    module = sys.modules[__name__]
+    if module.ANALYTICS_CACHE is None:
         if os.path.exists(ANALYTICS_FILE):
             try:
                 with open(ANALYTICS_FILE, 'r', encoding='utf-8') as f:
-                    _ANALYTICS_CACHE = json.load(f)
+                    module.ANALYTICS_CACHE = json.load(f)
             except (IOError, json.JSONDecodeError) as e:
                 logger.warning("[Analytics] Failed to load analytics file: %s", e)
-                _ANALYTICS_CACHE = {}
+                module.ANALYTICS_CACHE = {}
         else:
-            _ANALYTICS_CACHE = {}
+            module.ANALYTICS_CACHE = {}
 
 
-def _update_analytics(task_data: Dict[str, Any]) -> None:
+def update_analytics(task_data: Dict[str, Any]) -> None:
     """
     Updates the persistent analytics stats with a completed task's duration.
     """
     try:
-        _ensure_analytics_loaded()
+        ensure_analytics_loaded()
+        module = sys.modules[__name__]
         dur = float(task_data.get("video_duration", 0.0))
 
         # Get completion date or current date
@@ -77,17 +79,17 @@ def _update_analytics(task_data: Dict[str, Any]) -> None:
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
-        if date_str not in _ANALYTICS_CACHE:
-            _ANALYTICS_CACHE[date_str] = {"count": 0, "duration": 0.0}
+        if date_str not in module.ANALYTICS_CACHE:
+            module.ANALYTICS_CACHE[date_str] = {"count": 0, "duration": 0.0}
 
-        _ANALYTICS_CACHE[date_str]["count"] += 1
-        _ANALYTICS_CACHE[date_str]["duration"] += dur
+        module.ANALYTICS_CACHE[date_str]["count"] += 1
+        module.ANALYTICS_CACHE[date_str]["duration"] += dur
 
         # Save to disk atomically
         os.makedirs(config.STATE_DIR, exist_ok=True)
         tmp_file = f"{ANALYTICS_FILE}.tmp"
         with open(tmp_file, 'w', encoding='utf-8') as f:
-            json.dump(_ANALYTICS_CACHE, f, indent=2)
+            json.dump(module.ANALYTICS_CACHE, f, indent=2)
         os.replace(tmp_file, ANALYTICS_FILE)
     except (IOError, OSError, ValueError, TypeError) as e:
         logger.error("[Analytics] Failed to update analytics: %s", e)
@@ -100,9 +102,9 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
     Parameters:
         task_data: Dictionary containing task details and results.
     """
-    global _HISTORY_CACHE, _UNSAVED_COUNT, _STATS_CACHE  # pylint: disable=global-statement
+    module = sys.modules[__name__]
     try:
-        _ensure_loaded()
+        ensure_loaded()
 
         # Add completion metadata
         if "completed_at" not in task_data:
@@ -154,18 +156,18 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
                            task_data.get("task_id"))
 
         # Memory Protection: Keep full data as requested by user
-        _HISTORY_CACHE.insert(0, task_data.copy())
-        _HISTORY_CACHE = _HISTORY_CACHE[:MAX_HISTORY_DISK]
+        module.HISTORY_CACHE.insert(0, task_data.copy())
+        module.HISTORY_CACHE = module.HISTORY_CACHE[:MAX_HISTORY_DISK]
 
         # Invalidate stats cache so it's recalculated on next request
-        _STATS_CACHE = None
-        _UNSAVED_COUNT += 1
+        module.STATS_CACHE = None
+        module.UNSAVED_COUNT += 1
 
         # Immediate persistence: Save to SSD after every task completion as requested
         flush_history()
 
         # Update analytics stats
-        _update_analytics(task_data)
+        update_analytics(task_data)
 
     except (KeyError, ValueError, TypeError) as e:
         logger.error("[History] Failed to log task history: %s", e)
@@ -176,7 +178,7 @@ def flush_history() -> None:
     Synchronizes the RAM cache to the physical SSD.
     Maintains up to 1000 items on disk.
     """
-    global _UNSAVED_COUNT, _LAST_SYNC  # pylint: disable=global-statement
+    module = sys.modules[__name__]
     try:
         os.makedirs(config.STATE_DIR, exist_ok=True)
 
@@ -191,8 +193,8 @@ def flush_history() -> None:
 
         # 2. Merge with RAM cache (deduplicate by task_id)
         # RAM cache tasks are the newest.
-        seen_ids = {t.get("task_id") for t in _HISTORY_CACHE if t.get("task_id")}
-        merged = list(_HISTORY_CACHE)
+        seen_ids = {t.get("task_id") for t in module.HISTORY_CACHE if t.get("task_id")}
+        merged = list(module.HISTORY_CACHE)
         for t in disk_history:
             tid = t.get("task_id")
             if tid and tid not in seen_ids:
@@ -208,8 +210,8 @@ def flush_history() -> None:
             json.dump(data_to_save, f, indent=2)
         os.replace(tmp_file, HISTORY_FILE)
 
-        _UNSAVED_COUNT = 0
-        _LAST_SYNC = time.time()
+        module.UNSAVED_COUNT = 0
+        module.LAST_SYNC = time.time()
     except (IOError, OSError) as e:
         logger.error("[History] SSD Sync Failed: %s", e)
 
@@ -221,9 +223,10 @@ def get_history() -> List[Dict[str, Any]]:
     Returns:
         List of historical task dictionaries.
     """
-    _ensure_loaded()
+    ensure_loaded()
+    module = sys.modules[__name__]
     # Filter out corrupted or legacy entries that don't match the task schema
-    valid_tasks = [t for t in _HISTORY_CACHE if isinstance(t, dict) and "task_id" in t]
+    valid_tasks = [t for t in module.HISTORY_CACHE if isinstance(t, dict) and "task_id" in t]
     # Return only the most recent tasks for the dashboard
     return valid_tasks[:MAX_HISTORY_RAM]
 
@@ -235,16 +238,16 @@ def get_history_stats() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     Returns:
         Tuple of (history_list, stats_dict).
     """
-    global _STATS_CACHE, _STATS_CACHE_DATE  # pylint: disable=global-statement
+    module = sys.modules[__name__]
     history = get_history()
 
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
 
-    if _STATS_CACHE and _STATS_CACHE_DATE == today_str:
-        return history, _STATS_CACHE
+    if module.STATS_CACHE and module.STATS_CACHE_DATE == today_str:
+        return history, module.STATS_CACHE
 
-    _ensure_analytics_loaded()
+    ensure_analytics_loaded()
 
     stats = {
         "all_time": 0.0,
@@ -258,8 +261,8 @@ def get_history_stats() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     month_str = now.strftime("%Y-%m")
     year_str = now.strftime("%Y")
 
-    if _ANALYTICS_CACHE:
-        for date_str, daily_data in _ANALYTICS_CACHE.items():
+    if module.ANALYTICS_CACHE:
+        for date_str, daily_data in module.ANALYTICS_CACHE.items():
             dur = daily_data.get("duration", 0.0)
             cnt = daily_data.get("count", 0)
 
@@ -274,8 +277,8 @@ def get_history_stats() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             if date_str.startswith(year_str):
                 stats["this_year"] += dur
 
-    _STATS_CACHE = stats
-    _STATS_CACHE_DATE = today_str
+    module.STATS_CACHE = stats
+    module.STATS_CACHE_DATE = today_str
     return history, stats
 
 
@@ -283,11 +286,12 @@ def get_analytics_data() -> Dict[str, Any]:
     """
     Retrieves the detailed daily analytics and cumulative summary stats.
     """
-    _ensure_analytics_loaded()
+    ensure_analytics_loaded()
+    module = sys.modules[__name__]
     _, stats = get_history_stats()
     return {
         "cumulative": stats,
-        "daily": _ANALYTICS_CACHE or {}
+        "daily": module.ANALYTICS_CACHE or {}
     }
 
 
@@ -295,11 +299,11 @@ def clear_history() -> None:
     """
     Purges all history from RAM cache and SSD.
     """
-    global _HISTORY_CACHE, _STATS_CACHE, _STATS_CACHE_DATE, _UNSAVED_COUNT  # pylint: disable=global-statement
-    _HISTORY_CACHE = []
-    _STATS_CACHE = None
-    _STATS_CACHE_DATE = None
-    _UNSAVED_COUNT = 0
+    module = sys.modules[__name__]
+    module.HISTORY_CACHE = []
+    module.STATS_CACHE = None
+    module.STATS_CACHE_DATE = None
+    module.UNSAVED_COUNT = 0
     if os.path.exists(HISTORY_FILE):
         try:
             os.remove(HISTORY_FILE)

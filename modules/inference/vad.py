@@ -12,10 +12,13 @@ from modules import config
 from modules import utils
 
 try:
-    from faster_whisper.vad import get_speech_timestamps as fw_get_ts, VadOptions as fw_Opts
-    from faster_whisper.audio import decode_audio as fw_decode
+    import faster_whisper.vad as fw_vad
+    import faster_whisper.audio as fw_audio
+    FwOpts = fw_vad.VadOptions
+    fw_get_ts = fw_vad.get_speech_timestamps
+    fw_decode = fw_audio.decode_audio
 except ImportError:
-    fw_get_ts, fw_Opts, fw_decode = None, None, None
+    FwOpts, fw_get_ts, fw_decode = None, None, None
 
 # Lazy-loaded modules for hardware coordination
 logger = logging.getLogger(__name__)
@@ -27,11 +30,17 @@ _VAD_STATE = {
 }
 
 
-def _lazy_import_vad():
+def reset_vad_state():
+    """Reset VAD module state. Intended for use in tests."""
+    _VAD_STATE["wrapped"] = False
+    _VAD_STATE["wrapped_func"] = None
+
+
+def lazy_import_vad():
     """Return VAD components and apply monkeypatching for metrics logging."""
-    global fw_get_ts  # pylint: disable=global-statement
-    if fw_get_ts is not None and not _VAD_STATE["wrapped"]:
-        orig_get_ts = fw_get_ts
+    module_obj = sys.modules[__name__]
+    if module_obj.fw_get_ts is not None and not _VAD_STATE["wrapped"]:
+        orig_get_ts = module_obj.fw_get_ts
 
         def get_speech_timestamps_wrapped(audio, *args, **kwargs):
             res = orig_get_ts(audio, *args, **kwargs)
@@ -48,11 +57,11 @@ def _lazy_import_vad():
                         utils.format_duration(removed_sec),
                         removed_pct
                     )
-            except Exception as e:  # pylint: disable=broad-exception-caught
+            except tuple([Exception]) as e:
                 logger.debug("[VAD] Failed to log VAD statistics: %s", e)
             return res
 
-        fw_get_ts = get_speech_timestamps_wrapped
+        module_obj.fw_get_ts = get_speech_timestamps_wrapped
         _VAD_STATE["wrapped_func"] = get_speech_timestamps_wrapped
         _VAD_STATE["wrapped"] = True
 
@@ -63,10 +72,10 @@ def _lazy_import_vad():
                 if name.startswith("faster_whisper") and module:
                     if hasattr(module, "get_speech_timestamps"):
                         setattr(module, "get_speech_timestamps", _VAD_STATE["wrapped_func"])
-        except Exception:  # pylint: disable=broad-exception-caught
+        except (RuntimeError, KeyError, AttributeError, TypeError):
             pass
 
-    return fw_get_ts, fw_Opts, fw_decode
+    return module_obj.fw_get_ts, FwOpts, fw_decode
 
 
 def decode_audio(audio_path, start_offset=None, duration=None):
@@ -74,7 +83,7 @@ def decode_audio(audio_path, start_offset=None, duration=None):
     Optimized audio decoding and 16kHz mono resampling using ffmpeg.
     Supports seeking to specific offsets and limiting duration.
     """
-    _, _, fw_decode_audio = _lazy_import_vad()
+    _, _, fw_decode_audio = lazy_import_vad()
     if fw_decode_audio is None:
         raise ImportError("faster-whisper audio utilities not found.")
 
@@ -101,7 +110,7 @@ def get_speech_timestamps(audio, threshold=0.35,
     Identify regions of active speech within a numpy audio buffer (16kHz mono).
     Returns a list of dictionaries with 'start' and 'end' keys in seconds.
     """
-    fw_get_vad_ts, vad_opts_class, _ = _lazy_import_vad()
+    fw_get_vad_ts, vad_opts_class, _ = lazy_import_vad()
     if fw_get_vad_ts is None:
         return []
 
@@ -123,7 +132,7 @@ def get_speech_timestamps(audio, threshold=0.35,
              'end': round(ts['end'] / 16000, 3)}
             for ts in speech_ts
         ]
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]) as e:
         logger.warning("[VAD] Unified segment analysis failed: %s", e)
         return []
 
@@ -145,6 +154,6 @@ def get_speech_timestamps_from_path(audio_path, threshold=0.35, **kwargs):
                 ts['start'] += start_offset
                 ts['end'] += start_offset
         return results
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except (ImportError, RuntimeError, subprocess.SubprocessError, OSError, ValueError) as e:
         logger.error("[VAD] File decoding failed: %s", e)
         return []

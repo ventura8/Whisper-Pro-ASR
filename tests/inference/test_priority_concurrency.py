@@ -7,8 +7,6 @@ import time
 from modules.inference import scheduler, model_manager
 from modules import utils
 
-# pylint: disable=protected-access,import-outside-toplevel
-
 
 def helper_run_transcription(events, name, steps=3, step_delay=0.3):
     """Simulates running a standard transcription task with preemption checks."""
@@ -73,11 +71,11 @@ def test_concurrency_one_hardware_unit():
         scheduler.STATE = SchedulerState()
 
         # Populate model manager pools
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
         for u in hw_list:
-            model_manager._MODEL_POOL[u["id"]] = mock.MagicMock()
-            model_manager._PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
+            model_manager.MODEL_POOL[u["id"]] = mock.MagicMock()
+            model_manager.PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
 
         utils.THREAD_CONTEXT.is_priority = False
         events = []
@@ -128,11 +126,11 @@ def test_concurrency_two_hardware_units():
         scheduler.STATE = SchedulerState()
 
         # Populate model manager pools
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
         for u in hw_list:
-            model_manager._MODEL_POOL[u["id"]] = mock.MagicMock()
-            model_manager._PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
+            model_manager.MODEL_POOL[u["id"]] = mock.MagicMock()
+            model_manager.PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
 
         utils.THREAD_CONTEXT.is_priority = False
         events = []
@@ -186,11 +184,11 @@ def test_concurrency_three_hardware_units():
         scheduler.STATE = SchedulerState()
 
         # Populate model manager pools
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
         for u in hw_list:
-            model_manager._MODEL_POOL[u["id"]] = mock.MagicMock()
-            model_manager._PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
+            model_manager.MODEL_POOL[u["id"]] = mock.MagicMock()
+            model_manager.PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
 
         utils.THREAD_CONTEXT.is_priority = False
         events = []
@@ -247,10 +245,10 @@ def test_concurrency_zero_hardware_units_execution():
         assert scheduler.STATE.accel_limit == 1
 
         # Populate model manager pools for the CPU fallback unit
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
-        model_manager._MODEL_POOL["CPU"] = mock.MagicMock()
-        model_manager._PREPROCESSOR_POOL["CPU"] = mock.MagicMock()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
+        model_manager.PREPROCESSOR_POOL["CPU"] = mock.MagicMock()
 
         utils.THREAD_CONTEXT.is_priority = False
         events = []
@@ -297,11 +295,11 @@ def test_concurrency_priority_non_preemptive():
         scheduler.STATE = SchedulerState()
 
         # Populate model manager pools
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
         for u in hw_list:
-            model_manager._MODEL_POOL[u["id"]] = mock.MagicMock()
-            model_manager._PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
+            model_manager.MODEL_POOL[u["id"]] = mock.MagicMock()
+            model_manager.PREPROCESSOR_POOL[u["id"]] = mock.MagicMock()
 
         utils.THREAD_CONTEXT.is_priority = False
         events = []
@@ -347,11 +345,11 @@ def test_concurrency_fallback_no_deadlock():
         scheduler.STATE = SchedulerState()
 
         # Populate pools
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
         mock_model = mock.MagicMock()
-        model_manager._MODEL_POOL["CPU"] = mock_model
-        model_manager._PREPROCESSOR_POOL["CPU"] = mock.MagicMock()
+        model_manager.MODEL_POOL["CPU"] = mock_model
+        model_manager.PREPROCESSOR_POOL["CPU"] = mock.MagicMock()
 
         # Mock run_batch_language_detection_direct to return empty list
         # which will trigger the fallback logic in _step_run_inference
@@ -388,10 +386,10 @@ def test_concurrency_priority_task_failure_resumes_standard_task():
         scheduler.STATE = SchedulerState()
 
         # Populate pools
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
-        model_manager._MODEL_POOL["NPU.0"] = mock.MagicMock()
-        model_manager._PREPROCESSOR_POOL["NPU.0"] = mock.MagicMock()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL["NPU.0"] = mock.MagicMock()
+        model_manager.PREPROCESSOR_POOL["NPU.0"] = mock.MagicMock()
 
         utils.THREAD_CONTEXT.is_priority = False
         events = []
@@ -447,10 +445,10 @@ def test_concurrency_multiple_priority_tasks_sequential():
         scheduler.STATE = SchedulerState()
 
         # Populate pools
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
-        model_manager._MODEL_POOL["NPU.0"] = mock.MagicMock()
-        model_manager._PREPROCESSOR_POOL["NPU.0"] = mock.MagicMock()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL["NPU.0"] = mock.MagicMock()
+        model_manager.PREPROCESSOR_POOL["NPU.0"] = mock.MagicMock()
 
         events = []
 
@@ -493,10 +491,10 @@ def test_standard_task_yields_to_queued_priority():
     with mock.patch("modules.config.HARDWARE_UNITS", hw_list), \
             mock.patch("modules.inference.model_manager.unload_models"):
         scheduler.STATE = SchedulerState()
-        model_manager._MODEL_POOL.clear()
-        model_manager._PREPROCESSOR_POOL.clear()
-        model_manager._MODEL_POOL["CPU"] = mock.MagicMock()
-        model_manager._PREPROCESSOR_POOL["CPU"] = mock.MagicMock()
+        model_manager.MODEL_POOL.clear()
+        model_manager.PREPROCESSOR_POOL.clear()
+        model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
+        model_manager.PREPROCESSOR_POOL["CPU"] = mock.MagicMock()
 
         # Simulate a priority task is queued/registered
         with scheduler.early_task_registration(is_priority=True):

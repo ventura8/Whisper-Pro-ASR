@@ -338,17 +338,11 @@
         }
 
         function formatDDHHMMSS(sec) {
-            if (sec === undefined || sec === null || sec < 0) return "00:00:00:00";
+            if (sec === undefined || sec === null || sec < 0) return "0d 0h 0m";
             const d = Math.floor(sec / 86400);
             const h = Math.floor((sec % 86400) / 3600);
             const m = Math.floor((sec % 3600) / 60);
-            const s = Math.floor(sec % 60);
-            
-            const dStr = String(d).padStart(2, '0');
-            const hStr = String(h).padStart(2, '0');
-            const mStr = String(m).padStart(2, '0');
-            const sStr = String(s).padStart(2, '0');
-            return `${dStr}:${hStr}:${mStr}:${sStr}`;
+            return `${d}d ${h}h ${m}m`;
         }
 
         async function fetchAnalytics() {
@@ -371,7 +365,7 @@
             document.getElementById('val-all-time').innerText = formatDDHHMMSS(cumulative.all_time);
             document.getElementById('val-this-month').innerText = formatDDHHMMSS(cumulative.this_month || 0);
             document.getElementById('val-total-tasks').innerText = cumulative.count_all_time || 0;
-            document.getElementById('val-today').innerText = formatDuration(cumulative.today);
+            document.getElementById('val-today').innerText = formatDDHHMMSS(cumulative.today);
             document.getElementById('val-today-tasks').innerText = cumulative.count_today || 0;
 
             const avgDur = cumulative.count_all_time > 0 ? (cumulative.all_time / cumulative.count_all_time) : 0;

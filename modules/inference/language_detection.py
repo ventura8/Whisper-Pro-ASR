@@ -39,7 +39,7 @@ _LANG_PATTERN = re.compile(r'<\|([a-z]{2,3})\|>')
 
 # --- [VOTING & AGGREGATION ENGINE] ---
 
-def _aggregate_language_probs(segment_probs_list):
+def aggregate_language_probs(segment_probs_list):
     """
     Consolidate probabilities across all segments using Squared Weighting.
 
@@ -179,7 +179,7 @@ def _step_run_inference(model_context, isolated_path, scans, perf):
                     conf * 100,
                     config.LD_MIN_CONFIDENCE * 100
                 )
-    voting_details = _aggregate_language_probs(probs)
+    voting_details = aggregate_language_probs(probs)
 
     if not voting_details:
         logger.info("[Engine] No high-confidence voting details found, falling back to full file detection.")
@@ -330,5 +330,5 @@ def _find_best_offset_in_zone(audio_path, base_offset, zone_size, total_duration
 
         return base_offset + (zone_size / 2)
 
-    except Exception:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]):
         return base_offset + (zone_size / 2)

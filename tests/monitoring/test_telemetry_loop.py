@@ -77,8 +77,8 @@ def test_get_service_stats_structure(clean_telemetry):
     mock_preprocessor.separator = mock.MagicMock()
 
     with mock.patch("modules.config.HARDWARE_UNITS", mock_units):
-        with mock.patch.dict(model_manager._MODEL_POOL, {"NPU": mock.MagicMock()}):
-            with mock.patch.dict(model_manager._PREPROCESSOR_POOL, {"NPU": mock_preprocessor}):
+        with mock.patch.dict(model_manager.MODEL_POOL, {"NPU": mock.MagicMock()}):
+            with mock.patch.dict(model_manager.PREPROCESSOR_POOL, {"NPU": mock_preprocessor}):
                 with mock.patch("modules.monitoring.history_manager.get_history_stats", return_value=([], {})):
                     with mock.patch("modules.monitoring.metrics_discovery.get_nvidia_metrics", return_value=[]):
                         with mock.patch("modules.inference.model_manager.is_engine_actually_loaded", return_value=True):

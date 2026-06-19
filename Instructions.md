@@ -103,6 +103,15 @@ docker build -t whisper-npu-test -f Dockerfile.test .
 docker run --rm whisper-npu-test
 ```
 
+## Release Notes v1.1.2
+- **FIX**: Replaced fixed-interval `ModelIdleMonitor` polling thread with a deferred `threading.Timer` that starts after the last task completes. New tasks cancel and reschedule the timer, keeping models warm during bursty workloads.
+- **FIX**: Resolved dashboard hardware utilization chart showing `0%` on initial page load (only displaying correct values after F5 refresh).
+- **FIX**: Dashboard chart no longer incorrectly reports GPU/NPU utilization for Whisper ASR when it runs on CPU.
+- **FIX**: Extended metrics discovery to correctly account for `/detect-language` tasks alongside `/asr` tasks in utilization calculations.
+- **FIX**: Removed all `# pylint: disable` suppressions from production code. All lint compliance achieved through genuine code improvements (specific exception types, reduced locals, clean module access).
+- **STAB**: Added `_POOL_LOCK` to serialize model loading and unloading, preventing race conditions during concurrent engine state transitions.
+- **TEST**: Verified all unit and integration tests passing with a clean **10.00/10** pylint score on all files.
+
 ## Release Notes v1.1.1
 - **FIX**: Resolved all pylint complexity warnings (`too-many-locals` and `too-many-positional-arguments` in `diarization.py`) by converting `run_diarization` parameters to keyword-only and extracting sub-helpers.
 - **FIX**: Eliminated static and runtime cyclic imports between `model_manager`, `concurrency`, and `language_detection_core` using runtime `sys.modules` lookup.

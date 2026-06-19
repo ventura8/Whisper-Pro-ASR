@@ -1,19 +1,18 @@
 """Tests for modules/monitoring/history_manager.py."""
 import os
-import json
 import time
+import datetime
 from unittest import mock
 import pytest
 from modules.monitoring import history_manager
-from modules import config
 
 
-@pytest.fixture
-def clean_history_cache(tmp_path):
-    """Reset history cache and use a temporary file."""
-    history_manager._HISTORY_CACHE = []
-    history_manager._ANALYTICS_CACHE = None
-    history_manager._STATS_CACHE = None
+@pytest.fixture(autouse=True)
+def reset_history_cache(tmp_path):
+    """Reset history cache and use a temporary file for every test."""
+    history_manager.HISTORY_CACHE = []
+    history_manager.ANALYTICS_CACHE = None
+    history_manager.STATS_CACHE = None
 
     # Use tmp_path for persistent file
     temp_file = tmp_path / "task_history.json"
@@ -23,7 +22,7 @@ def clean_history_cache(tmp_path):
         yield temp_file
 
 
-def test_log_completed_task(clean_history_cache):
+def test_log_completed_task():
     """Test logging a task to history."""
     task_data = {
         "task_id": "123",
@@ -39,12 +38,12 @@ def test_log_completed_task(clean_history_cache):
     }
     history_manager.log_completed_task(task_data)
 
-    history = history_manager.get_history()
-    assert len(history) == 1
-    assert history[0]["task_id"] == "123"
-    assert history[0]["total_elapsed_sec"] >= 10
-    assert history[0]["segments_processed"] == 2
-    assert "completed_at" in history[0]
+    task_history = history_manager.get_history()
+    assert len(task_history) == 1
+    assert task_history[0]["task_id"] == "123"
+    assert task_history[0]["total_elapsed_sec"] >= 10
+    assert task_history[0]["segments_processed"] == 2
+    assert "completed_at" in task_history[0]
 
     # Test language detection type
     ld_data = {
@@ -56,37 +55,37 @@ def test_log_completed_task(clean_history_cache):
         }
     }
     history_manager.log_completed_task(ld_data)
-    history = history_manager.get_history()
-    assert history[0]["task_id"] == "456"
-    assert history[0]["segments_processed"] == 5
+    task_history = history_manager.get_history()
+    assert task_history[0]["task_id"] == "456"
+    assert task_history[0]["segments_processed"] == 5
 
 
-def test_history_stats(clean_history_cache):
+def test_history_stats():
     """Test history stats calculation."""
     # Log two tasks for today
     history_manager.log_completed_task({"task_id": "1", "video_duration": 60})
     history_manager.log_completed_task({"task_id": "2", "video_duration": 40})
 
-    history, stats = history_manager.get_history_stats()
+    _history, stats = history_manager.get_history_stats()
     assert stats["count_all_time"] == 2
     assert stats["all_time"] == 100
     assert stats["today"] == 100
 
 
-def test_history_persistence(clean_history_cache):
+def test_history_persistence():
     """Test that history is saved to SSD and reloaded."""
     history_manager.log_completed_task({"task_id": "p1", "video_duration": 50})
 
     # Force reload by clearing cache
-    history_manager._HISTORY_CACHE = []
-    history_manager._STATS_CACHE = None
+    history_manager.HISTORY_CACHE = []
+    history_manager.STATS_CACHE = None
 
-    history = history_manager.get_history()
-    assert len(history) == 1
-    assert history[0]["task_id"] == "p1"
+    task_history = history_manager.get_history()
+    assert len(task_history) == 1
+    assert task_history[0]["task_id"] == "p1"
 
 
-def test_history_limit(clean_history_cache):
+def test_history_limit():
     """Test that history is limited to MAX_HISTORY_DISK."""
     with mock.patch("modules.monitoring.history_manager.MAX_HISTORY_DISK", 2), \
             mock.patch("modules.monitoring.history_manager.MAX_HISTORY_RAM", 2):
@@ -94,19 +93,20 @@ def test_history_limit(clean_history_cache):
         history_manager.log_completed_task({"task_id": "2"})
         history_manager.log_completed_task({"task_id": "3"})
 
-        history = history_manager.get_history()
-        assert len(history) == 2
-        assert history[0]["task_id"] == "3"
+        task_history = history_manager.get_history()
+        assert len(task_history) == 2
+        assert task_history[0]["task_id"] == "3"
 
 
-def test_ensure_loaded_corrupt(clean_history_cache):
+def test_ensure_loaded_corrupt(request):
     """Test resilience to corrupt JSON on SSD."""
-    with open(clean_history_cache, 'w') as f:
+    temp_file = request.getfixturevalue("reset_history_cache")
+    with open(temp_file, 'w', encoding='utf-8') as f:
         f.write("corrupt")
 
-    history_manager._HISTORY_CACHE = []
-    history_manager._ensure_loaded()
-    assert history_manager._HISTORY_CACHE == []
+    history_manager.HISTORY_CACHE = []
+    history_manager.ensure_loaded()
+    assert not history_manager.HISTORY_CACHE
 
 
 def test_history_manager_exceptions():
@@ -117,14 +117,13 @@ def test_history_manager_exceptions():
 
 def test_history_manager_stats_cache():
     """Cover stats cache hit branch."""
-    import datetime
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    history_manager._STATS_CACHE = {"cached": True}
-    history_manager._STATS_CACHE_DATE = today_str
-    history, stats = history_manager.get_history_stats()
+    history_manager.STATS_CACHE = {"cached": True}
+    history_manager.STATS_CACHE_DATE = today_str
+    _history, stats = history_manager.get_history_stats()
     assert stats["cached"] is True
-    history_manager._STATS_CACHE = None
-    history_manager._STATS_CACHE_DATE = None
+    history_manager.STATS_CACHE = None
+    history_manager.STATS_CACHE_DATE = None
 
 
 def test_history_manager_clear_logic(tmp_path):
@@ -142,18 +141,18 @@ def test_history_manager_clear_logic(tmp_path):
         history_manager.clear_history()
 
 
-def test_history_manager_stats_aggregation(clean_history_cache):
+def test_history_manager_stats_aggregation():
     """Cover history stats logic with actual aggregation."""
-    history_manager._ANALYTICS_CACHE = {
+    history_manager.ANALYTICS_CACHE = {
         "2026-05-26": {"count": 2, "duration": 30.0}
     }
-    history_manager._STATS_CACHE = None
+    history_manager.STATS_CACHE = None
     _, stats = history_manager.get_history_stats()
     assert stats["all_time"] == 30.0
     assert stats["count_all_time"] == 2
 
 
-def test_history_stats_persistent_on_clear(clean_history_cache):
+def test_history_stats_persistent_on_clear():
     """Test that analytics stats are preserved when history is cleared."""
     task_data = {
         "task_id": "1",
@@ -163,8 +162,8 @@ def test_history_stats_persistent_on_clear(clean_history_cache):
     history_manager.log_completed_task(task_data)
 
     # Verify history is saved and stats calculate correctly
-    history = history_manager.get_history()
-    assert len(history) == 1
+    task_history = history_manager.get_history()
+    assert len(task_history) == 1
     _, stats = history_manager.get_history_stats()
     assert stats["count_all_time"] == 1
     assert stats["all_time"] == 60.0
@@ -181,7 +180,7 @@ def test_history_stats_persistent_on_clear(clean_history_cache):
     assert stats_after_clear["all_time"] == 60.0
 
 
-def test_get_analytics_data(clean_history_cache):
+def test_get_analytics_data():
     """Test retrieving combined cumulative and daily analytics data."""
     history_manager.log_completed_task({
         "task_id": "analytics_test_1",

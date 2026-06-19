@@ -1,5 +1,5 @@
 """Tests for the priority model access queue mechanism (Scheduler)."""
-# pylint: disable=protected-access, unused-import
+
 import threading
 import time
 import queue
@@ -156,7 +156,7 @@ def test_get_preemptible_unit():
 
 def test_priority_sequential_enforcement():
     """Test that priority tasks respect the sequential lock."""
-    # pylint: disable=consider-using-with
+
     # 1. Manually acquire the lock to block the next task
     scheduler.STATE.priority_sequential_lock.acquire()
 

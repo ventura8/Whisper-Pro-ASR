@@ -91,7 +91,7 @@ To use this service with **Bazarr**:
 - **Global VAD & In-Memory Batch ID**: Optimized language identification using a single VAD pass and zero-I/O NumPy slicing.
 - **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt`, `vad_filter`, and `word_timestamps`.
 - **Subtitle Layout Control**: Custom character-per-line wrapping (`max_line_width`) and max line limits (`max_line_count`) for SRT/VTT output.
-- **Smart Model Lifecycle**: Configurable idle timeout (`MODEL_IDLE_TIMEOUT`) keeps models warm in memory for rapid response to bursty workloads.
+- **Smart Model Lifecycle**: Configurable idle timeout (`MODEL_IDLE_TIMEOUT`) keeps models warm in memory for rapid response to bursty workloads. A deferred cleanup timer starts after the last task completes and is cancelled when new tasks arrive.
 - **Service Analytics Dashboard**: Dedicated `/analytics` page with interactive charts showing cumulative and daily breakdown of task counts and durations.
 - **Runtime Configuration**: Dynamic `/settings` endpoint allows model, device, and retention changes without container restart.
 - **Telemetry Downsampling**: Dual-layer downsampling (server + client) caps chart data at 300 points for smooth dashboard rendering during extended operation.

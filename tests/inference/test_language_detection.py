@@ -1,5 +1,5 @@
 """Tests for modules/inference/language_detection.py."""
-# pylint: disable=protected-access, too-few-public-methods
+
 from unittest import mock
 import numpy as np
 import pytest
@@ -120,8 +120,8 @@ def test_ld_sampling_targets():
 
 
 def test_ld_aggregate_edge_cases():
-    """Cover zero score branch in _aggregate_language_probs."""
-    assert language_detection._aggregate_language_probs([{"en": 0.0}]) == {}
+    """Cover zero score branch in aggregate_language_probs."""
+    assert language_detection.aggregate_language_probs([{"en": 0.0}]) == {}
 
 
 def test_ld_step_isolate_disabled():
@@ -196,7 +196,7 @@ def test_ld_low_confidence_filtering():
             'start_inf': 0.0
         }
 
-        with mock.patch("modules.inference.language_detection._aggregate_language_probs", return_value={"fr": 1.0}) as mock_agg:
+        with mock.patch("modules.inference.language_detection.aggregate_language_probs", return_value={"fr": 1.0}) as mock_agg:
             language_detection._step_run_inference(
                 (mock.MagicMock(), mock_mm), "isolated.wav", 2, perf
             )

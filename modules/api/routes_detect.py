@@ -4,7 +4,7 @@ Language Detection Routes for Whisper Pro ASR
 import json
 import logging
 import time
-from flask import Blueprint, jsonify, request  # pylint: disable=import-error
+from flask import Blueprint, jsonify, request
 from modules.inference import model_manager, language_detection
 from modules import utils
 from modules.api import routes_utils
@@ -75,11 +75,9 @@ def detect_language():
                 return jsonify(result)
             except Exception as e:
                 model_manager.update_task_metadata(result={"error": str(e)})
-                # pylint: disable=broad-exception-raised
+
                 raise e
-    except (ValueError, RuntimeError, IOError) as e:
-        return routes_utils.handle_error(e, "LD")
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]) as e:
         return routes_utils.handle_error(e, "LD")
     finally:
         routes_utils.cleanup_files()

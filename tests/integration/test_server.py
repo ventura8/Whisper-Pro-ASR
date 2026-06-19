@@ -1,5 +1,5 @@
 """Comprehensive coverage for the main Flask server logic."""
-# pylint: disable=protected-access
+
 import os
 import sys
 from io import BytesIO
@@ -147,12 +147,12 @@ def test_error_handlers_and_teardown_exception():
 
 
 def test_verify_runtime_integrity_with_onnx():
-    """Test _verify_runtime_integrity covers the ONNX success case when present."""
+    """Test verify_runtime_integrity covers the ONNX success case when present."""
     mock_ort = mock.MagicMock()
     mock_ort.__version__ = "1.24.1"
     mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
 
     with mock.patch.dict("sys.modules", {"onnxruntime": mock_ort}):
-        whisper_pro_asr._verify_runtime_integrity()
+        whisper_pro_asr.verify_runtime_integrity()
         # Ensure it successfully called onnxruntime properties
         mock_ort.get_available_providers.assert_called_once()

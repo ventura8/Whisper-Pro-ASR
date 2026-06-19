@@ -1,56 +1,19 @@
 """Shared test fixtures and global mocks for the Whisper Pro ASR test suite."""
-import sys
 import argparse
 from unittest import mock
+from flask import Flask
 import pytest
-from whisper_pro_asr import create_app
-from modules.inference import model_manager
-import modules.inference.vad as vad_module
-import modules.inference.preprocessing as prep_module
 
 # 1. Apply global mocks before any project imports to prevent real module loading
-mock_torch = mock.MagicMock()
-mock_torch.__path__ = []
-mock_torch_nn = mock.MagicMock()
-mock_torch_nn.__path__ = []
-mock_torch_nn_functional = mock.MagicMock()
-
-sys.modules['torch'] = mock_torch
-sys.modules['torch.nn'] = mock_torch_nn
-sys.modules['torch.nn.functional'] = mock_torch_nn_functional
-sys.modules['torchaudio'] = mock.MagicMock()
-sys.modules['transformers'] = mock.MagicMock()
-sys.modules['optimum'] = mock.MagicMock()
-sys.modules['optimum.intel'] = mock.MagicMock()
-sys.modules['openvino'] = mock.MagicMock()
-sys.modules['openvino.runtime'] = mock.MagicMock()
-sys.modules['openvino_genai'] = mock.MagicMock()
-sys.modules['librosa'] = mock.MagicMock()
-sys.modules['df'] = mock.MagicMock()
-sys.modules['df.enhance'] = mock.MagicMock()
-sys.modules['demucs'] = mock.MagicMock()
-sys.modules['demucs.apply'] = mock.MagicMock()
-sys.modules['demucs.pretrained'] = mock.MagicMock()
-sys.modules['faster_whisper'] = mock.MagicMock()
-sys.modules['ctranslate2'] = mock.MagicMock()
-sys.modules['audio_separator'] = mock.MagicMock()
-sys.modules['audio_separator.separator'] = mock.MagicMock()
-sys.modules['soundfile'] = mock.MagicMock()
-sys.modules['psutil'] = mock.MagicMock()
-sys.modules['flasgger'] = mock.MagicMock()
+from tests.mock_setup import mock_torch
 
 # 2. Now safe to import project modules
-
-# Create universal mocks for ML dependencies
-# This prevents different test files from conflicting and avoids
-# RuntimeError: function '_has_torch_function' already has a docstring
-mock_torch = mock.MagicMock()
-mock_torch.__path__ = []  # Mark as a package for subpackage imports
-
-# Mock subpackages to avoid "torch is not a package" errors
-mock_torch_nn = mock.MagicMock()
-mock_torch_nn.__path__ = []
-mock_torch_nn_functional = mock.MagicMock()
+from modules.api import routes_asr, routes_detect, routes_system
+import modules.inference.preprocessing as prep_module
+from modules.inference.vad import reset_vad_state
+from modules.inference.scheduler import SchedulerState
+from modules.inference import model_manager, scheduler
+from whisper_pro_asr import create_app
 
 
 def mock_tensor_with_shape(*shape):
@@ -73,7 +36,7 @@ mock_torch.full = lambda size, _v, **kwargs: mock_tensor_with_shape(*size)
 def client():
     """Flask test client with full orchestration mocks."""
     app = create_app()
-    with mock.patch('modules.monitoring.dashboard.psutil') as mock_psu, \
+    with mock.patch('modules.monitoring.dashboard.psutil', create=True) as mock_psu, \
             mock.patch('modules.monitoring.dashboard.utils') as mock_utils:
 
         mock_psu.cpu_percent.return_value = 10.0
@@ -102,82 +65,54 @@ def client():
 @pytest.fixture(autouse=True)
 def reset_module_state():
     """Reset module-level state between tests to prevent test pollution."""
-    # pylint: disable=protected-access
-
     # Force reset module state before test
-    model_manager._MODEL_POOL = {}
-    model_manager._PREPROCESSOR_POOL = {}
+    model_manager.MODEL_POOL = {}
+    model_manager.PREPROCESSOR_POOL = {}
     prep_module.Separator = None
     prep_module.ort = None
-    vad_module._MODEL = None
-    vad_module._UTILS = None
+    scheduler.STATE = SchedulerState()
+    reset_vad_state()
 
     yield
 
     # Also reset after test
-    model_manager._MODEL_POOL = {}
-    model_manager._PREPROCESSOR_POOL = {}
+    model_manager.MODEL_POOL = {}
+    model_manager.PREPROCESSOR_POOL = {}
     prep_module.Separator = None
     prep_module.ort = None
-    vad_module._MODEL = None
-    vad_module._UTILS = None
+    scheduler.STATE = SchedulerState()
+    reset_vad_state()
 
 
-# Apply global mocks before any tests run
-sys.modules['torch'] = mock_torch
-sys.modules['torch.nn'] = mock_torch_nn
-sys.modules['torch.nn.functional'] = mock_torch_nn_functional
-sys.modules['torchaudio'] = mock.MagicMock()
-sys.modules['transformers'] = mock.MagicMock()
-sys.modules['optimum'] = mock.MagicMock()
-sys.modules['optimum.intel'] = mock.MagicMock()
-sys.modules['openvino'] = mock.MagicMock()
-sys.modules['openvino.runtime'] = mock.MagicMock()
-sys.modules['openvino_genai'] = mock.MagicMock()
-sys.modules['librosa'] = mock.MagicMock()
-sys.modules['df'] = mock.MagicMock()
-sys.modules['df.enhance'] = mock.MagicMock()
-sys.modules['demucs'] = mock.MagicMock()
-sys.modules['demucs.apply'] = mock.MagicMock()
-sys.modules['demucs.pretrained'] = mock.MagicMock()
+@pytest.fixture
+def routes_app():
+    """Create test Flask app with mocked model_manager for API routes testing."""
+    with mock.patch('modules.api.routes_asr.model_manager') as mock_mm_asr, \
+            mock.patch('modules.api.routes_detect.model_manager') as mock_mm_det, \
+            mock.patch('modules.inference.language_detection.run_voting_detection') as mock_ld:
 
-# Faster-Whisper mock
-mock_faster_whisper = mock.MagicMock()
-mock_faster_whisper.WhisperModel = mock.MagicMock()
-mock_faster_whisper.BatchedInferencePipeline = mock.MagicMock()
-sys.modules['faster_whisper'] = mock_faster_whisper
-sys.modules['flasgger'] = mock.MagicMock()
+        mock_mm_asr.is_engine_initialized.return_value = True
+        mock_mm_det.is_engine_initialized.return_value = True
 
-# Audio separator mock
-sys.modules['audio_separator'] = mock.MagicMock()
-sys.modules['audio_separator.separator'] = mock.MagicMock()
+        mock_ld.return_value = {
+            'confidence': 0.95, 'detected_language': 'en', 'language': 'en', 'language_code': 'en'
+        }
 
-# Soundfile mock
-mock_soundfile = mock.MagicMock()
-mock_soundfile.info = mock.MagicMock(
-    return_value=mock.MagicMock(duration=10.0))
-sys.modules['soundfile'] = mock_soundfile
+        mock_mm_asr.run_transcription.return_value = {
+            'text': 'Hello world',
+            'segments': [{'timestamp': (0.0, 1.0), 'text': 'Hello world'}]
+        }
 
-# CTranslate2 mock
-mock_ctranslate2 = mock.MagicMock()
-mock_ctranslate2.get_cuda_device_count = mock.MagicMock(return_value=0)
-sys.modules['ctranslate2'] = mock_ctranslate2
+        test_app = Flask(__name__)
+        test_app.register_blueprint(routes_system.bp)
+        test_app.register_blueprint(routes_asr.bp)
+        test_app.register_blueprint(routes_detect.bp)
+        test_app.config['TESTING'] = True
+        yield test_app
 
-# Utility mocks
-mock_psutil = mock.MagicMock()
-mock_process = mock.MagicMock()
-mock_psutil.cpu_percent.return_value = 10.0
-mock_psutil.cpu_count.return_value = 8
-mock_psutil.virtual_memory.return_value.percent = 50.0
-mock_psutil.virtual_memory.return_value.used = 8 * (1024**3)
-mock_psutil.virtual_memory.return_value.total = 16 * (1024**3)
-mock_process.cpu_percent.return_value = 10.0
-mock_process.memory_info.return_value = mock.MagicMock(rss=100 * 1024 * 1024)
-mock_psutil.Process.return_value = mock_process
-sys.modules['psutil'] = mock_psutil
-sys.modules['tqdm'] = mock.MagicMock()
-sys.modules['pydub'] = mock.MagicMock()
-sys.modules['pydub.AudioSegment'] = mock.MagicMock()
-sys.modules['requests'] = mock.MagicMock()
-sys.modules['ffmpeg'] = mock.MagicMock()
-sys.modules['ffmpeg_python'] = mock.MagicMock()
+
+@pytest.fixture
+def routes_client(request):
+    """Create test client for routes_app."""
+    app = request.getfixturevalue("routes_app")
+    return app.test_client()

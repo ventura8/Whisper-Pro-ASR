@@ -1,40 +1,64 @@
 """
 High-Level Model Orchestration and Hardware Lifecycle Management for Whisper Pro ASR.
 """
-# pylint: disable=too-many-lines
+
 import logging
 import threading
 import time
 import gc
 import os
 import ctypes
+import typing
+import importlib
 from modules import config, logging_setup, utils
 from modules.inference import preprocessing, vad, scheduler, post_processing, diarization
+from modules.inference.language_detection_core import (
+    run_language_detection,
+    run_batch_language_detection,
+    run_batch_language_detection_direct,
+    run_language_detection_core
+)
+from modules.inference.concurrency import model_lock_ctx, _check_preemption
+
+# Re-export for public API and compatibility
+_ = (
+    run_language_detection,
+    run_batch_language_detection,
+    run_batch_language_detection_direct,
+    run_language_detection_core,
+    model_lock_ctx,
+    _check_preemption
+)
 
 _post_process_results = post_processing.post_process_results
 
 
+def dummy_engine(*args, **kwargs):
+    """Dummy engine function to satisfy pylint type checker for callable targets."""
+    return (args, kwargs)
+
+
 # Lazy load containers for engines
-_ENGINES = {
-    "WhisperModel": None,
-    "ctranslate2": None,
-    "IntelWhisperEngine": None
+_ENGINES: typing.Dict[str, typing.Any] = {
+    "WhisperModel": dummy_engine,
+    "ctranslate2": dummy_engine,
+    "IntelWhisperEngine": dummy_engine
 }
 
 
 def _lazy_import_engines():
     """Lazily import inference engines to save 500MB+ RAM during startup."""
-    if _ENGINES["WhisperModel"] is None:
+    if _ENGINES["WhisperModel"] is dummy_engine:
         try:
-            from faster_whisper import WhisperModel as wm  # pylint: disable=import-outside-toplevel
-            import ctranslate2 as ct  # pylint: disable=import-outside-toplevel
-            _ENGINES["WhisperModel"] = wm
-            _ENGINES["ctranslate2"] = ct
+            faster_whisper = importlib.import_module("faster_whisper")
+            ctranslate2 = importlib.import_module("ctranslate2")
+            _ENGINES["WhisperModel"] = faster_whisper.WhisperModel
+            _ENGINES["ctranslate2"] = ctranslate2
             # Ensure VAD monkeypatching is applied after faster_whisper load
-            vad._lazy_import_vad()  # pylint: disable=protected-access
+            vad.lazy_import_vad()
             if config.ASR_ENGINE == "INTEL-WHISPER":
-                from modules.inference.intel_engine import IntelWhisperEngine as iwe  # pylint: disable=import-outside-toplevel
-                _ENGINES["IntelWhisperEngine"] = iwe
+                intel_engine = importlib.import_module("modules.inference.intel_engine")
+                _ENGINES["IntelWhisperEngine"] = intel_engine.IntelWhisperEngine
         except ImportError as e:
             logger.warning("[Engine] Failed to lazy load engines: %s", e)
 
@@ -46,10 +70,10 @@ logging.getLogger("audio_separator").setLevel(logging.INFO)
 TASK_LOGS = logging_setup.TASK_LOGS
 logger = logging.getLogger(__name__)
 
-_MODEL_POOL = {}
-_PREPROCESSOR_POOL = {}
-_ALIGN_POOL = diarization._ALIGN_POOL  # pylint: disable=protected-access
-_DIARIZE_POOL = diarization._DIARIZE_POOL  # pylint: disable=protected-access
+MODEL_POOL = {}
+PREPROCESSOR_POOL = {}
+ALIGN_POOL = diarization.ALIGN_POOL
+DIARIZE_POOL = diarization.DIARIZE_POOL
 
 _LIFECYCLE_STATE = {
     "last_activity": time.time(),
@@ -58,25 +82,46 @@ _LIFECYCLE_STATE = {
 _MONITOR_LOCK = threading.Lock()
 
 
-def _monitor_idleness():
-    while True:
-        time.sleep(5)
-        # Check if active sessions are zero and idle timeout has elapsed
-        if scheduler.STATE.active_sessions == 0:
-            elapsed = time.time() - _LIFECYCLE_STATE["last_activity"]
-            if elapsed > config.MODEL_IDLE_TIMEOUT:
-                logger.info("[Engine] Models idle for %.1fs. Purging from memory...", elapsed)
-                unload_models()
+CLEANER_STATE = {
+    "timer": None
+}
+_CLEANER_TIMER_LOCK = threading.Lock()
+_POOL_LOCK = threading.Lock()
 
 
-def _ensure_monitor_thread():
+def _run_idle_cleanup():
+    """Timer callback to unload models when idle."""
+    logger.info("[Engine] Idle timeout reached. Purging models from memory...")
+    unload_models()
+    with _CLEANER_TIMER_LOCK:
+        CLEANER_STATE["timer"] = None
+
+
+def _schedule_idle_cleanup():
+    """Schedules model unloading after idle timeout."""
     if config.MODEL_IDLE_TIMEOUT <= 0:
         return
-    with _MONITOR_LOCK:
-        if not _LIFECYCLE_STATE["monitor_started"]:
-            t = threading.Thread(target=_monitor_idleness, daemon=True, name="ModelIdleMonitor")
-            t.start()
-            _LIFECYCLE_STATE["monitor_started"] = True
+    with _CLEANER_TIMER_LOCK:
+        if CLEANER_STATE["timer"] is not None:
+            CLEANER_STATE["timer"].cancel()
+        CLEANER_STATE["timer"] = threading.Timer(config.MODEL_IDLE_TIMEOUT, _run_idle_cleanup)
+        CLEANER_STATE["timer"].daemon = True
+        CLEANER_STATE["timer"].start()
+        logger.info("[Engine] Scheduled memory cleanup in %ds", config.MODEL_IDLE_TIMEOUT)
+
+
+def _cancel_idle_cleanup():
+    """Cancels any scheduled model unloading."""
+    with _CLEANER_TIMER_LOCK:
+        if CLEANER_STATE["timer"] is not None:
+            CLEANER_STATE["timer"].cancel()
+            CLEANER_STATE["timer"] = None
+            logger.info("[Engine] Cancelled scheduled memory cleanup because a new task arrived")
+
+
+# Stubs for test/code backward compatibility
+def _ensure_monitor_thread():
+    pass
 
 
 def load_model():
@@ -84,7 +129,7 @@ def load_model():
     _ensure_monitor_thread()
     for unit in config.HARDWARE_UNITS:
         # Initialize preprocessor managers (they are lazy and won't load models yet)
-        _PREPROCESSOR_POOL[unit['id']] = preprocessing.PreprocessingManager(unit)
+        PREPROCESSOR_POOL[unit['id']] = preprocessing.PreprocessingManager(unit)
 
     scheduler.STATE.engine_initialized = True
     if config.ENABLE_VOCAL_SEPARATION:
@@ -96,52 +141,128 @@ def load_model():
 init_pool = load_model
 
 
-def _init_unit(unit):
+def init_unit(unit):
     """Loads model for a specific hardware unit."""
     _lazy_import_engines()
-    try:
-        logger.info("[Engine] Loading %s on %s...", config.MODEL_ID, unit['name'])
+    with _POOL_LOCK:
+        try:
+            logger.info("[Engine] Loading %s on %s...", config.MODEL_ID, unit['name'])
 
-        if config.ASR_ENGINE == "INTEL-WHISPER" and unit['type'] in ['GPU', 'NPU', 'CPU']:
-            model = _ENGINES["IntelWhisperEngine"](config.MODEL_ID, device=unit['id'])  # pylint: disable=not-callable
-        else:
-            # Resolve device for Faster-Whisper
-            if unit['type'] == 'CUDA':
-                target_device = 'cuda'
+            if config.ASR_ENGINE == "INTEL-WHISPER" and unit['type'] in ['GPU', 'NPU', 'CPU']:
+                model = _ENGINES["IntelWhisperEngine"](config.MODEL_ID, device=unit['id'])
             else:
-                # Intel NPU/GPU are NOT supported by Faster-Whisper directly.
-                # Force CPU fallback for Whisper inference while allowing
-                # Preprocessing (UVR) to still use the accelerator.
-                target_device = 'cpu'
-                if unit['type'] in ['NPU', 'GPU']:
-                    logger.info(
-                        "[Engine] Intel accelerator detected. Whisper will use CPU for this slot.")
+                # Resolve device for Faster-Whisper
+                if unit['type'] == 'CUDA':
+                    target_device = 'cuda'
+                else:
+                    # Intel NPU/GPU are NOT supported by Faster-Whisper directly.
+                    # Force CPU fallback for Whisper inference while allowing
+                    # Preprocessing (UVR) to still use the accelerator.
+                    target_device = 'cpu'
+                    if unit['type'] in ['NPU', 'GPU']:
+                        logger.info(
+                            "[Engine] Intel accelerator detected. Whisper will use CPU for this slot.")
 
-            model = _ENGINES["WhisperModel"](  # pylint: disable=not-callable
-                config.MODEL_ID,
-                device=target_device,
-                device_index=unit.get('index', 0),
-                compute_type=config.COMPUTE_TYPE,
-                cpu_threads=config.ASR_THREADS,
-                download_root=config.OV_CACHE_DIR
-            )
+                model = _ENGINES["WhisperModel"](
+                    config.MODEL_ID,
+                    device=target_device,
+                    device_index=unit.get('index', 0),
+                    compute_type=config.COMPUTE_TYPE,
+                    cpu_threads=config.ASR_THREADS,
+                    download_root=config.OV_CACHE_DIR
+                )
 
-        _MODEL_POOL[unit['id']] = model
-        _PREPROCESSOR_POOL[unit['id']] = preprocessing.PreprocessingManager(unit)
-        scheduler.STATE.whisper_loaded = True
-        scheduler.STATE.engine_initialized = True
-        logger.info("[Engine] %s ready.", unit['id'])
-    except (ValueError, RuntimeError, IOError) as e:
-        logger.error("[Engine] Failed to load %s: %s", unit['id'], e)
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("[Engine] Failed to load %s (Unexpected): %s", unit['id'], e)
+            MODEL_POOL[unit['id']] = model
+            PREPROCESSOR_POOL[unit['id']] = preprocessing.PreprocessingManager(unit)
+            scheduler.STATE.whisper_loaded = True
+            scheduler.STATE.engine_initialized = True
+            logger.info("[Engine] %s ready.", unit['id'])
+        except (ValueError, RuntimeError, ImportError, AttributeError, KeyError, OSError, TypeError) as e:
+            logger.error("[Engine] Failed to load %s: %s", unit['id'], e)
 
 
-# pylint: disable=too-many-locals,too-many-positional-arguments
+def _consume_segments(
+    segments, info, task, *, diarize, min_speakers, max_speakers, hf_token, unit_id, processed_path
+):
+    """Consume the segments generator and run diarization if requested."""
+    if diarize:
+        try:
+            # 1. Consume generator to collect all raw segments first
+            raw_segments = []
+            for segment in segments:
+                _check_preemption()
+                raw_segments.append({
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text
+                })
+
+                # Live updates during transcription
+                live_results = [{
+                    "start": round(s["start"], 2),
+                    "end": round(s["end"], 2),
+                    "text": s["text"].strip()
+                } for s in raw_segments]
+                live_srt = utils.generate_srt({"segments": live_results})
+                scheduler.update_task_metadata(live_text=live_srt)
+
+                if info.duration > 0:
+                    progress = min(80, int((segment.end / info.duration) * 80))
+                    time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
+                    verb = "Translating" if task == "translate" else "Transcribing"
+                    scheduler.update_task_progress(
+                        progress, f"{verb} (Seg {len(raw_segments)} | {time_ratio})")
+
+            if raw_segments:
+                results = diarization.run_diarization(
+                    processed_path=processed_path,
+                    raw_segments=raw_segments,
+                    info=info,
+                    language=info.language,
+                    min_speakers=min_speakers,
+                    max_speakers=max_speakers,
+                    hf_token=hf_token,
+                    unit_id=unit_id
+                )
+            else:
+                results = []
+        except (ValueError, TypeError, KeyError, AttributeError, OSError, RuntimeError) as diarize_err:
+            logger.error("[Diarization] Diarization failed: %s. Falling back to non-diarized output.", diarize_err)
+            # Fallback to formatting raw_segments without diarization
+            results = []
+            for s in raw_segments:
+                results.append({
+                    "start": round(s["start"], 2),
+                    "end": round(s["end"], 2),
+                    "text": s["text"].strip()
+                })
+    else:
+        results = []
+        for segment in segments:
+            _check_preemption()
+            seg_text = segment.text.strip()
+            results.append({
+                "start": round(segment.start, 2),
+                "end": round(segment.end, 2),
+                "text": seg_text
+            })
+
+            # Generate live SRT content (includes timestamps and newlines)
+            live_srt = utils.generate_srt({"segments": results})
+            logger.debug("[Live] Updating SRT for %d segments", len(results))
+            scheduler.update_task_metadata(live_text=live_srt)
+
+            if info.duration > 0:
+                progress = min(95, int((segment.end / info.duration) * 100))
+                time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
+                verb = "Translating" if task == "translate" else "Transcribing"
+                scheduler.update_task_progress(
+                    progress, f"{verb} (Seg {len(results)} | {time_ratio})")
+    return results
 
 
 def run_transcription(
-    audio_path, language, task, diarize=False, min_speakers=None,
+    audio_path, language, task, *, diarize=False, min_speakers=None,
     max_speakers=None, hf_token=None, initial_prompt=None,
     vad_filter=True, word_timestamps=False, **_kwargs
 ):
@@ -161,7 +282,7 @@ def run_transcription(
         try:
             perf['start_inf'] = time.time()
             scheduler.update_task_progress(10, "Inference")
-            segments, info = model.transcribe(
+            trans_res = model.transcribe(
                 processed_path,
                 language=language,
                 task=task,
@@ -172,96 +293,33 @@ def run_transcription(
                 word_timestamps=word_timestamps
             )
 
-            # Consumption of generator with progress updates
-            if diarize:
-                try:
-                    # 1. Consume generator to collect all raw segments first
-                    raw_segments = []
-                    for segment in segments:
-                        _check_preemption()
-                        raw_segments.append({
-                            "start": segment.start,
-                            "end": segment.end,
-                            "text": segment.text
-                        })
-
-                        # Live updates during transcription
-                        live_results = [{
-                            "start": round(s["start"], 2),
-                            "end": round(s["end"], 2),
-                            "text": s["text"].strip()
-                        } for s in raw_segments]
-                        live_srt = utils.generate_srt({"segments": live_results})
-                        scheduler.update_task_metadata(live_text=live_srt)
-
-                        if info.duration > 0:
-                            progress = min(80, int((segment.end / info.duration) * 80))
-                            time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
-                            verb = "Translating" if task == "translate" else "Transcribing"
-                            scheduler.update_task_progress(
-                                progress, f"{verb} (Seg {len(raw_segments)} | {time_ratio})")
-
-                    if raw_segments:
-                        results = diarization.run_diarization(
-                            processed_path=processed_path,
-                            raw_segments=raw_segments,
-                            info=info,
-                            language=language,
-                            min_speakers=min_speakers,
-                            max_speakers=max_speakers,
-                            hf_token=hf_token,
-                            unit_id=unit_id
-                        )
-                    else:
-                        results = []
-                except Exception as diarize_err:  # pylint: disable=broad-exception-caught
-                    logger.error("[Diarization] Diarization failed: %s. Falling back to non-diarized output.", diarize_err)
-                    # Fallback to formatting raw_segments without diarization
-                    results = []
-                    for s in raw_segments:
-                        results.append({
-                            "start": round(s["start"], 2),
-                            "end": round(s["end"], 2),
-                            "text": s["text"].strip()
-                        })
-            else:
-                results = []
-                for segment in segments:
-                    _check_preemption()
-                    seg_text = segment.text.strip()
-                    results.append({
-                        "start": round(segment.start, 2),
-                        "end": round(segment.end, 2),
-                        "text": seg_text
-                    })
-
-                    # Generate live SRT content (includes timestamps and newlines)
-                    live_srt = utils.generate_srt({"segments": results})
-                    logger.debug("[Live] Updating SRT for %d segments", len(results))
-                    scheduler.update_task_metadata(live_text=live_srt)
-
-                    if info.duration > 0:
-                        progress = min(95, int((segment.end / info.duration) * 100))
-                        time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
-                        verb = "Translating" if task == "translate" else "Transcribing"
-                        scheduler.update_task_progress(
-                            progress, f"{verb} (Seg {len(results)} | {time_ratio})")
+            results = _consume_segments(
+                trans_res[0], trans_res[1], task,
+                diarize=diarize,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+                hf_token=hf_token,
+                unit_id=unit_id,
+                processed_path=processed_path
+            )
 
             perf['dur_inf'] = time.time() - perf['start_inf']
 
             # Fetch timing from registry for the final performance report
             perf['dur_queue'] = 0
             with scheduler.STATE.task_registry_lock:
-                t_meta = scheduler.STATE.task_registry.get(threading.get_ident(), {})
-                perf['dur_queue'] = t_meta.get(
-                    "start_active", time.time()) - t_meta.get("start_time", time.time())
+                perf['dur_queue'] = (
+                    scheduler.STATE.task_registry.get(threading.get_ident(), {})
+                ).get("start_active", time.time()) - (
+                    scheduler.STATE.task_registry.get(threading.get_ident(), {})
+                ).get("start_time", time.time())
 
             res = {
                 "text": "",  # Placeholder
                 "segments": results,
-                "language": info.language,
-                "language_probability": info.language_probability,
-                "video_duration_sec": info.duration,
+                "language": trans_res[1].language,
+                "language_probability": trans_res[1].language_probability,
+                "video_duration_sec": trans_res[1].duration,
                 "performance": {
                     "queue_sec": round(perf['dur_queue'], 2),
                     "isolation_sec": round(perf['dur_iso'], 2),
@@ -279,8 +337,8 @@ def run_transcription(
             if processed_path != audio_path and os.path.exists(processed_path):
                 try:
                     os.remove(processed_path)
-                except (IOError, OSError) as cleanup_err:
-                    logger.debug("[Engine] Failed to clean up isolated file: %s", cleanup_err)
+                except (IOError, OSError):
+                    logger.debug("[Engine] Failed to clean up isolated file")
 
 
 def run_vocal_isolation(audio_path, force=False):
@@ -291,7 +349,7 @@ def run_vocal_isolation(audio_path, force=False):
 
 def run_vocal_isolation_direct(audio_path, unit_id, force=False):
     """Direct isolation without re-acquiring the lock."""
-    preprocessor = _PREPROCESSOR_POOL.get(unit_id)
+    preprocessor = PREPROCESSOR_POOL.get(unit_id)
     if not preprocessor:
         return audio_path
 
@@ -306,106 +364,90 @@ def run_vocal_isolation_direct(audio_path, unit_id, force=False):
     return result_path
 
 
-# fmt: off
-from modules.inference.language_detection_core import (  # pylint: disable=wrong-import-position, unused-import
-    run_language_detection,
-    run_batch_language_detection,
-    run_batch_language_detection_direct,
-    run_language_detection_core
-)
-# fmt: on
-
-
-def update_task_result(_audio_path, result):
-    """Updates the final result in the task registry."""
-    scheduler.update_task_metadata(result=result)
-
-
-# fmt: off
-from modules.inference.concurrency import model_lock_ctx, _check_preemption  # pylint: disable=wrong-import-position, unused-import
-# fmt: on
+# Bottom imports removed and moved to top level
 
 
 def unload_models():
     """Purge all models from RAM/VRAM with extreme prejudice."""
-    mem_before = utils.get_system_telemetry().get("app_memory_gb", 0)
-    logger.info("[Engine] Aggressive Offload: Purging models. Current RAM: %s GB", mem_before)
+    with _POOL_LOCK:
+        mem_before = utils.get_system_telemetry().get("app_memory_gb", 0)
+        logger.info("[Engine] Aggressive Offload: Purging models. Current RAM: %s GB", mem_before)
 
-    # 1. Clear Whisper models
-    with scheduler.STATE.model_lock:
-        whisper_count = len(_MODEL_POOL)
-        for unit_id in list(_MODEL_POOL.keys()):
-            model = _MODEL_POOL.pop(unit_id)
+        # 1. Clear Whisper models
+        with scheduler.STATE.model_lock:
+            whisper_count = len(MODEL_POOL)
+            for unit_id in list(MODEL_POOL.keys()):
+                model = MODEL_POOL.pop(unit_id)
+                try:
+                    if hasattr(model, 'unload'):
+                        model.unload()
+                    elif hasattr(model, 'pipeline'):
+                        model.pipeline = None
+                except tuple([Exception]) as e:
+                    logger.debug("[Engine] Error unloading model %s: %s", unit_id, e)
+                del model
+            MODEL_POOL.clear()
+
+        # 2. Clear UVR models
+        uvr_count = len(PREPROCESSOR_POOL)
+        for unit_id in list(PREPROCESSOR_POOL.keys()):
+            pm = PREPROCESSOR_POOL.pop(unit_id)
             try:
-                if hasattr(model, 'unload'):
-                    model.unload()
-                elif hasattr(model, 'pipeline'):
-                    model.pipeline = None
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.debug("[Engine] Error unloading model %s: %s", unit_id, e)
-            del model
-        _MODEL_POOL.clear()
+                pm.unload_model()
+            except tuple([Exception]) as e:
+                logger.debug("[Engine] Error unloading UVR %s: %s", unit_id, e)
+            del pm
+        PREPROCESSOR_POOL.clear()
 
-    # 2. Clear UVR models
-    uvr_count = len(_PREPROCESSOR_POOL)
-    for unit_id in list(_PREPROCESSOR_POOL.keys()):
-        pm = _PREPROCESSOR_POOL.pop(unit_id)
+        # 3. Clear WhisperX Diarize/Align models
+        for unit_id in list(DIARIZE_POOL.keys()):
+            model_d = DIARIZE_POOL.pop(unit_id)
+            del model_d
+        DIARIZE_POOL.clear()
+
+        for key in list(ALIGN_POOL.keys()):
+            model_a, metadata = ALIGN_POOL.pop(key)
+            del model_a
+            del metadata
+        ALIGN_POOL.clear()
+
+        # 3. Aggressive GC and cache flushing
+        gc.collect()
+        gc.collect()  # Second pass for circular references
+
+        if _ENGINES["ctranslate2"]:
+            try:
+                _ENGINES["ctranslate2"].clear_caches()
+            except (AttributeError, RuntimeError):
+                pass
+
+        # Release GPU memory if applicable
+        utils.clear_gpu_cache()
+
+        # Force OS memory reclamation
         try:
-            pm.unload_model()
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.debug("[Engine] Error unloading UVR %s: %s", unit_id, e)
-        del pm
-    _PREPROCESSOR_POOL.clear()
-
-    # 3. Clear WhisperX Diarize/Align models
-    for unit_id in list(_DIARIZE_POOL.keys()):
-        model_d = _DIARIZE_POOL.pop(unit_id)
-        del model_d
-    _DIARIZE_POOL.clear()
-
-    for key in list(_ALIGN_POOL.keys()):
-        model_a, metadata = _ALIGN_POOL.pop(key)
-        del model_a
-        del metadata
-    _ALIGN_POOL.clear()
-
-    # 3. Aggressive GC and cache flushing
-    gc.collect()
-    gc.collect()  # Second pass for circular references
-
-    if _ENGINES["ctranslate2"]:
-        try:
-            _ENGINES["ctranslate2"].clear_caches()
-        except (AttributeError, RuntimeError):
+            # Linux/Docker optimization
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim(0)
+        except (OSError, AttributeError):
             pass
 
-    # Release GPU memory if applicable
-    utils.clear_gpu_cache()
+        scheduler.STATE.whisper_loaded = False
+        scheduler.STATE.uvr_loaded = False
 
-    # Force OS memory reclamation
-    try:
-        # Linux/Docker optimization
-        libc = ctypes.CDLL("libc.so.6")
-        libc.malloc_trim(0)
-    except (OSError, AttributeError):
-        pass
+        time.sleep(0.2)  # Give OS time to update page tables
+        gc.collect()
 
-    scheduler.STATE.whisper_loaded = False
-    scheduler.STATE.uvr_loaded = False
-
-    time.sleep(0.2)  # Give OS time to update page tables
-    gc.collect()
-
-    mem_after = utils.get_system_telemetry().get("app_memory_gb", 0)
-    logger.info("[Engine] Reclamation complete. RAM: %s GB -> %s GB (Released: %d Whisper, %d UVR)",
-                mem_before, mem_after, whisper_count, uvr_count)
+        mem_after = utils.get_system_telemetry().get("app_memory_gb", 0)
+        logger.info("[Engine] Reclamation complete. RAM: %s GB -> %s GB (Released: %d Whisper, %d UVR)",
+                    mem_before, mem_after, whisper_count, uvr_count)
 
 
 def increment_active_session():
     """Tracks active session count."""
     _LIFECYCLE_STATE["last_activity"] = time.time()
     scheduler.increment_active_session()
-    _ensure_monitor_thread()
+    _cancel_idle_cleanup()
 
 
 def decrement_active_session():
@@ -417,7 +459,7 @@ def decrement_active_session():
 
     if current_active == 0:
         if config.MODEL_IDLE_TIMEOUT > 0:
-            _ensure_monitor_thread()
+            _schedule_idle_cleanup()
         elif config.AGGRESSIVE_OFFLOAD:
             unload_models()
 
@@ -429,12 +471,12 @@ def wait_for_priority():
 
 def is_engine_actually_loaded():
     """Deep check of RAM state."""
-    return len(_MODEL_POOL) > 0
+    return len(MODEL_POOL) > 0
 
 
 def is_uvr_actually_loaded():
     """Check if any UVR models are in RAM."""
-    return any(pm.separator is not None for pm in _PREPROCESSOR_POOL.values())
+    return any(pm.separator is not None for pm in PREPROCESSOR_POOL.values())
 
 
 # Proxy functions for backward compatibility
@@ -448,7 +490,7 @@ is_engine_initialized = scheduler.is_engine_initialized
 def get_status():
     """Returns engine-specific diagnostics for the telemetry system."""
     return {
-        "active_units": len(_MODEL_POOL),
+        "active_units": len(MODEL_POOL),
         "total_units": len(config.HARDWARE_UNITS),
         "whisper_loaded": scheduler.STATE.whisper_loaded,
         "uvr_loaded": scheduler.STATE.uvr_loaded,

@@ -1,5 +1,5 @@
 """Tests for modules/inference/intel_engine.py using mocks."""
-# pylint: disable=protected-access, import-error, no-member, reimported, wrong-import-order, wrong-import-position
+
 from modules.inference import intel_engine
 import sys
 from unittest import mock

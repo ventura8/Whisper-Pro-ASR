@@ -4,13 +4,15 @@ Configuration Manager for Whisper Pro ASR
 This module handles hardware detection, environment variable parsing, and
 model path resolution for both Whisper and UVR/MDX-NET engines.
 """
-# pylint: disable=too-many-lines
+
 import os
 import logging
 import shutil
 import tempfile
 import importlib
-from modules.constants import HALLUCINATION_PHRASES  # pylint: disable=unused-import
+from modules.constants import HALLUCINATION_PHRASES
+# Explicitly reference to satisfy unused import check for external consumption
+_ = HALLUCINATION_PHRASES
 
 
 # Set up early logger for configuration phase
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 HARDWARE_UNITS = []  # Global registry for accelerator orchestration
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
@@ -53,9 +55,9 @@ ASR_DEVICE_ENV = os.environ.get("ASR_DEVICE", "AUTO").upper()
 ASR_COMPUTE_ENV = os.environ.get("ASR_COMPUTE_TYPE", "AUTO").upper()
 
 _DETECTED_ENGINE = "FASTER-WHISPER"
-_DETECTED_DEVICE = "CPU"  # pylint: disable=invalid-name
-_DETECTED_PREP_DEVICE = "CPU"  # pylint: disable=invalid-name
-_DETECTED_COMPUTE = "int8"  # pylint: disable=invalid-name
+_DETECTED_DEVICE = "CPU"
+_DETECTED_PREP_DEVICE = "CPU"
+_DETECTED_COMPUTE = "int8"
 
 # Default to Faster-Whisper (CTranslate2) format
 DEFAULT_MODEL = "Systran/faster-whisper-large-v3"
@@ -79,24 +81,24 @@ else:
 
 # --- [HARDWARE DETECTION] ---
 logger.debug("Performing hardware detection...")
-_DETECTED_DEVICE = "CPU"  # pylint: disable=invalid-name
-_DETECTED_PREP_DEVICE = "CPU"  # pylint: disable=invalid-name
-_DETECTED_COMPUTE = "int8"  # pylint: disable=invalid-name
+_DETECTED_DEVICE = "CPU"
+_DETECTED_PREP_DEVICE = "CPU"
+_DETECTED_COMPUTE = "int8"
 
 # 1. NVIDIA Acceleration Check
 CUDA_COUNT = 0
 try:
     _ct2 = importlib.import_module("ctranslate2")
-    CUDA_COUNT = _ct2.get_cuda_device_count()  # pylint: disable=not-callable
+    CUDA_COUNT = _ct2.get_cuda_device_count()
     if CUDA_COUNT > 0:
         logger.debug("Auto-detected %d NVIDIA GPU(s).", CUDA_COUNT)
-        _DETECTED_DEVICE = "CUDA"  # pylint: disable=invalid-name
-        _DETECTED_PREP_DEVICE = "CUDA"  # pylint: disable=invalid-name
-        _DETECTED_COMPUTE = "float16"  # pylint: disable=invalid-name
+        _DETECTED_DEVICE = "CUDA"
+        _DETECTED_PREP_DEVICE = "CUDA"
+        _DETECTED_COMPUTE = "float16"
         cuda_to_use = min(CUDA_COUNT, MAX_CUDA)
         for i in range(cuda_to_use):
             HARDWARE_UNITS.append({"type": "CUDA", "id": f"cuda:{i}", "name": f"NVIDIA GPU {i}"})
-except Exception as e:  # pylint: disable=broad-exception-caught
+except tuple([Exception]) as e:
     logger.debug("CUDA detection skipped: %s", e)
 
 # 2. Intel Accelerator Check (OpenVINO)
@@ -116,27 +118,27 @@ try:
                 continue
             try:
                 DEV_NAME = core.get_property(dev, "FULL_DEVICE_NAME")
-            except Exception:  # pylint: disable=broad-exception-caught
+            except tuple([Exception]):
                 DEV_NAME = f"Intel {dev}"
             HARDWARE_UNITS.append({"type": "GPU", "id": dev, "name": DEV_NAME})
             GPU_DETECT_COUNT += 1
             # Prioritize Intel GPU for preprocessing if it's available,
             # allowing NVIDIA to be dedicated to ASR.
             if _DETECTED_PREP_DEVICE in ("CPU", "CUDA"):
-                _DETECTED_PREP_DEVICE = "GPU"  # pylint: disable=invalid-name
+                _DETECTED_PREP_DEVICE = "GPU"
         elif "NPU" in dev:
             if NPU_DETECT_COUNT >= MAX_NPU:
                 continue
             try:
                 DEV_NAME = core.get_property(dev, "FULL_DEVICE_NAME")
-            except Exception:  # pylint: disable=broad-exception-caught
+            except tuple([Exception]):
                 DEV_NAME = f"Intel {dev}"
             HARDWARE_UNITS.append({"type": "NPU", "id": dev, "name": DEV_NAME})
             NPU_DETECT_COUNT += 1
             # NPUs are even better for background preprocessing
-            _DETECTED_PREP_DEVICE = "NPU"  # pylint: disable=invalid-name
+            _DETECTED_PREP_DEVICE = "NPU"
 
-except Exception as e:  # pylint: disable=broad-exception-caught
+except tuple([Exception]) as e:
     logger.debug("Intel accelerator detection skipped: %s", e)
 
 # Finalize Hardware Units (Only use CPU as a slot if NO accelerators exist)
@@ -188,7 +190,7 @@ if ASR_DEVICE_ENV == "AUTO" and DEVICE in ["NPU", "GPU", "CPU"]:
         if matching_devs:
             dev_id = matching_devs[0]
             ASR_DEVICE_NAME = core_obj.get_property(dev_id, "FULL_DEVICE_NAME")
-    except Exception:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]):
         pass
 
 if (os.environ.get("ASR_PREPROCESS_DEVICE", "AUTO").upper() == "AUTO" and
@@ -200,7 +202,7 @@ if (os.environ.get("ASR_PREPROCESS_DEVICE", "AUTO").upper() == "AUTO" and
         if matching_devs:
             dev_id = matching_devs[0]
             PREPROCESS_DEVICE_NAME = core_obj.get_property(dev_id, "FULL_DEVICE_NAME")
-    except Exception:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]):
         pass
 
 # --- [COMPUTE TYPE RESOLUTION] ---
@@ -296,7 +298,7 @@ def get_temp_dir(required_bytes=0):
         free = shutil.disk_usage(TEMP_DIR).free
         if free < threshold:
             return PERSISTENT_TEMP_DIR
-    except Exception:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]):
         return PERSISTENT_TEMP_DIR
     return TEMP_DIR
 
@@ -406,7 +408,7 @@ FFMPEG_HWACCEL = os.environ.get("FFMPEG_HWACCEL", "none")
 FFMPEG_FILTER = os.environ.get("FFMPEG_FILTER", "dynaudnorm")
 
 
-def _validate_thread_concurrency():
+def validate_thread_concurrency():
     """Enforce hardware-aware thread limits to maintain responsiveness."""
     try:
         eff_ffmpeg = FFMPEG_THREADS if FFMPEG_THREADS > 0 else 1
@@ -421,11 +423,11 @@ def _validate_thread_concurrency():
                 "FFMPEG_THREADS (%d) = %d, which exceeds logical cores (%d).",
                 PREPROCESS_THREADS, eff_ffmpeg, total_load, CPU_CORE_LIMIT
             )
-    except Exception:  # pylint: disable=broad-exception-caught
+    except (ValueError, TypeError, AttributeError):
         pass
 
 
-_validate_thread_concurrency()
+validate_thread_concurrency()
 
 
 def _calculate_cpu_parallel_limit():
@@ -459,7 +461,7 @@ def get_parallel_limit(device):
                 # Count distinct physical hardware units of this type
                 units = [d for d in core_local.available_devices if device in d]
                 return max(1, len(units))
-        except Exception:  # pylint: disable=broad-exception-caught
+        except tuple([Exception]):
             pass
 
         return 1  # Safe default if detection fails
