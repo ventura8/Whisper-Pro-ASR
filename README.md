@@ -83,7 +83,7 @@ services:
 - **Global VAD & In-Memory Slicing**: Features a unified Voice Activity Detection scan across the entire montage. segments are then sliced as **NumPy arrays in memory**, eliminating temporary file I/O and reducing VAD overhead by up to 900%.
 - **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt` (context guidance), `vad_filter` (silence suppression), and `word_timestamps` (word-level timing).
 - **Subtitle Layout Control**: Custom character-per-line wrapping (`max_line_width`) and max line block limits (`max_line_count`) for SRT/VTT output.
-- **Smart Model Lifecycle**: Configurable `MODEL_IDLE_TIMEOUT` keeps models warm in memory for rapid response to bursty workloads, with a background monitor thread that purges idle models after the timeout.
+- **Smart Model Lifecycle**: Configurable `MODEL_IDLE_TIMEOUT` keeps models warm in memory for rapid response to bursty workloads. A deferred cleanup timer starts only after the last task completes, and is automatically cancelled and rescheduled when new tasks arrive.
 - **Deferred Persistence Engine**: Protects SSD longevity by buffering task history and telemetry in RAM, only syncing to physical storage after 10 tasks or 1 hour of activity.
 - **Fail-Safe Dual-Path VAD**: Intelligent logic that verifies speech presence on both isolated and raw audio, selecting the optimal path automatically based on signal clarity.
 - **Confusion-Matrix Tie Breaking**: Resolves linguistic ambiguities between similar pairs (e.g., NO/NN) with a weighted bias, eliminating common identification hallucinations.

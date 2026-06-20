@@ -23,11 +23,11 @@ LOG_LEVEL = logging.INFO
 
 def setup_logging():
     """Initialize the global logging system with task-aware filters."""
-    global LOG_LEVEL  # pylint: disable=global-statement
-    LOG_LEVEL = logging.DEBUG if config.DEBUG_MODE else logging.INFO
+    sys.modules[__name__].LOG_LEVEL = logging.DEBUG if config.DEBUG_MODE else logging.INFO
+    log_level = sys.modules[__name__].LOG_LEVEL
 
     # Configure root logger with the desired format
-    logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s %(task_ctx)s %(message)s',
+    logging.basicConfig(level=log_level, format='%(asctime)s %(task_ctx)s %(message)s',
                         force=True, stream=sys.stdout)
 
     # Re-apply filters to the newly created handlers (basicConfig removes old ones)
@@ -158,7 +158,7 @@ class LogBufferHandler(logging.Handler):
                 TASK_LOGS[thread_id].append(msg)
                 # No truncation: capturing all logs for the duration of the task.
                 # Note: Memory is automatically reclaimed when the task finishes.
-        except Exception:  # pylint: disable=broad-exception-caught
+        except (AttributeError, ValueError, TypeError):
             pass
 
 
@@ -172,14 +172,13 @@ for hand in logging.root.handlers:
 logging.root.addHandler(log_buffer)
 
 # --- [PERSISTENT FILE LOGGING] ---
-_FILE_HANDLER = None
+_FILE_HANDLER_HOLDER = [None]
 
 
 def get_file_handler():
     """Idempotent factory for the persistent file handler."""
-    global _FILE_HANDLER  # pylint: disable=global-statement
-    if _FILE_HANDLER:
-        return _FILE_HANDLER
+    if _FILE_HANDLER_HOLDER[0]:
+        return _FILE_HANDLER_HOLDER[0]
 
     log_file = os.path.join(config.LOG_DIR, "whisper_pro.log")
     try:
@@ -193,17 +192,28 @@ def get_file_handler():
             '%(asctime)s %(task_ctx)s [%(levelname)s] %(message)s'
         ))
         _apply_standard_filters(handler)
-        _FILE_HANDLER = handler
-        return _FILE_HANDLER
-    except Exception as e:  # pylint: disable=broad-exception-caught
+        _FILE_HANDLER_HOLDER[0] = handler
+        return _FILE_HANDLER_HOLDER[0]
+    except (OSError, AttributeError, ValueError) as e:
         print(f"Failed to initialize file logging: {e}")
         return None
 
 
+def update_log_retention(days):
+    """Dynamically update the backup count of the file handler."""
+    try:
+        fh = get_file_handler()
+        if fh:
+            fh.backupCount = int(days)
+            logger.info("[Logging] Dynamic log retention updated to %d days", fh.backupCount)
+    except tuple([Exception]) as e:
+        logger.error("[Logging] Failed to dynamically update log retention: %s", e)
+
+
 # Initial attachment (at import time)
-_fh = get_file_handler()
-if _fh:
-    logging.root.addHandler(_fh)
+_INIT_HANDLER = get_file_handler()
+if _INIT_HANDLER:
+    logging.root.addHandler(_INIT_HANDLER)
 
 LOGGERS_TO_FILTER = [
     "transformers",
@@ -260,7 +270,7 @@ def _extract_hardware_properties(core, real_device):
                 val_str = _format_prop_value(val)
                 if val_str and val_str.lower() != "none":
                     info_lines.append(f"  {label:<{_LABEL_WIDTH}}: {val_str}")
-        except Exception:  # pylint: disable=broad-except
+        except tuple([Exception]):
             pass
     return info_lines
 
@@ -292,14 +302,14 @@ def _get_device_properties(device_alias):
         try:
             device_full_name = core.get_property(
                 real_device, "FULL_DEVICE_NAME")
-        except Exception:  # pylint: disable=broad-except
+        except tuple([Exception]):
             device_full_name = real_device
 
         # Extract and format supported properties
         info_lines = _extract_hardware_properties(core, real_device)
         info_lines.sort()
 
-    except Exception:  # pylint: disable=broad-except
+    except tuple([Exception]):
         pass
     return device_full_name, info_lines
 

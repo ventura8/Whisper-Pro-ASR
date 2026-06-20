@@ -15,10 +15,9 @@ from modules.monitoring import history_manager
 logger = logging.getLogger(__name__)
 
 
-class SchedulerState:  # pylint: disable=too-few-public-methods
+class SchedulerState:
     """Encapsulates global scheduler state to avoid global statements."""
 
-    # pylint: disable=too-many-instance-attributes
     def __init__(self):
         if not config.HARDWARE_UNITS:
             logger.warning("[Scheduler] No hardware units configured. Falling back to Host CPU.")
@@ -28,13 +27,15 @@ class SchedulerState:  # pylint: disable=too-few-public-methods
             self.hw_pool.put(unit_item)
 
         self.accel_limit = len(config.HARDWARE_UNITS)
-        self.model_lock = threading.Semaphore(self.accel_limit)
-        self.priority_sequential_lock = threading.Semaphore(self.accel_limit)
-        self.priority_lock = threading.Lock()
-        self.pause_requested = threading.Event()
-        self.pause_confirmed = threading.Event()
-        self.resume_event = threading.Event()
-        self.resume_event.set()
+        self.sync = {
+            "model_lock": threading.Semaphore(self.accel_limit),
+            "priority_sequential_lock": threading.Semaphore(self.accel_limit),
+            "priority_lock": threading.Lock(),
+            "pause_requested": threading.Event(),
+            "pause_confirmed": threading.Event(),
+            "resume_event": threading.Event()
+        }
+        self.sync["resume_event"].set()
 
         self.session_stats = {
             "active": 0,
@@ -53,6 +54,36 @@ class SchedulerState:  # pylint: disable=too-few-public-methods
             "whisper_loaded": False,
             "uvr_loaded": False
         }
+
+    @property
+    def model_lock(self):
+        """Semaphore for model locking."""
+        return self.sync["model_lock"]
+
+    @property
+    def priority_sequential_lock(self):
+        """Semaphore for priority sequential tasks."""
+        return self.sync["priority_sequential_lock"]
+
+    @property
+    def priority_lock(self):
+        """Lock for priority operations."""
+        return self.sync["priority_lock"]
+
+    @property
+    def pause_requested(self):
+        """Event for pausing requested."""
+        return self.sync["pause_requested"]
+
+    @property
+    def pause_confirmed(self):
+        """Event for pause confirmed."""
+        return self.sync["pause_confirmed"]
+
+    @property
+    def resume_event(self):
+        """Event for resume."""
+        return self.sync["resume_event"]
 
     @property
     def active_sessions(self):
@@ -346,7 +377,8 @@ def get_service_stats_minimal():
                 active.append({
                     "unit_type": task.get('unit_type'),
                     "unit_name": task.get('unit_name', ''),
-                    "unit_id": task.get('unit_id')
+                    "unit_id": task.get('unit_id'),
+                    "stage": task.get('stage', '')
                 })
         return {"active_tasks": active}
 

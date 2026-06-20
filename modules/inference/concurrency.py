@@ -73,10 +73,10 @@ def model_lock_ctx(priority=None):
     scheduler.update_task_metadata(status="active", start_active=time.time(), unit_id=unit['id'])
     try:
         model_manager = sys.modules['modules.inference.model_manager']
-        # pylint: disable=protected-access
-        model_pool = model_manager._MODEL_POOL
-        preprocessor_pool = model_manager._PREPROCESSOR_POOL
-        init_unit = model_manager._init_unit
+
+        model_pool = model_manager.MODEL_POOL
+        preprocessor_pool = model_manager.PREPROCESSOR_POOL
+        init_unit = model_manager.init_unit
 
         if unit['id'] not in model_pool:
             init_unit(unit)

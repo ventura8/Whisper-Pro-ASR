@@ -96,7 +96,7 @@ class TestConfigEnv:
     def test_app_constants(self):
         """Test app name and version constants."""
         assert "Whisper" in config_module.APP_NAME
-        assert config_module.VERSION == "1.1.1"
+        assert config_module.VERSION == "1.1.2"
 
     def test_device_constant_exists(self):
         """Test DEVICE constant exists."""
@@ -361,7 +361,7 @@ class TestConfigSSD:
             assert config_module.get_temp_dir() == config_module.PERSISTENT_TEMP_DIR
 
     def test_validate_thread_concurrency_warning(self):
-        """Test the over-provisioning warning in _validate_thread_concurrency."""
+        """Test the over-provisioning warning in validate_thread_concurrency."""
         env = {
             "ASR_THREADS": "8",
             "ASR_PREPROCESS_THREADS": "8",
@@ -383,3 +383,86 @@ class TestConfigSSD:
             # Should return 0 or default
             res = config_module.get_parallel_limit("CUDA")
             assert res >= 0
+
+    def test_update_env(self):
+        """Test update_env function."""
+        config_module.update_env("TEST_KEY_DUMMY", "DUMMY_VAL")
+        assert os.environ.get("TEST_KEY_DUMMY") == "DUMMY_VAL"
+
+    def test_get_parallel_limit_various(self):
+        """Test get_parallel_limit for CPU and GPU/NPU."""
+        # 1. CPU
+        assert config_module.get_parallel_limit("CPU") == config_module.CPU_PARALLEL_LIMIT
+
+        # 2. GPU/NPU with mock Core
+        mock_core = mock.MagicMock()
+        mock_core.available_devices = ["GPU.0", "GPU.1"]
+        with mock.patch("openvino.Core", return_value=mock_core):
+            assert config_module.get_parallel_limit("GPU") == 2
+
+    def test_permission_error_fallbacks(self):
+        """Test that PermissionError during directory creation defaults to fallbacks."""
+        env = {
+            "WHISPER_TEMP_DIR": "/fail_temp",
+            "WHISPER_PERSISTENT_DIR": "/fail_persist",
+            "WHISPER_STATE_DIR": "/fail_state",
+            "OV_CACHE_DIR": "/fail_cache"
+        }
+
+        def mock_makedirs(path, *_args, **_kwargs):
+            if any(fail_path in str(path) for fail_path in ["/fail_temp", "/fail_persist", "/fail_state", "/fail_cache"]):
+                raise PermissionError("Permission denied")
+
+        with mock.patch.dict(os.environ, env):
+            with mock.patch("os.makedirs", side_effect=mock_makedirs):
+                importlib.reload(config_module)
+                # Verify TEMP_DIR, PERSISTENT_DIR, STATE_DIR, LOG_DIR fallbacks
+                assert config_module.TEMP_DIR == tempfile.gettempdir()
+                assert config_module.PERSISTENT_DIR == "./test_data"
+                assert config_module.STATE_DIR == "./test_state"
+                assert config_module.LOG_DIR == "./test_state"
+                assert config_module.PERSISTENT_TEMP_DIR == tempfile.gettempdir()
+
+    def test_validate_thread_concurrency_error(self):
+        """Test exception handling in validate_thread_concurrency."""
+        # Force a TypeError by passing None
+        with mock.patch("modules.config.PREPROCESS_THREADS", None):
+            # Should not raise any exception due to try-except
+            config_module.validate_thread_concurrency()
+
+    def test_capping_preprocess_threads_hardware_limit(self):
+        """Test capping preprocess threads to hardware limit message."""
+        env = {
+            "ASR_PREPROCESS_DEVICE": "GPU",
+            "ASR_PREPROCESS_THREADS": "8",
+            "CPU_CORE_LIMIT": "2"
+        }
+        with mock.patch.dict(os.environ, env):
+            # We mock core.available_devices to return GPU
+            mock_core = mock.MagicMock()
+            mock_core.available_devices = ["GPU.0"]
+            with mock.patch("openvino.Core", return_value=mock_core):
+                importlib.reload(config_module)
+                # PREPROCESS_THREADS should be capped to CPU_CORE_LIMIT (2) since requested (8) > 2
+                assert config_module.PREPROCESS_THREADS == 2
+
+    def test_npu_full_device_name_exception(self):
+        """Test NPU name fallback on property query exception."""
+        with mock.patch.dict(os.environ, {"ASR_DEVICE": "AUTO"}):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["NPU"]
+                mock_core.get_property.side_effect = Exception("Property error")
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    importlib.reload(config_module)
+                    # Verify unit was added with fallback name "Intel NPU"
+                    assert any(u['name'] == "Intel NPU" for u in config_module.HARDWARE_UNITS)
+
+    def test_intel_accelerator_detection_exception(self):
+        """Test that Intel accelerator detection failure logs skipping message."""
+        with mock.patch.dict(os.environ, {"ASR_DEVICE": "AUTO"}):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                with mock.patch("openvino.Core", side_effect=Exception("OpenVINO Core init error")):
+                    importlib.reload(config_module)
+                    # Skip logs error and falls back to CPU
+                    assert config_module.DEVICE == "CPU"

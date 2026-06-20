@@ -1,5 +1,5 @@
 """Tests for modules/inference/model_manager.py"""
-# pylint: disable=protected-access, too-few-public-methods, redefined-outer-name, unused-import, import-outside-toplevel, consider-using-with, broad-exception-caught, unused-variable, wrong-import-order
+
 import threading
 import time
 import os
@@ -14,8 +14,8 @@ from modules import utils, config
 @pytest.fixture(autouse=True)
 def reset_state():
     """Reset model_manager and scheduler global state before each test."""
-    model_manager._MODEL_POOL.clear()
-    model_manager._PREPROCESSOR_POOL.clear()
+    model_manager.MODEL_POOL.clear()
+    model_manager.PREPROCESSOR_POOL.clear()
 
     # Mock HARDWARE_UNITS before creating SchedulerState
     with mock.patch("modules.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
@@ -41,7 +41,7 @@ class TestModelLockCtx:
     def test_model_lock_ctx_success(self):
         """Test successful hardware unit acquisition."""
         mock_model = mock.MagicMock()
-        model_manager._MODEL_POOL["CPU"] = mock_model
+        model_manager.MODEL_POOL["CPU"] = mock_model
 
         with model_manager.model_lock_ctx() as (model, unit_id):
             assert unit_id == "CPU"
@@ -91,7 +91,7 @@ class TestLoadModel:
                 success = model_manager.load_model()
                 assert success is True
                 assert scheduler.STATE.engine_initialized is True
-                assert "CPU" in model_manager._PREPROCESSOR_POOL
+                assert "CPU" in model_manager.PREPROCESSOR_POOL
                 mock_pm_cls.assert_called_once()
 
     def test_init_unit_success(self):
@@ -100,17 +100,17 @@ class TestLoadModel:
         mock_whisper = mock.MagicMock()
 
         with mock.patch.dict("modules.inference.model_manager._ENGINES", {"WhisperModel": mock_whisper}):
-            model_manager._init_unit(unit)
-            assert model_manager._MODEL_POOL["CPU"] == mock_whisper.return_value
+            model_manager.init_unit(unit)
+            assert model_manager.MODEL_POOL["CPU"] == mock_whisper.return_value
 
     def test_init_unit_failure(self):
         """Test error handling during unit initialization."""
         unit = {"id": "CPU", "type": "CPU", "name": "CPU"}
-        mock_fail = mock.MagicMock(side_effect=Exception("Load fail"))
+        mock_fail = mock.MagicMock(side_effect=RuntimeError("Load fail"))
         with mock.patch.dict("modules.inference.model_manager._ENGINES", {"WhisperModel": mock_fail}):
             # Should log error but not raise
-            model_manager._init_unit(unit)
-            assert "CPU" not in model_manager._MODEL_POOL
+            model_manager.init_unit(unit)
+            assert "CPU" not in model_manager.MODEL_POOL
 
 
 class TestRunTranscription:
@@ -124,7 +124,7 @@ class TestRunTranscription:
         mock_segment = mock.MagicMock(start=0.0, end=1.0, text=" Hello")
         mock_model.transcribe.return_value = ([mock_segment], mock_info)
 
-        model_manager._MODEL_POOL["CPU"] = mock_model
+        model_manager.MODEL_POOL["CPU"] = mock_model
 
         with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", False):
             result = model_manager.run_transcription(
@@ -138,11 +138,11 @@ class TestRunTranscription:
         mock_model = mock.MagicMock()
         mock_info = mock.MagicMock(language="en", language_probability=0.9, duration=10.0)
         mock_model.transcribe.return_value = ([], mock_info)
-        model_manager._MODEL_POOL["CPU"] = mock_model
+        model_manager.MODEL_POOL["CPU"] = mock_model
 
         pm = mock.MagicMock()
         pm.preprocess_audio.return_value = "isolated.wav"
-        model_manager._PREPROCESSOR_POOL["CPU"] = pm
+        model_manager.PREPROCESSOR_POOL["CPU"] = pm
 
         with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", True):
             with mock.patch("os.path.exists", return_value=True):
@@ -163,7 +163,7 @@ class TestLanguageDetection:
         mock_model = mock.MagicMock()
         mock_info = mock.MagicMock(language="fr", language_probability=0.8)
         mock_model.transcribe.return_value = (None, mock_info)
-        model_manager._MODEL_POOL["CPU"] = mock_model
+        model_manager.MODEL_POOL["CPU"] = mock_model
 
         with mock.patch("modules.inference.vad.get_speech_timestamps_from_path", return_value=[{"start": 0, "end": 1}]):
             result = model_manager.run_language_detection("test.wav")
@@ -173,7 +173,7 @@ class TestLanguageDetection:
     def test_run_batch_language_detection(self):
         """Test multi-segment language detection."""
         mock_model = mock.MagicMock()
-        model_manager._MODEL_POOL["CPU"] = mock_model
+        model_manager.MODEL_POOL["CPU"] = mock_model
 
         mock_info = mock.MagicMock(language="en", language_probability=0.9)
         # For batch detection, it calls _run_language_detection_core which returns a dict
@@ -191,8 +191,8 @@ class TestResourceManagement:
     def test_decrement_active_session_triggers_unload(self):
         """Test that idle state triggers unload when aggressive offload is on."""
         pm = mock.MagicMock()
-        model_manager._PREPROCESSOR_POOL["CPU"] = pm
-        model_manager._MODEL_POOL["CPU"] = mock.MagicMock()
+        model_manager.PREPROCESSOR_POOL["CPU"] = pm
+        model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
         scheduler.STATE.active_sessions = 1
 
         with mock.patch("modules.config.AGGRESSIVE_OFFLOAD", True), \
@@ -200,18 +200,18 @@ class TestResourceManagement:
                 mock.patch("modules.inference.model_manager.utils.get_system_telemetry", return_value={}):
             model_manager.decrement_active_session()
             assert scheduler.STATE.active_sessions == 0
-            assert len(model_manager._MODEL_POOL) == 0
+            assert len(model_manager.MODEL_POOL) == 0
             pm.unload_model.assert_called_once()
 
     def test_unload_models(self):
         """Test explicit model purging."""
-        model_manager._MODEL_POOL["CPU"] = mock.MagicMock()
+        model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
         pm = mock.MagicMock()
-        model_manager._PREPROCESSOR_POOL["CPU"] = pm
+        model_manager.PREPROCESSOR_POOL["CPU"] = pm
 
         with mock.patch("modules.inference.model_manager.utils.get_system_telemetry", return_value={}):
             model_manager.unload_models()
-            assert len(model_manager._MODEL_POOL) == 0
+            assert len(model_manager.MODEL_POOL) == 0
             pm.unload_model.assert_called_once()
 
 
@@ -226,7 +226,7 @@ class TestPreemptionAndPriority:
     def test_run_vocal_isolation_direct_passes_preemption_callback(self):
         """Test that run_vocal_isolation_direct passes _check_preemption callback to preprocess_audio."""
         pm = mock.MagicMock()
-        model_manager._PREPROCESSOR_POOL["CPU"] = pm
+        model_manager.PREPROCESSOR_POOL["CPU"] = pm
 
         model_manager.run_vocal_isolation_direct("test.wav", "CPU")
 
@@ -278,7 +278,7 @@ class TestEdgeCases:
         """Test checking if UVR is actually in RAM."""
         pm = mock.MagicMock()
         pm.separator = "not none"
-        model_manager._PREPROCESSOR_POOL["CPU"] = pm
+        model_manager.PREPROCESSOR_POOL["CPU"] = pm
         assert model_manager.is_uvr_actually_loaded() is True
 
         pm.separator = None
@@ -296,13 +296,13 @@ def test_model_manager_booster_edge_cases():
     unit = {"id": "GPU", "type": "GPU", "name": "Intel GPU"}
     with mock.patch("modules.config.ASR_ENGINE", "FASTER-WHISPER"), \
             mock.patch("modules.inference.model_manager._ENGINES", {"WhisperModel": mock.MagicMock()}):
-        model_manager._init_unit(unit)
+        model_manager.init_unit(unit)
 
     # 186-187: Cleanup error
     mock_model = mock.MagicMock()
     from argparse import Namespace
     mock_model.transcribe.return_value = ([], Namespace(duration=0, language="en", language_probability=1.0))
-    model_manager._MODEL_POOL["CPU"] = mock_model
+    model_manager.MODEL_POOL["CPU"] = mock_model
 
     with mock.patch("modules.config.ENABLE_VOCAL_SEPARATION", True), \
             mock.patch("modules.inference.model_manager.run_vocal_isolation_direct", return_value="iso.wav"), \
@@ -322,8 +322,8 @@ def test_model_manager_booster_edge_cases():
         assert not res
 
     # 409: RuntimeError if engine pool is empty
-    with mock.patch("modules.inference.model_manager._MODEL_POOL", {}), \
-            mock.patch("modules.inference.model_manager._init_unit"):
+    with mock.patch("modules.inference.model_manager.MODEL_POOL", {}), \
+            mock.patch("modules.inference.model_manager.init_unit"):
         with pytest.raises(RuntimeError):
             with model_manager.model_lock_ctx() as (m, u):
                 pass
@@ -336,7 +336,7 @@ def test_model_manager_forwards_new_params():
     mock_segment = mock.MagicMock(start=0.0, end=1.0, text="hello")
     mock_model.transcribe.return_value = ([mock_segment], mock_info)
 
-    model_manager._MODEL_POOL["CPU"] = mock_model
+    model_manager.MODEL_POOL["CPU"] = mock_model
 
     model_manager.run_transcription(
         "test.wav",
@@ -362,8 +362,8 @@ def test_model_manager_forwards_new_params():
 def test_model_idle_timeout_reclamation():
     """Verify that the background idle timeout thread successfully offloads models."""
     pm = mock.MagicMock()
-    model_manager._PREPROCESSOR_POOL["CPU"] = pm
-    model_manager._MODEL_POOL["CPU"] = mock.MagicMock()
+    model_manager.PREPROCESSOR_POOL["CPU"] = pm
+    model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
     scheduler.STATE.active_sessions = 1
 
     model_manager._MONITOR_THREAD_STARTED = False
@@ -377,11 +377,56 @@ def test_model_idle_timeout_reclamation():
         assert scheduler.STATE.active_sessions == 0
 
         # Model should still be in pool initially
-        assert len(model_manager._MODEL_POOL) == 1
+        assert len(model_manager.MODEL_POOL) == 1
 
         # Sleep to allow idle timeout monitor thread to run and trigger offload
         time.sleep(6)
 
         # Monitor thread should have cleared the pools
-        assert len(model_manager._MODEL_POOL) == 0
+        assert len(model_manager.MODEL_POOL) == 0
         pm.unload_model.assert_called_once()
+
+
+def test_new_task_waits_if_cleaner_is_running():
+    """Verify that if a new task arrives while unload_models is executing, it blocks until cleanup completes."""
+    import threading
+    import time
+    from unittest import mock
+
+    # Setup pool with models
+    model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
+
+    # We will simulate a slow unload_models by hooking into the model.unload to take 0.3 seconds
+    mock_model = mock.MagicMock()
+
+    def slow_unload():
+        time.sleep(0.3)
+    mock_model.unload = slow_unload
+    model_manager.MODEL_POOL["CPU"] = mock_model
+
+    # Mock get_system_telemetry to prevent psutil issues in clean thread
+    with mock.patch("modules.inference.model_manager.utils.get_system_telemetry", return_value={}):
+        # Start cleanup in a background thread
+        t_clean = threading.Thread(target=model_manager.unload_models)
+        t_clean.start()
+
+        # Wait a tiny bit to ensure the cleaner thread starts and acquires the lock
+        time.sleep(0.05)
+
+        # Now, in the main thread, try to load a model.
+        # It should block until the cleanup thread releases the lock.
+        start_time = time.time()
+        unit = {"id": "CPU", "type": "CPU", "name": "CPU"}
+        mock_whisper = mock.MagicMock()
+        with mock.patch.dict("modules.inference.model_manager._ENGINES", {"WhisperModel": mock_whisper}):
+            model_manager.init_unit(unit)
+        duration = time.time() - start_time
+
+        # It must have taken at least 0.15 seconds (due to the 0.3s sleep in slow_unload)
+        assert duration >= 0.15
+
+        # The clean thread should be finished
+        t_clean.join()
+
+        # And the model should have been re-loaded after cleanup finished
+        assert "CPU" in model_manager.MODEL_POOL

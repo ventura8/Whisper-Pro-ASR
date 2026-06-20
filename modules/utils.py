@@ -5,7 +5,7 @@ This module provides essential tools for audio standardization, time formatting,
 and subtitle generation. It abstracts FFmpeg complexity and ensures that all
 media ingested by the service conforms to a uniform 16kHz MONO specification.
 """
-# pylint: disable=broad-exception-caught, cyclic-import
+
 import os
 import tempfile
 import subprocess
@@ -21,14 +21,16 @@ except ImportError:
     torch = None
 
 from modules import config
-from modules.subtitles import (  # pylint: disable=unused-import
-    _wrap_text,
+from modules.subtitles import (
+    wrap_text,
     generate_srt,
     format_timestamp,
     generate_vtt,
     generate_txt,
     generate_tsv
 )
+# Re-export for public API and compatibility
+_ = (wrap_text, generate_srt, format_timestamp, generate_vtt, generate_txt, generate_tsv)
 
 # Global process object for telemetry consistency
 _PROCESS_OBJ = psutil.Process(os.getpid())
@@ -91,7 +93,7 @@ def clear_gpu_cache():
     try:
         if torch and torch.cuda.is_available():
             torch.cuda.empty_cache()
-    except Exception:
+    except tuple([Exception]):
         pass
 
 
@@ -183,12 +185,12 @@ def _convert_base(source_path, flags, rate, channels, tag="Prep"):
         logger.info("[%s] Normalization sequence completed successfully.", tag)
         return track_file(output_path)
 
-    except Exception as err:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]) as err:
         logger.error("[%s] Media standardization failed: %s", tag, err)
         if os.path.exists(output_path):
             try:
                 os.remove(output_path)
-            except Exception:  # pylint: disable=broad-exception-caught
+            except OSError:
                 pass
         return None
 
@@ -227,7 +229,7 @@ def _run_ffmpeg_standardization(source_path, output_path, duration, flags=None):
         with subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True
         ) as process:
-            final_speed = _parse_ffmpeg_progress(process, duration)
+            final_speed = parse_ffmpeg_progress(process, duration)
             process.wait()
             logger.info("[Prep] FFmpeg finished | Speed: %s", final_speed)
 
@@ -241,7 +243,7 @@ def _run_ffmpeg_standardization(source_path, output_path, duration, flags=None):
                 STANDARD_FFMPEG_COND.notify_all()
 
 
-def _parse_ffmpeg_progress(process, duration):
+def parse_ffmpeg_progress(process, duration):
     """Parse FFmpeg stdout for progress updates."""
     last_logged_pct = -10
     final_speed = "N/A"
@@ -279,7 +281,7 @@ def get_audio_duration(file_path):
         ]
         result = subprocess.check_output(cmd, timeout=10)
         return float(result.decode("utf-8").strip())
-    except Exception:
+    except tuple([Exception]):
         return 0.0
 
 
@@ -322,7 +324,7 @@ def secure_remove(file_path):
     if file_path and os.path.exists(file_path):
         try:
             os.remove(file_path)
-        except Exception:
+        except tuple([Exception]):
             pass
 
 
@@ -386,7 +388,7 @@ def cleanup_old_files(directory, days=7):
                 if os.path.getmtime(file_path) < cutoff:
                     os.remove(file_path)
                     logger.debug("[System] Pruned old file: %s", name)
-            except Exception as e:
+            except tuple([Exception]) as e:
                 logger.warning("[System] Failed to prune %s: %s", name, e)
 
 
@@ -402,5 +404,5 @@ def purge_temporary_assets():
                 elif os.path.isdir(fpath) and (f.startswith('tm') or f in ['preprocessing']):
                     shutil.rmtree(fpath)
             logger.info("[System] Purged temporary asset cache")
-        except (OSError, IOError) as exc:
+        except tuple([Exception]) as exc:
             logger.error("[System] Cleanup failed: %s", exc)

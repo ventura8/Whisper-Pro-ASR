@@ -430,8 +430,17 @@
 
             <div id="charts-section">
                 <div class="charts-list">
-                    <div class="chart-header" style="margin-bottom: 8px;">
+                    <div class="chart-header" style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                         <span class="section-title" style="margin:0"><span class="material-icons-sharp">show_chart</span> Device Telemetry History</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <label for="chart-window-select" style="font-size: 12px; font-weight: 600; color: var(--md-sys-color-secondary);">Time Window:</label>
+                            <select id="chart-window-select" onchange="changeChartWindow(this.value)" style="background: var(--item-bg); color: var(--md-sys-color-on-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 12px; font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; outline: none; transition: border-color 0.2s;">
+                                <option value="1" selected>1 Minute</option>
+                                <option value="3">3 Minutes</option>
+                                <option value="5">5 Minutes</option>
+                                <option value="10">10 Minutes</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="chart-card">
                         <div class="section-title"><span class="material-icons-sharp">speed</span> CPU Utilization (App vs System)</div>
@@ -509,8 +518,16 @@
         let currentTab = 'active';
         let charts = {};
         let currentTelemetry = [];
+        let rollingTelemetryBuffer = [];
+        let chartWindowMinutes = 1;
+        let lastChartStates = {};
         let fullTaskHistory = [];
         let lastStatusData = null;
+
+        function changeChartWindow(val) {
+            chartWindowMinutes = parseInt(val, 10);
+            renderCharts();
+        }
 
         function getHwIconAndLabel(unitId) {
             if (!unitId) return { icon: 'hourglass_empty', label: 'Queued' };
@@ -572,7 +589,20 @@
                 document.getElementById(`${s}-section`).style.display = (s === tab ? 'block' : 'none');
             });
 
-            if (tab === 'charts') renderCharts();
+            if (tab === 'charts') {
+                // Clear the cached range/theme states to force a full updateOptions redraw.
+                // This resolves ApexCharts collapsing/failing to render when transitioning
+                // from display: none to display: block.
+                for (let id in lastChartStates) {
+                    lastChartStates[id].rangeMs = null;
+                    lastChartStates[id].theme = null;
+                }
+                renderCharts();
+                // Trigger a resize event to ensure ApexCharts properly recalculates visual dimensions
+                setTimeout(() => {
+                    window.dispatchEvent(new Event('resize'));
+                }, 50);
+            }
             if (tab === 'history') {
                 fetch('/history').then(res => res.json()).then(data => {
                     fullTaskHistory = data || [];
@@ -591,17 +621,11 @@
         }
 
         function formatDDHHMMSS(sec) {
-            if (sec === undefined || sec === null || sec < 0) return "00:00:00:00";
+            if (sec === undefined || sec === null || sec < 0) return "0d 0h 0m";
             const d = Math.floor(sec / 86400);
             const h = Math.floor((sec % 86400) / 3600);
             const m = Math.floor((sec % 3600) / 60);
-            const s = Math.floor(sec % 60);
-            
-            const dStr = String(d).padStart(2, '0');
-            const hStr = String(h).padStart(2, '0');
-            const mStr = String(m).padStart(2, '0');
-            const sStr = String(s).padStart(2, '0');
-            return `${dStr}:${hStr}:${mStr}:${sStr}`;
+            return `${d}d ${h}h ${m}m`;
         }
 
         function getTimerText(t, now) {
@@ -646,63 +670,102 @@
 
         function renderCharts() {
             const data = lastStatusData;
-            if (!data || !currentTelemetry || currentTelemetry.length === 0) return;
-            const sorted = [...currentTelemetry].sort((a,b) => a.timestamp - b.timestamp);
+            if (!data || !rollingTelemetryBuffer || rollingTelemetryBuffer.length === 0) return;
+            
+            // Sort telemetry buffer by timestamp
+            const sorted = [...rollingTelemetryBuffer].sort((a,b) => a.timestamp - b.timestamp);
             if (sorted.length === 0) return;
 
-            let filtered = sorted;
-            if (filtered.length > 300) {
-                const step = filtered.length / 299.0;
-                const downsampled = [];
-                for (let i = 0; i < 299; i++) {
-                    downsampled.push(filtered[Math.floor(i * step)]);
-                }
-                downsampled.push(filtered[filtered.length - 1]);
-                filtered = downsampled;
+            // N is the number of points for the selected window
+            // 2-second interval, so 30 points per minute
+            const N = chartWindowMinutes * 30;
+
+            // Take at most the last N elements
+            let rawPoints = sorted;
+            if (rawPoints.length > N) {
+                rawPoints = rawPoints.slice(-N);
             }
 
-            const labels = filtered.map(h => {
-                const d = new Date(h.timestamp * 1000);
-                return d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+            // Pad on the left with dummy entries if we have fewer than N points
+            const paddedPoints = [];
+            const padCount = N - rawPoints.length;
+            for (let i = 0; i < padCount; i++) {
+                paddedPoints.push({
+                    isDummy: true,
+                    system: { cpu_percent: 0, app_cpu_percent: 0, app_memory_gb: 0 },
+                    telemetry: { npu_load: 0, intel_gpu_load: 0, nvidia: [] },
+                    cpu_sys: 0,
+                    cpu_app: 0,
+                    mem_app_gb: 0,
+                    nvidia_util: []
+                });
+            }
+            for (let i = 0; i < rawPoints.length; i++) {
+                paddedPoints.push(rawPoints[i]);
+            }
+
+            // Assign perfectly spaced normalized timestamps ending at nowMs
+            const nowMs = Date.now();
+            const dataPoints = paddedPoints.map((p, i) => {
+                const timestampMs = nowMs - (N - 1 - i) * 2000;
+                return {
+                    timestampMs: timestampMs,
+                    system: p.system,
+                    telemetry: p.telemetry,
+                    cpu_sys: p.cpu_sys || 0,
+                    cpu_app: p.cpu_app || 0,
+                    mem_app_gb: p.mem_app_gb || 0,
+                    nvidia_util: p.nvidia_util || []
+                };
             });
 
-            createOrUpdateLineChart('cpuChart', labels, [
-                { label: 'System CPU %', data: filtered.map(h => h.system ? h.system.cpu_percent : h.cpu_sys), color: COLORS[0] },
-                { label: 'App CPU %', data: filtered.map(h => h.system ? h.system.app_cpu_percent : h.cpu_app), color: COLORS[3] }
+            createOrUpdateLineChart('cpuChart', [
+                { label: 'System CPU %', data: dataPoints.map(p => ({ x: p.timestampMs, y: p.system ? p.system.cpu_percent : p.cpu_sys })), color: COLORS[0] },
+                { label: 'App CPU %', data: dataPoints.map(p => ({ x: p.timestampMs, y: p.system ? p.system.app_cpu_percent : p.cpu_app })), color: COLORS[3] }
             ], false);
 
-            createOrUpdateLineChart('memChart', labels, [
-                { label: 'App Memory (GB)', data: filtered.map(h => h.system ? h.system.app_memory_gb : h.mem_app_gb), color: COLORS[1] }
+            createOrUpdateLineChart('memChart', [
+                { label: 'App Memory (GB)', data: dataPoints.map(p => ({ x: p.timestampMs, y: p.system ? p.system.app_memory_gb : p.mem_app_gb })), color: COLORS[1] }
             ], false);
 
             const hwDatasets = [];
-            const first = filtered[0];
-            if (!first) return;
-            const nvidiaData = (first.telemetry && first.telemetry.nvidia) ? first.telemetry.nvidia : first.nvidia_util;
-
-            if (nvidiaData && Array.isArray(nvidiaData)) {
-                nvidiaData.forEach((_, i) => {
-                    hwDatasets.push({
-                        label: `NVIDIA GPU ${i} %`,
-                        data: filtered.map(h => {
-                            const nv = (h.telemetry && h.telemetry.nvidia) ? h.telemetry.nvidia : h.nvidia_util;
-                            return nv ? (nv[i]?.util !== undefined ? nv[i].util : nv[i]) : 0;
-                        }),
-                        color: COLORS[i + 2]
-                    });
+            (data.hardware_units || []).forEach((u, index) => {
+                if (u.type === 'CPU') return;
+                
+                // Determine label and color
+                let label = u.name || `${u.type} Load %`;
+                let color = COLORS[(index + 2) % COLORS.length];
+                if (u.type === 'NPU') color = '#8e24aa';
+                else if (u.type === 'GPU' && !u.name.includes('NVIDIA')) color = '#3949ab';
+                
+                hwDatasets.push({
+                    label: label,
+                    data: dataPoints.map(p => {
+                        let val = 0;
+                        if (p.telemetry && p.telemetry.hardware_util && p.telemetry.hardware_util[u.id] !== undefined) {
+                            val = p.telemetry.hardware_util[u.id];
+                        } else {
+                            // Fallback to legacy structure
+                            if (u.type === 'CUDA' || (u.type === 'GPU' && u.name.includes('NVIDIA'))) {
+                                const idx = parseInt(u.id.split(':')[1] || 0);
+                                const nv = (p.telemetry && p.telemetry.nvidia) ? p.telemetry.nvidia : p.nvidia_util;
+                                val = (nv && nv[idx]) ? (nv[idx].util !== undefined ? nv[idx].util : nv[idx]) : 0;
+                            } else if (u.type === 'GPU') {
+                                val = p.telemetry?.intel_gpu_load || p.intel_util || 0;
+                            } else if (u.type === 'NPU') {
+                                val = p.telemetry?.npu_load || p.npu_util || 0;
+                            }
+                        }
+                        return { x: p.timestampMs, y: val };
+                    }),
+                    color: color
                 });
-            }
-
-            const hasIntel = (data.hardware_units || []).some(u => u.type === 'GPU' && !u.name.includes('NVIDIA'));
-            if (hasIntel) { hwDatasets.push({ label: 'Intel GPU %', data: filtered.map(h => h.telemetry?.intel_gpu_load || h.intel_util || 0), color: '#3949ab' }); }
+            });
             
-            const hasNpu = (data.hardware_units || []).some(u => u.type === 'NPU');
-            if (hasNpu) { hwDatasets.push({ label: 'NPU Load %', data: filtered.map(h => h.telemetry?.npu_load || h.npu_util || 0), color: '#8e24aa' }); }
-            
-            createOrUpdateLineChart('hwChart', labels, hwDatasets, true);
+            createOrUpdateLineChart('hwChart', hwDatasets, true);
         }
 
-        function createOrUpdateLineChart(id, labels, datasets, percent) {
+        function createOrUpdateLineChart(id, datasets, percent) {
             const el = document.getElementById(id);
             if (!el) return;
             
@@ -714,31 +777,63 @@
             
             // Ensure at least one series exists to prevent ApexCharts from failing to render
             if (series.length === 0) {
-                series = [{ name: 'No Acceleration Detected', data: new Array(labels.length).fill(0) }];
+                series = [{ name: 'No Acceleration Detected', data: [] }];
             }
 
             const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const themeMode = isDark ? 'dark' : 'light';
+            const rangeMs = (chartWindowMinutes * 30 - 1) * 2000;
+
+            // Calculate dynamic Y-axis maximum for non-percentage charts (like memory)
+            let yaxisMax = undefined;
+            if (percent) {
+                yaxisMax = 100;
+            } else {
+                let maxVal = 0;
+                datasets.forEach(d => {
+                    d.data.forEach(pt => {
+                        if (pt.y > maxVal) maxVal = pt.y;
+                    });
+                });
+                // Pad by 10% and ceiling to nearest integer to avoid constant updates
+                yaxisMax = maxVal > 0 ? Math.ceil(maxVal * 1.1) : 1;
+            }
 
             const options = {
                 series: series,
                 chart: {
-                    type: 'line',
+                    type: 'area',
                     height: 350,
                     toolbar: { show: false },
                     zoom: { enabled: false },
-                    animations: { enabled: true, easing: 'easeinout', speed: 800 },
+                    animations: {
+                        enabled: false
+                    },
                     background: 'transparent'
                 },
+                fill: {
+                    type: 'gradient',
+                    gradient: {
+                        shadeIntensity: 1,
+                        opacityFrom: 0.25,
+                        opacityTo: 0.02,
+                        stops: [0, 90, 100]
+                    }
+                },
                 theme: {
-                    mode: isDark ? 'dark' : 'light'
+                    mode: themeMode
                 },
                 colors: datasets.map(d => d.color || '#006495'),
                 dataLabels: { enabled: false },
-                stroke: { curve: 'smooth', width: 3 },
+                stroke: { curve: 'straight', width: 2 },
+                markers: { size: 0 },
                 xaxis: {
-                    categories: labels,
+                    type: 'datetime',
+                    range: rangeMs,
                     labels: {
-                        style: { fontSize: '10px' },
+                        datetimeUTC: false,
+                        format: 'HH:mm:ss',
+                        style: { fontSize: '10px', fontFamily: 'Outfit' },
                         rotate: 0,
                         hideOverlappingLabels: true
                     },
@@ -747,16 +842,17 @@
                 },
                 yaxis: {
                     min: 0,
-                    max: percent ? 100 : undefined,
+                    max: yaxisMax,
                     labels: {
-                        style: { fontSize: '10px' },
+                        style: { fontSize: '10px', fontFamily: 'Outfit' },
                         formatter: (val) => percent ? val.toFixed(0) + '%' : val.toFixed(1)
                     }
                 },
                 grid: {
-                    borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#f0f0f0',
-                    strokeDashArray: 4,
-                    xaxis: { lines: { show: false } }
+                    borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#e5e7eb',
+                    strokeDashArray: 3,
+                    xaxis: { lines: { show: true } },
+                    yaxis: { lines: { show: true } }
                 },
                 legend: {
                     position: 'top',
@@ -766,21 +862,45 @@
                     markers: { radius: 12 }
                 },
                 tooltip: {
-                    theme: isDark ? 'dark' : 'light',
-                    x: { show: true },
+                    theme: themeMode,
+                    x: { show: true, format: 'HH:mm:ss' },
                     y: { formatter: (val) => percent ? val.toFixed(1) + '%' : val.toFixed(2) + ' GB' }
                 }
             };
 
+            if (!lastChartStates[id]) {
+                lastChartStates[id] = { rangeMs: null, theme: null, yaxisMax: null };
+            }
+
+            const state = lastChartStates[id];
+
             if (charts[id]) {
-                charts[id].updateOptions({
-                    xaxis: { categories: labels },
-                    series: series,
-                    theme: { mode: isDark ? 'dark' : 'light' },
-                    grid: { borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#f0f0f0' },
-                    tooltip: { theme: isDark ? 'dark' : 'light' }
-                });
+                if (state.rangeMs !== rangeMs || state.theme !== themeMode || state.yaxisMax !== yaxisMax) {
+                    state.rangeMs = rangeMs;
+                    state.theme = themeMode;
+                    state.yaxisMax = yaxisMax;
+                    charts[id].updateOptions({
+                        xaxis: { range: rangeMs },
+                        yaxis: {
+                            min: 0,
+                            max: yaxisMax,
+                            labels: {
+                                style: { fontSize: '10px', fontFamily: 'Outfit' },
+                                formatter: (val) => percent ? val.toFixed(0) + '%' : val.toFixed(1)
+                            }
+                        },
+                        series: series,
+                        theme: { mode: themeMode },
+                        grid: { borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#e5e7eb' },
+                        tooltip: { theme: themeMode }
+                    });
+                } else {
+                    charts[id].updateSeries(series);
+                }
             } else {
+                state.rangeMs = rangeMs;
+                state.theme = themeMode;
+                state.yaxisMax = yaxisMax;
                 charts[id] = new ApexCharts(el, options);
                 charts[id].render();
             }
@@ -961,6 +1081,24 @@
 
                 lastStatusData = data;
                 currentTelemetry = data.telemetry_history || [];
+
+                // Update rolling telemetry buffer (up to 10 minutes retention)
+                const nowSec = Date.now() / 1000;
+                const newPoint = {
+                    timestamp: nowSec,
+                    system: data.system,
+                    telemetry: data.telemetry
+                };
+                rollingTelemetryBuffer.push(newPoint);
+                // Keep last 10 minutes (600 seconds)
+                rollingTelemetryBuffer = rollingTelemetryBuffer.filter(h => h.timestamp >= nowSec - 600);
+
+                // Initial pre-population from server history on first load
+                if (rollingTelemetryBuffer.length === 1 && data.telemetry_history && data.telemetry_history.length > 0) {
+                    const serverHist = data.telemetry_history.filter(h => h.timestamp >= nowSec - 600 && h.timestamp < nowSec);
+                    rollingTelemetryBuffer = [...serverHist, ...rollingTelemetryBuffer];
+                }
+
                 fullTaskHistory = data.history || [];
                 console.log("[Dashboard] Update: Active Tasks:", (data.tasks||[]).length, "History:", fullTaskHistory.length);
 
@@ -990,12 +1128,12 @@
                 }
                 if (data.history_stats) {
                     document.getElementById('analytics-grid').innerHTML = `
-                        <div class="stat-box"><div class="stat-label">Today</div><div class="stat-value">${formatDur(data.history_stats.today)}</div></div>
+                        <div class="stat-box"><div class="stat-label">Today</div><div class="stat-value">${formatDDHHMMSS(data.history_stats.today)}</div></div>
                         <div class="stat-box"><div class="stat-label">Tasks Today</div><div class="stat-value">${data.history_stats.count_today}</div></div>
                         <div class="stat-box"><div class="stat-label">This Month</div><div class="stat-value">${formatDDHHMMSS(data.history_stats.this_month)}</div></div>
                         <div class="stat-box"><div class="stat-label">All Time</div><div class="stat-value">${formatDDHHMMSS(data.history_stats.all_time)}</div></div>
                         <div class="stat-box"><div class="stat-label">Total Tasks</div><div class="stat-value">${data.history_stats.count_all_time}</div></div>
-                        <div class="stat-box"><div class="stat-label">Service Uptime</div><div class="stat-value">${formatDur(data.uptime_sec)}</div></div>
+                        <div class="stat-box"><div class="stat-label">Service Uptime</div><div class="stat-value">${formatDDHHMMSS(data.uptime_sec)}</div></div>
                     `;
                 }
                 const tel = data.telemetry || {};
@@ -1008,15 +1146,19 @@
                     if (isUsed) console.debug(`[Dashboard] Unit ${unitId} is BUSY with task`);
                     let icon = 'memory';
 
+                    if (tel.hardware_util && tel.hardware_util[unitId] !== undefined) {
+                        if (!isUsed) isUsed = tel.hardware_util[unitId] > 0;
+                    }
+
                     if (u.type === 'GPU' && !u.name.includes('NVIDIA')) {
-                        if (!isUsed) isUsed = (tel.intel_gpu_load || 0) > 0;
+                        if (!isUsed && tel.hardware_util === undefined) isUsed = (tel.intel_gpu_load || 0) > 0;
                         icon = 'developer_board';
                     } else if (u.type === 'NPU') {
-                        if (!isUsed) isUsed = (tel.npu_load || 0) > 0;
+                        if (!isUsed && tel.hardware_util === undefined) isUsed = (tel.npu_load || 0) > 0;
                         icon = 'psychology_alt';
                     } else if (u.type === 'CUDA' || (u.type === 'GPU' && u.name.includes('NVIDIA'))) {
                         const idx = parseInt(unitId.split(':')[1] || 0);
-                        if (!isUsed && tel.nvidia && tel.nvidia[idx]) {
+                        if (!isUsed && tel.hardware_util === undefined && tel.nvidia && tel.nvidia[idx]) {
                             isUsed = tel.nvidia[idx].util > 0;
                         }
                         icon = 'rocket_launch';

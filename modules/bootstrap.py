@@ -36,10 +36,10 @@ def initialize_hardware_path():
     )
     if not is_intel_hw:
         try:
-            import openvino as ov  # pylint: disable=import-outside-toplevel,import-error
+            ov = importlib.import_module("openvino")
             core = ov.Core()
             is_intel_hw = any("GPU" in d or "NPU" in d for d in core.available_devices)
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except (ImportError, AttributeError, ValueError, OSError, KeyError, RuntimeError) as e:
             boot_logger.debug("OpenVINO hardware check failed: %s", e)
 
     # Strategy 2: NVIDIA CUDA Optimization
@@ -72,7 +72,7 @@ def initialize_hardware_path():
         try:
             ort = importlib.import_module("onnxruntime")
             boot_logger.info("Successfully loaded ONNX %s from %s", ort.__version__, target_lib)
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except (ImportError, AttributeError, ValueError, OSError, RuntimeError) as e:
             boot_logger.warning("Failed to verify ONNX load: %s", e)
 
 

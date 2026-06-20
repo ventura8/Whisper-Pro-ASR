@@ -7,12 +7,10 @@ import logging
 import time
 import json
 from flask import Flask, request, jsonify
-from flasgger import Swagger  # pylint: disable=import-error
+from flasgger import Swagger
 
 # CRITICAL: Bootstrap hardware path before ANY other first-party imports
-from modules import bootstrap  # pylint: disable=unused-import
-
-# First-party imports (now safe due to bootstrap auto-initialization)
+from modules import bootstrap
 from modules import config, logging_setup, utils
 from modules.inference import model_manager
 from modules.api import routes_system, routes_asr, routes_detect
@@ -111,9 +109,11 @@ def create_app():
     """Enterprise Flask Factory."""
     logging_setup.setup_logging()
     logging_setup.log_banner()
+    utils.cleanup_old_files(config.LOG_DIR, days=config.LOG_RETENTION_DAYS)
+    logger.debug("Using bootstrap configuration: %s", bootstrap)
 
     if config.VERIFY_RUNTIME:
-        _verify_runtime_integrity()
+        verify_runtime_integrity()
 
     flask_app = Flask(__name__)
     _setup_swagger(flask_app)
@@ -135,7 +135,7 @@ def create_app():
     return flask_app
 
 
-def _verify_runtime_integrity():
+def verify_runtime_integrity():
     """Safety check for critical AI backends."""
     try:
         ort = importlib.import_module("onnxruntime")

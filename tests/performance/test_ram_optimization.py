@@ -4,8 +4,6 @@ import pytest
 from flask import Flask
 from modules.api import routes_utils as routes
 
-# pylint: disable=protected-access
-
 
 class TestRAMOptimization:
     """Test suite for RAM usage optimization features."""

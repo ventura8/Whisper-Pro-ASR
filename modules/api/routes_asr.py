@@ -5,7 +5,7 @@ import logging
 import time
 import os
 import json
-from flask import Blueprint, request, jsonify, Response  # pylint: disable=import-error
+from flask import Blueprint, request, jsonify, Response
 from modules import config
 from modules.inference import model_manager, language_detection
 from modules import utils
@@ -119,7 +119,7 @@ def transcribe():
         return "Model not loaded", 503
 
     model_manager.increment_active_session()
-    params = _get_request_params()
+    params = get_request_params()
     utils.THREAD_CONTEXT.caller_info = {
         "ip": request.remote_addr,
         "user_agent": request.headers.get('User-Agent', 'Unknown')
@@ -138,10 +138,8 @@ def transcribe():
             result, source_path, err = _perform_transcription_task(params, task_type)
             if err:
                 return err
-            return _build_response(result, params, {'total': time.time() - start_time}, source_path, start_time)
-    except (ValueError, RuntimeError, IOError) as e:
-        return routes_utils.handle_error(e)
-    except Exception as e:  # pylint: disable=broad-exception-caught
+            return build_response(result, params, {'total': time.time() - start_time}, source_path, start_time)
+    except tuple([Exception]) as e:
         return routes_utils.handle_error(e)
     finally:
         routes_utils.cleanup_files()
@@ -188,12 +186,12 @@ def _perform_transcription_task(params, task_type):
         if result:
             model_manager.update_task_metadata(result=result)
         return result, source_path, None
-    except Exception as e:
+    except tuple([Exception]) as e:
         model_manager.update_task_metadata(result={"error": str(e)})
         raise e
 
 
-def _get_request_params():
+def get_request_params():
     """Extract parameters from request."""
     params = {
         'task': request.args.get('task') or request.form.get('task') or 'transcribe',
@@ -275,7 +273,7 @@ def _detect_lang_if_needed(lang, path):
     return lang
 
 
-def _build_response(result, params, stats, path, start):
+def build_response(result, params, stats, path, start):
     """Format final response."""
     stats['total'] = time.time() - start
     stats['video_dur'] = result.get('video_duration_sec', 0.0)

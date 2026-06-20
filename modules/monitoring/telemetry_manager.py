@@ -57,7 +57,7 @@ def record_snapshot(stats):
         with open(TELEMETRY_FILE, 'w', encoding='utf-8') as f:
             json.dump(history, f)
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except (OSError, KeyError, ValueError, TypeError) as e:
         print(f"Failed to record telemetry: {e}")
 
 

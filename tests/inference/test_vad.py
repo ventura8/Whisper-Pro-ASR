@@ -1,5 +1,5 @@
 """Tests for modules/inference/vad.py."""
-# pylint: disable=protected-access, redefined-outer-name
+
 from unittest import mock
 import numpy as np
 import pytest
@@ -8,12 +8,12 @@ from modules.inference import vad
 
 @pytest.fixture
 def mock_vad_components():
-    """Mock faster-whisper components returned by _lazy_import_vad."""
+    """Mock faster-whisper components returned by lazy_import_vad."""
     mock_get_ts = mock.MagicMock()
     mock_opts = mock.MagicMock()
     mock_decode = mock.MagicMock()
 
-    with mock.patch("modules.inference.vad._lazy_import_vad", return_value=(mock_get_ts, mock_opts, mock_decode)):
+    with mock.patch("modules.inference.vad.lazy_import_vad", return_value=(mock_get_ts, mock_opts, mock_decode)):
         yield mock_get_ts, mock_opts, mock_decode
 
 
@@ -72,7 +72,7 @@ def test_get_speech_timestamps_from_path(mock_vad_components):
 
 def test_vad_missing_dependencies():
     """Test behavior when faster-whisper is not installed."""
-    with mock.patch("modules.inference.vad._lazy_import_vad", return_value=(None, None, None)):
+    with mock.patch("modules.inference.vad.lazy_import_vad", return_value=(None, None, None)):
         with pytest.raises(ImportError):
             vad.decode_audio("test.wav")
 
@@ -86,8 +86,8 @@ def test_vad_exception_handling(mock_vad_components):
     assert results == []
 
 
-def test_lazy_import_vad_monkeypatching():
-    """Test that _lazy_import_vad properly monkeypatches get_speech_timestamps."""
+def testlazy_import_vad_monkeypatching():
+    """Test that lazy_import_vad properly monkeypatches get_speech_timestamps."""
     # Reset VAD state to simulate first load
     vad._VAD_STATE["wrapped"] = False
     vad._VAD_STATE["wrapped_func"] = None
@@ -101,8 +101,8 @@ def test_lazy_import_vad_monkeypatching():
     vad.fw_get_ts = mock_orig_get_ts
 
     try:
-        # Run _lazy_import_vad
-        fw_get_ts_wrapped, _, _ = vad._lazy_import_vad()
+        # Run lazy_import_vad
+        fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
 
         assert vad._VAD_STATE["wrapped"] is True
         assert vad._VAD_STATE["wrapped_func"] is not None
@@ -127,8 +127,8 @@ def test_lazy_import_vad_monkeypatching():
         vad._VAD_STATE["wrapped_func"] = None
 
 
-def test_lazy_import_vad_sys_modules_patching():
-    """Test that _lazy_import_vad patches sys.modules['faster_whisper.vad']."""
+def testlazy_import_vad_sys_modules_patching():
+    """Test that lazy_import_vad patches sys.modules['faster_whisper.vad']."""
     vad._VAD_STATE["wrapped"] = False
     vad._VAD_STATE["wrapped_func"] = None
 
@@ -140,7 +140,7 @@ def test_lazy_import_vad_sys_modules_patching():
 
     with mock.patch.dict("sys.modules", {"faster_whisper.vad": mock_module}):
         try:
-            vad._lazy_import_vad()
+            vad.lazy_import_vad()
             assert mock_module.get_speech_timestamps == vad._VAD_STATE["wrapped_func"]
         finally:
             vad.fw_get_ts = orig_fw_get_ts
@@ -148,8 +148,8 @@ def test_lazy_import_vad_sys_modules_patching():
             vad._VAD_STATE["wrapped_func"] = None
 
 
-def test_lazy_import_vad_none():
-    """Test _lazy_import_vad behavior when fw_get_ts is None."""
+def testlazy_import_vad_none():
+    """Test lazy_import_vad behavior when fw_get_ts is None."""
     vad._VAD_STATE["wrapped"] = False
     vad._VAD_STATE["wrapped_func"] = None
 
@@ -157,7 +157,7 @@ def test_lazy_import_vad_none():
     vad.fw_get_ts = None
 
     try:
-        fw_get_ts_ret, _, _ = vad._lazy_import_vad()
+        fw_get_ts_ret, _, _ = vad.lazy_import_vad()
         assert fw_get_ts_ret is None
         assert vad._VAD_STATE["wrapped"] is False
     finally:
@@ -177,7 +177,7 @@ def test_get_speech_timestamps_wrapped_exceptions():
     vad.fw_get_ts = mock_orig_get_ts
 
     try:
-        fw_get_ts_wrapped, _, _ = vad._lazy_import_vad()
+        fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
 
         # Call with mock logger
         audio = np.zeros(16000)
@@ -205,7 +205,7 @@ def test_get_speech_timestamps_wrapped_exception():
     vad.fw_get_ts = mock_orig_get_ts
 
     try:
-        fw_get_ts_wrapped, _, _ = vad._lazy_import_vad()
+        fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
         audio = np.zeros(16000)
 
         with mock.patch("modules.inference.vad.logger") as mock_logger:
@@ -219,8 +219,8 @@ def test_get_speech_timestamps_wrapped_exception():
         vad._VAD_STATE["wrapped_func"] = None
 
 
-def test_lazy_import_vad_sys_modules_exception():
-    """Test exception path inside _lazy_import_vad's sys.modules loop."""
+def testlazy_import_vad_sys_modules_exception():
+    """Test exception path inside lazy_import_vad's sys.modules loop."""
     vad._VAD_STATE["wrapped"] = False
     vad._VAD_STATE["wrapped_func"] = None
 
@@ -232,7 +232,7 @@ def test_lazy_import_vad_sys_modules_exception():
     with mock.patch("sys.modules", mock.MagicMock(items=mock.Mock(side_effect=RuntimeError("sys.modules mock error")))):
         try:
             # Should catch exception gracefully and not crash
-            vad._lazy_import_vad()
+            vad.lazy_import_vad()
         finally:
             vad.fw_get_ts = orig_fw_get_ts
             vad._VAD_STATE["wrapped"] = False
@@ -250,6 +250,6 @@ def test_get_speech_timestamps_from_path_exception():
 
 def test_get_speech_timestamps_missing_dependencies():
     """Test get_speech_timestamps returns [] when VAD components are missing."""
-    with mock.patch("modules.inference.vad._lazy_import_vad", return_value=(None, None, None)):
+    with mock.patch("modules.inference.vad.lazy_import_vad", return_value=(None, None, None)):
         res = vad.get_speech_timestamps(np.zeros(16000))
         assert res == []

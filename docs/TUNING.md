@@ -76,10 +76,10 @@ Models are immediately unloaded from memory when all active sessions complete. T
 environment:
   - MODEL_IDLE_TIMEOUT=300
 ```
-When set to a positive value (in seconds), models remain warm in memory after the last session completes. A background daemon thread monitors inactivity and only purges models after the timeout elapses. This is ideal for environments with bursty workloads where you want fast response times for subsequent requests within the timeout window.
+When set to a positive value (in seconds), models remain warm in memory after the last session completes. A deferred `threading.Timer` is started after the last task finishes and only purges models after the timeout elapses. If new tasks arrive during the waiting period, the timer is automatically cancelled and rescheduled, keeping models warm for bursty workloads.
 
 > [!TIP]
-> Set `MODEL_IDLE_TIMEOUT=300` (5 minutes) for a good balance between memory efficiency and response latency. The idle monitor thread has negligible CPU overhead (polling every 5 seconds).
+> Set `MODEL_IDLE_TIMEOUT=300` (5 minutes) for a good balance between memory efficiency and response latency. The deferred timer has zero CPU overhead while waiting (compared to the previous polling approach).
 
 When `MODEL_IDLE_TIMEOUT > 0`, it takes precedence over `AGGRESSIVE_OFFLOAD`.
 

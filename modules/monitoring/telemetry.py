@@ -37,18 +37,18 @@ def _telemetry_worker():
                     "telemetry": {
                         "nvidia": metrics_discovery.get_nvidia_metrics(),
                         "intel_gpu_load": metrics_discovery.get_intel_gpu_load(),
-                        "npu_load": metrics_discovery.get_npu_load()
+                        "npu_load": metrics_discovery.get_npu_load(),
+                        "hardware_util": metrics_discovery.get_all_hardware_utilization()
                     }
                 })
                 if len(TELEMETRY_HISTORY) > max_points:
                     TELEMETRY_HISTORY.pop(0)
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except (OSError, ValueError, AttributeError, KeyError, TypeError, RuntimeError) as e:
             logger.debug("[Telemetry] Worker cycle failed: %s", e)
         time.sleep(2)
 
 
 def get_service_stats():
-    # pylint: disable=protected-access
     """Consolidates service state for the dashboard."""
     with scheduler.STATE.task_registry_lock:
         tasks = []
@@ -104,15 +104,15 @@ def get_service_stats():
 
         if whisper_unit_active:
             u_copy['whisper_status'] = 'busy'
-        elif unit_id in model_manager._MODEL_POOL:
+        elif unit_id in model_manager.MODEL_POOL:
             u_copy['whisper_status'] = 'loaded'
         else:
             u_copy['whisper_status'] = 'ready'
 
         if uvr_unit_active:
             u_copy['uvr_status'] = 'busy'
-        elif (unit_id in model_manager._PREPROCESSOR_POOL and
-              model_manager._PREPROCESSOR_POOL[unit_id].separator is not None):
+        elif (unit_id in model_manager.PREPROCESSOR_POOL and
+              model_manager.PREPROCESSOR_POOL[unit_id].separator is not None):
             u_copy['uvr_status'] = 'loaded'
         else:
             u_copy['uvr_status'] = 'ready'
@@ -136,7 +136,8 @@ def get_service_stats():
         "telemetry": {
             "nvidia": metrics_discovery.get_nvidia_metrics(),
             "intel_gpu_load": metrics_discovery.get_intel_gpu_load(),
-            "npu_load": metrics_discovery.get_npu_load()
+            "npu_load": metrics_discovery.get_npu_load(),
+            "hardware_util": metrics_discovery.get_all_hardware_utilization()
         },
         "engines": {
             "whisper": {

@@ -3,7 +3,7 @@ Subtitle generation and text wrapping helper utilities.
 """
 
 
-def _wrap_text(text, max_line_width, max_line_count=None):
+def wrap_text(text, max_line_width, max_line_count=None):
     """Wraps text to max_line_width characters per line, up to max_line_count lines."""
     if not text or not max_line_width:
         return text
@@ -49,7 +49,7 @@ def generate_srt(result, max_line_width=None, max_line_count=None):
         text = result.get("text", "").strip()
         if text:
             if max_line_width is not None:
-                text = _wrap_text(text, max_line_width, max_line_count)
+                text = wrap_text(text, max_line_width, max_line_count)
             return f"1\n00:00:00,000 --> 00:00:05,000\n{text}\n"
         return "[No dialogue detected]"
 
@@ -78,7 +78,7 @@ def generate_srt(result, max_line_width=None, max_line_count=None):
             text = f"[{speaker}]: {text}"
 
         if max_line_width is not None:
-            text = _wrap_text(text, max_line_width, max_line_count)
+            text = wrap_text(text, max_line_width, max_line_count)
 
         # Format SRT block: Index -> Timestamps -> Content
         srt_lines.append(f"{idx}\n{start_fmt} --> {end_fmt}\n{text}\n")
@@ -110,7 +110,7 @@ def generate_vtt(result, max_line_width=None, max_line_count=None):
         text = result.get("text", "").strip()
         if text:
             if max_line_width is not None:
-                text = _wrap_text(text, max_line_width, max_line_count)
+                text = wrap_text(text, max_line_width, max_line_count)
             return f"WEBVTT\n\n00:00:00.000 --> 00:00:05.000\n{text}\n"
         return "WEBVTT\n\n[No dialogue detected]"
 
@@ -139,7 +139,7 @@ def generate_vtt(result, max_line_width=None, max_line_count=None):
             text = f"[{speaker}]: {text}"
 
         if max_line_width is not None:
-            text = _wrap_text(text, max_line_width, max_line_count)
+            text = wrap_text(text, max_line_width, max_line_count)
 
         vtt_lines.append(f"{idx}\n{start_fmt} --> {end_fmt}\n{text}\n")
 

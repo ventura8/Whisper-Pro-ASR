@@ -1,5 +1,5 @@
 """Tests for modules/logging_setup.py"""
-# pylint: disable=attribute-defined-outside-init, protected-access
+
 import os
 import logging
 import importlib
@@ -18,6 +18,8 @@ from modules import logging_setup, config
 
 class TestIgnoreSpecificWarnings:
     """Test suite for IgnoreSpecificWarnings filter."""
+
+    filter = None
 
     def setup_method(self):
         """Set up test fixtures."""

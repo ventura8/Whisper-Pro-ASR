@@ -3,9 +3,10 @@ System and Diagnostic Routes for Whisper Pro ASR
 """
 import logging
 import os
-from flask import Blueprint, request, jsonify, send_from_directory  # pylint: disable=import-error
-from modules import config, utils
+from flask import Blueprint, request, jsonify, send_from_directory
+from modules import config, utils, logging_setup
 from modules.monitoring import dashboard, history_manager
+from modules.inference import model_manager
 
 bp = Blueprint('system', __name__)
 logger = logging.getLogger(__name__)
@@ -52,12 +53,12 @@ def status():
         description: Current system metrics.
     """
     stats = dashboard.get_status_data()
-    # Add 'telemetry' alias for test compatibility if 'system' is present
-    if "system" in stats:
+    # Add 'telemetry' alias for test compatibility if one is missing
+    if "system" in stats and "telemetry" not in stats:
         stats["telemetry"] = stats["system"]
-    elif "telemetry" in stats:
+    elif "telemetry" in stats and "system" not in stats:
         stats["system"] = stats["telemetry"]
-    else:
+    elif "system" not in stats and "telemetry" not in stats:
         # Fallback for minimal mocks in tests
         stats["telemetry"] = {}
         stats["system"] = {}
@@ -116,6 +117,7 @@ def trigger_cleanup():
         description: Cleanup routine triggered.
     """
     utils.purge_temporary_assets()
+    utils.cleanup_old_files(config.LOG_DIR, days=config.LOG_RETENTION_DAYS)
     return jsonify({"status": "success", "message": "Cleanup triggered"})
 
 
@@ -165,7 +167,7 @@ def download_logs():
     try:
         for handler in logging.root.handlers:
             handler.flush()
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as e:
         logger.debug("[System] Minor error during log flush: %s", e)
 
     try:
@@ -181,7 +183,7 @@ def download_logs():
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         return response
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as e:
         logger.error("[System] Log download error: %s", e)
         return jsonify({"error": str(e)}), 500
 
@@ -243,13 +245,13 @@ def update_settings():
         if 'log_retention_days' in data:
             config.update_env('LOG_RETENTION_DAYS', data['log_retention_days'])
             logger.info("[Settings] Log retention updated to %sd", data['log_retention_days'])
+            logging_setup.update_log_retention(data['log_retention_days'])
 
         # Reload model pool with new settings
-        from modules.inference import model_manager  # pylint: disable=import-outside-toplevel
         model_manager.load_model()
 
         return jsonify({"status": "success", "message": "Settings updated"})
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as e:
         return jsonify({"error": str(e)}), 500
 
 

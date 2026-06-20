@@ -17,7 +17,7 @@ Whisper Pro uses a **Hardware Resource Pool** to balance I/O-bound tasks, CPU-bo
 | `STATE.priority_sequential_lock` | `threading.Semaphore` | Global | Prevents CPU thrashing by governing heavy non-accelerated tasks. |
 | `model_lock_ctx` | **Re-entrant Lock** | Thread-Local | Allows nested sub-tasks (UVR → ASR → Diarization) to share the same hardware claim. |
 | `STATE.priority_lock` | `threading.Lock` | Global | Protects priority counters and pre-emption signals. |
-| `_MONITOR_LOCK` | `threading.Lock` | Global | Guards one-time initialization of the model idle monitor thread. |
+| `_POOL_LOCK` | `threading.Lock` | Global | Serializes model loading and unloading operations to prevent race conditions during engine state transitions. |
 
 ### Resource Orchestration Flow
 ```mermaid
@@ -108,9 +108,9 @@ The service supports a configurable **Model Idle Timeout** as an alternative to 
 | Variable | Default | Behavior |
 |:---|:---|:---|
 | `AGGRESSIVE_OFFLOAD` | `false` | Immediately unload all models when active sessions reach zero. |
-| `MODEL_IDLE_TIMEOUT` | `300` | A background daemon thread monitors inactivity and only purges models after the configured number of seconds with zero active sessions. |
+| `MODEL_IDLE_TIMEOUT` | `300` | A deferred `threading.Timer` is started after the last task completes. Models are only purged after the configured number of seconds with zero active sessions. New incoming tasks cancel and reschedule the timer. |
 
-When `MODEL_IDLE_TIMEOUT > 0` (or defaults to `300`), it takes precedence over `AGGRESSIVE_OFFLOAD`. This allows models to remain warm in memory for rapid response to subsequent requests within the timeout window.
+When `MODEL_IDLE_TIMEOUT > 0` (or defaults to `300`), it takes precedence over `AGGRESSIVE_OFFLOAD`. This allows models to remain warm in memory for rapid response to subsequent requests within the timeout window. If a new task arrives while the cleanup routine is actively executing (not just waiting for the timer), the system allows the cleanup to complete and re-initializes models on demand for the new task.
 
 ### 3. Storage & Memory Hygiene
 The service implements a **Centralized Storage Hygiene** strategy. Every transient file created during a request (uploads, HQ prep files, isolated stems) is registered in a thread-local `tracked_files` registry. A mandatory `cleanup_files()` call in the request's `finally` block ensures 100% reclamation of storage space.

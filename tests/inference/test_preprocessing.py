@@ -1,5 +1,5 @@
 """Tests for preprocessing.py (UVR/MDX-NET Vocal Separation)."""
-# pylint: disable=missing-function-docstring, protected-access, redefined-outer-name, too-few-public-methods, unused-argument, import-error, import-outside-toplevel, missing-class-docstring, multiple-statements, redefined-builtin, unused-variable
+
 import time
 import logging
 from unittest import mock
@@ -109,7 +109,7 @@ class TestSeparatorInit:
     def test_apply_onnx_optimizations_success(self):
         class MockSession:
             """Mock ORT Session."""
-            _is_patched = False
+            is_patched = False
 
             def __init__(self, *args, **kwargs):
                 pass
@@ -118,7 +118,7 @@ class TestSeparatorInit:
         mock_ort.InferenceSession = MockSession
         with mock.patch("modules.inference.preprocessing.ort", mock_ort):
             preprocessing.apply_onnx_optimizations()
-            assert MockSession._is_patched is True
+            assert MockSession.is_patched is True
 
     def test_onnx_session_patching_logic(self):
         """Test the actual patched __init__ function logic."""
@@ -126,7 +126,7 @@ class TestSeparatorInit:
 
         class MockSession:
             """Mock ORT Session for patching test."""
-            _is_patched = False
+            is_patched = False
 
             def __init__(self, model_path, sess_options=None, providers=None, provider_options=None, **kwargs):
                 original_init_called[0] = True
@@ -464,13 +464,13 @@ class TestSeparateWithFallback:
 def test_apply_onnx_optimizations_no_separator():
     """Cover lines 186-187 where audio_separator import fails during optimization."""
     class MockSession:
-        _is_patched = False
+        is_patched = False
         def __init__(self, *args, **kwargs): pass
 
     mock_ort = mock.MagicMock()
     mock_ort.InferenceSession = MockSession
     # Ensure apply_onnx_optimizations runs the patch logic
-    mock_ort.InferenceSession._is_patched = False
+    mock_ort.InferenceSession.is_patched = False
 
     # We must patch builtins.__import__ to fail when importing audio_separator.separator
     original_import = __import__
@@ -483,7 +483,7 @@ def test_apply_onnx_optimizations_no_separator():
     with mock.patch("modules.inference.preprocessing.ort", mock_ort):
         with mock.patch("builtins.__import__", side_effect=failing_import):
             preprocessing.apply_onnx_optimizations()
-            assert MockSession._is_patched is True
+            assert MockSession.is_patched is True
 
 
 def test_init_separator_already_initialized(prep_manager):

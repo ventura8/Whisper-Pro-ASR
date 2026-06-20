@@ -44,3 +44,7 @@ coverage_output.txt
 pytest.xml
 report.xml
 htmlcov/
+test_data/
+test_state/
+pylint_report.txt
+

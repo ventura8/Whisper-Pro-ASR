@@ -1,5 +1,5 @@
 """Tests for model_manager post-processing filters."""
-# pylint: disable=protected-access
+
 from unittest import mock
 from modules.inference import model_manager
 from modules import config

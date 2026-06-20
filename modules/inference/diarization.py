@@ -1,15 +1,15 @@
 """
 Speaker Diarization and Alignment Module using WhisperX.
 """
+import importlib
 import logging
 from modules import config
 from modules.inference import scheduler
-
 logger = logging.getLogger(__name__)
 
 # Caching Pools
-_ALIGN_POOL = {}
-_DIARIZE_POOL = {}
+ALIGN_POOL = {}
+DIARIZE_POOL = {}
 
 
 def _get_whisperx_device(unit_id):
@@ -22,25 +22,25 @@ def _get_whisperx_device(unit_id):
 def _get_align_model(whisperx, lang_code, device, unit_id):
     """Load or retrieve the alignment model from the cache pool."""
     align_key = (unit_id, lang_code)
-    if align_key not in _ALIGN_POOL:
+    if align_key not in ALIGN_POOL:
         logger.info("[Diarization] Loading alignment model for language: %s on %s", lang_code, device)
-        _ALIGN_POOL[align_key] = whisperx.load_align_model(
+        ALIGN_POOL[align_key] = whisperx.load_align_model(
             language_code=lang_code,
             device=device
         )
-    return _ALIGN_POOL[align_key]
+    return ALIGN_POOL[align_key]
 
 
 def _get_diarize_pipeline(whisperx, token, device, unit_id):
     """Load or retrieve the diarization pipeline from the cache pool."""
-    if unit_id not in _DIARIZE_POOL:
+    if unit_id not in DIARIZE_POOL:
         scheduler.update_task_progress(90, "Loading Diarization Model")
         logger.info("[Diarization] Loading diarization pipeline on %s...", device)
-        _DIARIZE_POOL[unit_id] = whisperx.diarization.DiarizationPipeline(  # pylint: disable=no-member
+        DIARIZE_POOL[unit_id] = whisperx.diarization.DiarizationPipeline(
             use_auth_token=token,
             device=device
         )
-    return _DIARIZE_POOL[unit_id]
+    return DIARIZE_POOL[unit_id]
 
 
 def run_diarization(
@@ -49,7 +49,7 @@ def run_diarization(
     """Aligns segments and performs speaker diarization using whisperx."""
     # Resolve device and import whisperx
     whisperx_device = _get_whisperx_device(unit_id)
-    import whisperx  # pylint: disable=import-outside-toplevel,import-error
+    whisperx = importlib.import_module("whisperx")
 
     # 1. Get/load alignment model
     scheduler.update_task_progress(83, "Loading Alignment Model")

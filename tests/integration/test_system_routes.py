@@ -1,9 +1,9 @@
 """Integration tests for system-level routes."""
-# pylint: disable=redefined-outer-name,import-outside-toplevel
+
+import os
 import json
 from unittest import mock
-import pytest
-from whisper_pro_asr import create_app
+from modules import config
 
 
 def _unpack_response(resp):
@@ -14,15 +14,6 @@ def _unpack_response(resp):
     if isinstance(resp, str):
         return resp, 200
     return resp, resp.status_code
-
-
-@pytest.fixture
-def client():
-    """Setup Flask test client."""
-    app = create_app()
-    app.config['TESTING'] = True
-    with app.test_client() as test_client:
-        yield test_client
 
 
 def test_root_json(client):
@@ -108,8 +99,6 @@ def test_stats_endpoint(client):
 def test_download_logs(client):
     """Test log download endpoint."""
     # Create a dummy log file
-    import os
-    from modules import config
 
     log_path = os.path.join(config.LOG_DIR, "whisper_pro.log")
     os.makedirs(config.LOG_DIR, exist_ok=True)
@@ -147,6 +136,16 @@ def test_system_routes_telemetry_alias(client):
         assert data["system"]["cpu"] == 5
 
 
+def test_system_routes_system_alias(client):
+    """Cover the system/telemetry alias logic in /status when telemetry is missing."""
+    mock_data = {"system": {"cpu": 7}}
+    with mock.patch("modules.monitoring.dashboard.get_status_data", return_value=mock_data):
+        response = client.get('/status')
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["telemetry"]["cpu"] == 7
+
+
 def test_system_routes_render_dashboard(client):
     """Cover render_dashboard endpoint."""
     with mock.patch("modules.monitoring.dashboard.get_dashboard_html", return_value="<h1>Dashboard</h1>"):
@@ -158,7 +157,7 @@ def test_system_routes_render_dashboard(client):
 def test_system_routes_download_logs_error(client):
     """Cover exception in download_logs."""
     with mock.patch("os.path.exists", return_value=True), \
-            mock.patch("modules.api.routes_system.send_from_directory", side_effect=Exception("Disk Error")):
+            mock.patch("modules.api.routes_system.send_from_directory", side_effect=OSError("Disk Error")):
         response = client.get('/logs/download')
         assert response.status_code == 500
         data = json.loads(response.data)

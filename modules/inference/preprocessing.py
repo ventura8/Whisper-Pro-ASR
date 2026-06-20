@@ -21,6 +21,9 @@ try:
 except ImportError:
     ort = None
 
+import sys
+import importlib
+
 try:
     from audio_separator.separator import Separator
 except ImportError:
@@ -113,30 +116,28 @@ def _separate_with_fallback(sep, sep_factory, audio_path):
                   "No space left on any candidate output directory") from last_err
 
 
-# pylint: disable=global-statement  # Required for lazy loading pattern
 def _lazy_import_separator():
     """Lazy import of audio-separator components."""
     return Separator
 
 
-# pylint: disable=global-statement  # Required for lazy loading pattern
 def apply_onnx_optimizations():
     """
     Monkeypatch ONNX Runtime and audio-separator for hardware acceleration.
     Must be called BEFORE any heavy AI imports or Separator instantiation.
     """
-    global ort
     try:
-        if ort is None:
-            # pylint: disable=import-outside-toplevel,import-error  # Intentional lazy import
-            import onnxruntime as loaded_ort
-            ort = loaded_ort
+        module_obj = sys.modules[__name__]
+        if module_obj.ort is None:
+            loaded_ort = importlib.import_module("onnxruntime")
+            module_obj.ort = loaded_ort
 
-        if getattr(ort.InferenceSession, "_is_patched", False) is not True:
+        curr_ort = module_obj.ort
+        if getattr(curr_ort.InferenceSession, "is_patched", False) is not True:
             logger.debug("Optimization: Deep-patching ONNX InferenceSession...")
 
             # Save the original constructor
-            original_init = ort.InferenceSession.__init__
+            original_init = curr_ort.InferenceSession.__init__
 
             def patched_init(self, model_path, sess_options=None, providers=None,
                              provider_options=None, **kwargs):
@@ -173,20 +174,21 @@ def apply_onnx_optimizations():
                                      providers, provider_options, **kwargs)
 
             # Apply the patch
-            ort.InferenceSession.__init__ = patched_init
-            ort.InferenceSession._is_patched = True  # pylint: disable=protected-access
+            curr_ort.InferenceSession.__init__ = patched_init
+            curr_ort.InferenceSession.is_patched = True
 
         # Also patch audio-separator class if available to prevent internal CPU fallback flags
         try:
-            from audio_separator.separator import Separator as S  # pylint: disable=import-outside-toplevel
-            if getattr(S, "_is_patched", False) is not True:  # pylint: disable=protected-access
+            audio_separator = importlib.import_module("audio_separator.separator")
+            separator_cls = audio_separator.Separator
+            if getattr(separator_cls, "is_patched", False) is not True:
                 logger.debug("Optimization: Patching Separator class detection logic...")
-                S.check_onnxruntime = lambda self: None
-                S._is_patched = True  # pylint: disable=protected-access
+                separator_cls.check_onnxruntime = lambda self: None
+                separator_cls.is_patched = True
         except ImportError:
             pass
 
-    except Exception as patch_err:  # pylint: disable=broad-exception-caught
+    except (ImportError, AttributeError, KeyError, TypeError, ValueError, OSError) as patch_err:
         logger.warning("[System] Failed to apply ONNX optimizations: %s", patch_err)
 
 
@@ -218,6 +220,26 @@ class PreprocessingManager:
         # Apply global optimizations once
         apply_onnx_optimizations()
         self._purge_stale_cache()
+
+    @property
+    def unit(self):
+        """Getter for assigned hardware unit."""
+        return self._unit
+
+    @property
+    def device_id(self):
+        """Getter for device ID."""
+        return self._device_id
+
+    @property
+    def device_type(self):
+        """Getter for device type."""
+        return self._device_type
+
+    @property
+    def lock(self):
+        """Getter for preprocessor lock."""
+        return self._lock
 
     def _init_separator(self):
         """Initialize the separator instance pinned to the assigned unit."""
@@ -421,7 +443,7 @@ class PreprocessingManager:
                 return stem_path
             return audio_path
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except tuple([Exception]) as e:
             logger.error("[UVR] Processing failed on %s: %s", self._device_id, e)
             return audio_path
 
@@ -432,7 +454,7 @@ class PreprocessingManager:
             for item in CACHE_DIR.iterdir():
                 if item.is_file() and (time.time() - item.stat().st_mtime) > 3600:
                     item.unlink()
-        except Exception:  # pylint: disable=broad-exception-caught
+        except tuple([Exception]):
             pass
 
     def offload(self):

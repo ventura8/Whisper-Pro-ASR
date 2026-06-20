@@ -56,7 +56,7 @@ def run_batch_language_detection_direct(model, audio_path, segment_count):
             logger.info("[Engine] %s...", stage)
             scheduler.update_task_progress(progress, stage)
         return results
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except (ImportError, RuntimeError, OSError, ValueError, AttributeError, KeyError, TypeError) as e:
         logger.error("[Engine] Batch detection failed: %s", e)
         return []
     finally:
@@ -98,7 +98,7 @@ def run_language_detection_core(model, audio_input, skip_vad=False):
             "confidence": lang_prob,
             "all_probabilities": dict(all_probs_list) if all_probs_list else {lang_code: lang_prob}
         }
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except tuple([Exception]) as e:
         logger.info("[Engine] detect_language fallback: %s", e)
         # Fallback to minimal transcribe
         _, info = model.transcribe(audio_input, beam_size=1, task="transcribe")

@@ -1,5 +1,5 @@
 """System-wide robustness and edge-case validation for core modules."""
-# pylint: disable=protected-access
+
 import os
 import sys
 import shutil
@@ -75,7 +75,7 @@ def test_media_utilities_resilience():
     # 2. FFmpeg progress parsing failures and speed parsing
     process = mock.MagicMock()
     process.stdout.readline.side_effect = ["out_time_ms=invalid\n", "speed= 1.25x\n", ""]
-    speed = utils._parse_ffmpeg_progress(process, 10.0)
+    speed = utils.parse_ffmpeg_progress(process, 10.0)
     assert speed == "1.25x"
 
     # 3. Subtitle generation fallbacks
@@ -152,8 +152,8 @@ def test_engine_resource_management():
     pm_mock = mock.MagicMock()
     pm_mock.unload_model.side_effect = Exception("UVR Fail")
 
-    model_manager._MODEL_POOL = {"CPU": model_mock, "GPU": model_mock_2}
-    model_manager._PREPROCESSOR_POOL = {"CPU": pm_mock}
+    model_manager.MODEL_POOL = {"CPU": model_mock, "GPU": model_mock_2}
+    model_manager.PREPROCESSOR_POOL = {"CPU": pm_mock}
     model_mock.unload.side_effect = Exception("Unload Fail")
 
     mock_ct2 = mock.MagicMock()
@@ -162,7 +162,7 @@ def test_engine_resource_management():
         with mock.patch("modules.utils.get_system_telemetry", return_value={}):
             model_manager.unload_models()
 
-    assert len(model_manager._MODEL_POOL) == 0
+    assert len(model_manager.MODEL_POOL) == 0
 
     # 3. Libc/Platform specific reclamation failures
     with mock.patch("ctypes.CDLL", side_effect=OSError("No libc")):
@@ -176,16 +176,16 @@ def test_engine_resource_management():
     assert scheduler.get_preemptible_unit() is None
 
     # 5. Status helpers
-    model_manager._MODEL_POOL = {"CPU": mock.MagicMock()}
+    model_manager.MODEL_POOL = {"CPU": mock.MagicMock()}
     assert model_manager.is_engine_actually_loaded() is True
-    model_manager._MODEL_POOL = {}
+    model_manager.MODEL_POOL = {}
     assert model_manager.is_engine_actually_loaded() is False
 
 
 def test_hardware_monitoring_fallbacks():
     """Test resilience when hardware monitoring tools are missing."""
-    with metrics_discovery._CACHE_LOCK:
-        metrics_discovery._METRIC_CACHE.clear()
+    with metrics_discovery.CACHE_LOCK:
+        metrics_discovery.METRIC_CACHE.clear()
 
     with mock.patch("subprocess.check_output", side_effect=FileNotFoundError("No tool")):
         assert metrics_discovery.get_npu_load() == 0
@@ -195,7 +195,7 @@ def test_hardware_monitoring_fallbacks():
 
 def test_language_sampling_edge_cases():
     """Test empty results in language voting aggregation."""
-    assert language_detection._aggregate_language_probs([]) == {}
+    assert language_detection.aggregate_language_probs([]) == {}
 
 
 def test_system_config_validation():
@@ -231,22 +231,18 @@ def test_system_routes_logic_gaps():
                 assert code == 404
 
     # 3. update_settings POST paths
-    with app.test_request_context(method='POST'):
-        # Valid update
-        with mock.patch("flask.request") as mock_req:
-            mock_req.method = 'POST'
-            mock_req.json = {
-                "ASR_MODEL": "test_model",
-                "ASR_DEVICE": "CPU",
-                "telemetry_retention_hours": 12,
-                "log_retention_days": 5
-            }
-            with mock.patch("modules.config.update_env"):
-                with mock.patch("modules.inference.model_manager.load_model"):
-                    resp = routes_system.update_settings()
-                    # Check status success if it's a JSON response
-                    if hasattr(resp, 'json'):
-                        assert resp.json["status"] == "success"
+    with app.test_request_context(method='POST', json={
+        "ASR_MODEL": "test_model",
+        "ASR_DEVICE": "CPU",
+        "telemetry_retention_hours": 12,
+        "log_retention_days": 5
+    }):
+        with mock.patch("modules.config.update_env"):
+            with mock.patch("modules.inference.model_manager.load_model"):
+                resp = routes_system.update_settings()
+                # Check status success if it's a JSON response
+                if hasattr(resp, 'json'):
+                    assert resp.json["status"] == "success"
 
     # 4. help_endpoint
     with app.test_request_context():
