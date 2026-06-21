@@ -143,7 +143,8 @@ class TestSeparatorInit:
                 mock_ctx.ov_options = {"device_type": "GPU"}
 
                 # Test intercept CPU fallback
-                session = mock_ort.InferenceSession("model.onnx", providers=["CPUExecutionProvider"])
+                session = mock_ort.InferenceSession(
+                    "model.onnx", providers=["CPUExecutionProvider"])
                 assert "OpenVINOExecutionProvider" in session.providers
                 assert session.provider_options[0]["device_type"] == "GPU"
                 assert original_init_called[0] is True
@@ -152,19 +153,22 @@ class TestSeparatorInit:
                             "model.onnx", "model")
                 session2 = mock_ort.InferenceSession(
                     "model.onnx",
-                    providers=["OpenVINOExecutionProvider", "CPUExecutionProvider"]
+                    providers=["OpenVINOExecutionProvider",
+                               "CPUExecutionProvider"]
                 )
                 assert session2.provider_options[0]["device_type"] == "GPU"
 
                 # Test provider_options as list with wrong type (should become dict)
-                session3 = mock_ort.InferenceSession("model.onnx", providers=["OpenVINOExecutionProvider"], provider_options=[None])
+                session3 = mock_ort.InferenceSession(
+                    "model.onnx", providers=["OpenVINOExecutionProvider"], provider_options=[None])
                 assert isinstance(session3.provider_options[0], dict)
                 assert session3.provider_options[0]["device_type"] == "GPU"
 
                 # Test provider_options list expansion
                 session4 = mock_ort.InferenceSession(
                     "model.onnx",
-                    providers=["CPUExecutionProvider", "OpenVINOExecutionProvider"],
+                    providers=["CPUExecutionProvider",
+                               "OpenVINOExecutionProvider"],
                     provider_options=[{}]
                 )
                 assert len(session4.provider_options) == 2
@@ -172,7 +176,8 @@ class TestSeparatorInit:
 
     def test_init_separator_success(self, prep_manager):
         mock_ort = mock.MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+        mock_ort.get_available_providers.return_value = [
+            "CPUExecutionProvider"]
         mock_ort.__version__ = "1.24.1"
 
         with mock.patch("modules.inference.preprocessing.ort", mock_ort):
@@ -193,7 +198,8 @@ class TestSeparatorInit:
             mock_sep_inst.load_model.side_effect = Exception("Fail")
 
             mock_ort = mock.MagicMock()
-            mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+            mock_ort.get_available_providers.return_value = [
+                "CPUExecutionProvider"]
 
             with mock.patch("modules.inference.preprocessing.ort", mock_ort):
                 with pytest.raises(Exception):
@@ -224,10 +230,12 @@ class TestPreprocessAudio:
             mock_cfg.ENABLE_VOCAL_SEPARATION = True
             mock_sep = mock.MagicMock()
             mock_sep.separate.return_value = ["vocal.wav"]
-            prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+            prep_manager._init_separator = mock.MagicMock(
+                return_value=mock_sep)
 
             mock_ort = mock.MagicMock()
-            mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+            mock_ort.get_available_providers.return_value = [
+                "CPUExecutionProvider"]
 
             with mock.patch("modules.inference.preprocessing.ort", mock_ort):
                 with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
@@ -239,10 +247,12 @@ class TestPreprocessAudio:
             mock_cfg.ENABLE_VOCAL_SEPARATION = True
             mock_sep = mock.MagicMock()
             mock_sep.separate.return_value = ["vocal.wav", "instrumental.wav"]
-            prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+            prep_manager._init_separator = mock.MagicMock(
+                return_value=mock_sep)
 
             mock_ort = mock.MagicMock()
-            mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+            mock_ort.get_available_providers.return_value = [
+                "CPUExecutionProvider"]
 
             with mock.patch("modules.inference.preprocessing.ort", mock_ort), \
                     mock.patch("os.path.exists", return_value=True), \
@@ -254,7 +264,8 @@ class TestPreprocessAudio:
     def test_preprocess_exception(self, prep_manager):
         with mock.patch("modules.inference.preprocessing.config") as mock_cfg:
             mock_cfg.ENABLE_VOCAL_SEPARATION = True
-            prep_manager._init_separator = mock.MagicMock(side_effect=Exception("Crash"))
+            prep_manager._init_separator = mock.MagicMock(
+                side_effect=Exception("Crash"))
             assert prep_manager.preprocess_audio("test.wav") == "test.wav"
 
     def test_preprocess_force(self, prep_manager):
@@ -262,10 +273,12 @@ class TestPreprocessAudio:
             mock_cfg.ENABLE_VOCAL_SEPARATION = False  # Disabled globally
             mock_sep = mock.MagicMock()
             mock_sep.separate.return_value = ["vocal.wav"]
-            prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+            prep_manager._init_separator = mock.MagicMock(
+                return_value=mock_sep)
 
             mock_ort = mock.MagicMock()
-            mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+            mock_ort.get_available_providers.return_value = [
+                "CPUExecutionProvider"]
 
             with mock.patch("modules.inference.preprocessing.ort", mock_ort):
                 with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
@@ -278,7 +291,8 @@ class TestPreprocessAudio:
             mock_cfg.ENABLE_VOCAL_SEPARATION = True
             mock_sep = mock.MagicMock()
             mock_sep.separate.return_value = ["relative_vocal.wav"]
-            prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+            prep_manager._init_separator = mock.MagicMock(
+                return_value=mock_sep)
 
             with mock.patch("modules.inference.preprocessing.ort", mock.MagicMock()):
                 with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
@@ -291,7 +305,8 @@ class TestPreprocessAudio:
             mock_cfg.ENABLE_VOCAL_SEPARATION = True
             mock_sep = mock.MagicMock()
             mock_sep.separate.return_value = ["vocal.wav", "extra.wav"]
-            prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
+            prep_manager._init_separator = mock.MagicMock(
+                return_value=mock_sep)
 
             with mock.patch("modules.inference.preprocessing.ort", mock.MagicMock()), \
                     mock.patch("os.path.exists", return_value=True), \
@@ -383,7 +398,8 @@ class TestSeparateWithFallback:
         factory = mock.MagicMock()
 
         with mock.patch("os.makedirs"):
-            result = preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+            result = preprocessing._separate_with_fallback(
+                mock_sep, factory, "audio.wav")
 
         assert result == ["/tmp/vocal.wav"]
         factory.assert_not_called()
@@ -402,7 +418,8 @@ class TestSeparateWithFallback:
         with mock.patch("os.makedirs"), \
             mock.patch("modules.inference.preprocessing._candidate_output_dirs",
                        return_value=candidates):
-            result = preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+            result = preprocessing._separate_with_fallback(
+                mock_sep, factory, "audio.wav")
 
         assert result == ["/persistent/vocal.wav"]
         factory.assert_called_once_with("/persistent/tmp")
@@ -417,7 +434,8 @@ class TestSeparateWithFallback:
             mock.patch("modules.inference.preprocessing._candidate_output_dirs",
                        return_value=[str(preprocessing.CACHE_DIR)]):
             with pytest.raises(OSError) as exc_info:
-                preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+                preprocessing._separate_with_fallback(
+                    mock_sep, factory, "audio.wav")
         assert exc_info.value.errno == 5
         factory.assert_not_called()
 
@@ -437,7 +455,8 @@ class TestSeparateWithFallback:
                        return_value=candidates), \
             mock.patch("modules.inference.preprocessing.shutil.disk_usage",
                        side_effect=OSError("stat failed")):
-            result = preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+            result = preprocessing._separate_with_fallback(
+                mock_sep, factory, "audio.wav")
         assert result == ["/ok/vocal.wav"]
 
     def test_all_candidates_exhausted_raises(self):
@@ -447,7 +466,8 @@ class TestSeparateWithFallback:
         mock_sep.separate.side_effect = OSError(_errno.ENOSPC, "No space")
 
         mock_fallback_sep = mock.MagicMock()
-        mock_fallback_sep.separate.side_effect = OSError(_errno.ENOSPC, "No space")
+        mock_fallback_sep.separate.side_effect = OSError(
+            _errno.ENOSPC, "No space")
         factory = mock.MagicMock(return_value=mock_fallback_sep)
 
         candidates = [str(preprocessing.CACHE_DIR), "/another/dir"]
@@ -457,7 +477,8 @@ class TestSeparateWithFallback:
             mock.patch("modules.inference.preprocessing.shutil.disk_usage",
                        side_effect=OSError("stat failed")):
             with pytest.raises(OSError) as exc_info:
-                preprocessing._separate_with_fallback(mock_sep, factory, "audio.wav")
+                preprocessing._separate_with_fallback(
+                    mock_sep, factory, "audio.wav")
         assert exc_info.value.args[0] == _errno.ENOSPC
 
 
@@ -522,7 +543,8 @@ def test_preprocess_audio_with_yield_cb(prep_manager):
         prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
 
         mock_ort = mock.MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+        mock_ort.get_available_providers.return_value = [
+            "CPUExecutionProvider"]
 
         yield_called = [0]
 
@@ -531,7 +553,8 @@ def test_preprocess_audio_with_yield_cb(prep_manager):
 
         with mock.patch("modules.inference.preprocessing.ort", mock_ort):
             with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
-                res = prep_manager.preprocess_audio("test.wav", yield_cb=yield_cb)
+                res = prep_manager.preprocess_audio(
+                    "test.wav", yield_cb=yield_cb)
                 assert "vocal.wav" in res
                 assert yield_called[0] == 2
 
@@ -547,7 +570,8 @@ def test_preprocess_audio_non_cpu_make_separator(prep_manager):
         prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
 
         mock_ort = mock.MagicMock()
-        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider"]
+        mock_ort.get_available_providers.return_value = [
+            "CUDAExecutionProvider"]
         prep_manager._device_type = "CUDA"
 
         # The fallback sep factory should be called.
@@ -559,7 +583,8 @@ def test_preprocess_audio_non_cpu_make_separator(prep_manager):
                     mock_fallback_cls = mock.MagicMock()
                     mock_lazy_sep.return_value = mock_fallback_cls
                     mock_fallback_inst = mock.MagicMock()
-                    mock_fallback_inst.separate.return_value = ["fallback_vocal.wav"]
+                    mock_fallback_inst.separate.return_value = [
+                        "fallback_vocal.wav"]
                     mock_fallback_cls.return_value = mock_fallback_inst
 
                     # Force candidate dirs to have a fallback
@@ -580,9 +605,44 @@ def test_preprocess_audio_no_stems(prep_manager):
         prep_manager._init_separator = mock.MagicMock(return_value=mock_sep)
 
         mock_ort = mock.MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+        mock_ort.get_available_providers.return_value = [
+            "CPUExecutionProvider"]
 
         with mock.patch("modules.inference.preprocessing.ort", mock_ort):
             with mock.patch("modules.inference.preprocessing.utils.prepare_for_uvr", side_effect=lambda x: x):
                 res = prep_manager.preprocess_audio("test.wav")
                 assert res == "test.wav"
+
+
+def test_preprocess_audio_with_chunking_progress(prep_manager):
+    """Test that separate_with_fallback applies the chunking monkey-patch and updates progress/metadata."""
+    mock_sep = mock.MagicMock()
+    mock_sep.chunk_duration = 300
+    mock_sep._separate_file = mock.MagicMock(return_value=["vocals.wav"])
+    orig_sep_file = mock_sep._separate_file
+    # Simulate separate calling _separate_file
+    mock_sep.separate = lambda x: mock_sep._separate_file(x)
+
+    with mock.patch("modules.inference.preprocessing.utils.get_audio_duration", return_value=700.0), \
+            mock.patch("modules.inference.scheduler.update_task_metadata") as mock_update_meta, \
+            mock.patch("modules.inference.scheduler.update_task_progress") as mock_update_prog:
+
+        res = preprocessing._separate_with_fallback(
+            mock_sep, mock.MagicMock(), "test.wav")
+        assert res == ["vocals.wav"]
+
+        # Verify that original separate_file was called via the bound method wrapper
+        orig_sep_file.assert_called_once_with("test.wav", None)
+
+        # Verify that _chunk_paths_len and other attributes were set on the instance
+        assert mock_sep._chunk_paths_len == 3  # math.ceil(700 / 300) = 3
+        assert mock_sep._chunk_index == 1
+        assert mock_sep._audio_dur == 700.0
+
+        # Verify scheduler updates were made
+        mock_update_meta.assert_called_once_with(current_position=300.0)
+        mock_update_prog.assert_called_once()
+        args, kwargs = mock_update_prog.call_args
+        # pct = 5.0 + (1 / 3) * 5.0 = 6.666 -> int is 6
+        assert args[0] == 6
+        assert "Vocal Separation" in args[1]

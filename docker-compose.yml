@@ -91,10 +91,16 @@ services:
       # UVR stems) to RAM-backed storage. Eliminates SSD write wear.
       - WHISPER_TEMP_DIR=/tmp/whisper
       # Minimum free space (MB) in TEMP_DIR before falling back to disk.
-      # Increase for very large media libraries (4h+ movies).
-      # - WHISPER_TEMP_MIN_FREE_MB=512
+      # Default: 2048 MB.  The service also applies a 1.5× headroom
+      # multiplier on top of the estimated WAV size.  For very long
+      # movies (15h+) the estimated WAV alone exceeds 2 GB, so the
+      # service will automatically fall back to persistent (SSD) storage
+      # — no ENOSPC crash will occur.
+      # - WHISPER_TEMP_MIN_FREE_MB=2048
 
-    # RAM-backed temp storage for transient processing files (SSD protection)
+    # RAM-backed temp storage for transient processing files (SSD protection).
+    # 2G is sufficient for most movies (≤4h).  Longer files automatically
+    # fall back to SSD-backed persistent storage when tmpfs runs low.
     tmpfs:
       - /tmp/whisper:size=2G
 

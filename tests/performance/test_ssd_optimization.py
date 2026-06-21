@@ -39,8 +39,8 @@ class TestSSDOptimization:
     def test_get_temp_dir_sufficient_space(self):
         """Test get_temp_dir returns TEMP_DIR when there is enough space."""
         with mock.patch("shutil.disk_usage") as mock_usage:
-            # 1GB free
-            mock_usage.return_value = mock.MagicMock(free=1024 * 1024 * 1024)
+            # 4GB free (well above the 2048 MB minimum threshold)
+            mock_usage.return_value = mock.MagicMock(free=4 * 1024 * 1024 * 1024)
 
             with mock.patch("modules.config.TEMP_DIR", "/tmp/whisper"):
                 res = config_module.get_temp_dir(required_bytes=100 * 1024 * 1024)  # 100MB

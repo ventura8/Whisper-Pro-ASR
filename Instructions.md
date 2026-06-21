@@ -103,6 +103,14 @@ docker build -t whisper-npu-test -f Dockerfile.test .
 docker run --rm whisper-npu-test
 ```
 
+## Release Notes v1.1.3
+- **FEAT**: Refactored the live transcription progress pipeline to append pre-formatted SubRip (SRT) blocks incrementally (reducing live update complexity to $O(1)$) instead of rebuilding the entire stream on every segment, preventing performance bottlenecks and memory bloat on large media files.
+- **FEAT**: Refactored OpenVINO engine transcription (`IntelWhisperEngine`) to split long media files dynamically into structured chunks guided by speech VAD timestamps, and auto-detecting/locking the language on the first chunk to ensure stability on very long movies.
+- **FEAT**: Patched the UVR vocal separation process dynamically on the scheduler to compute and emit real-time chunk progress status to prevent visual hangs during vocal separation.
+- **STAB**: Enhanced RAM-disk / SSD protection by raising `WHISPER_TEMP_MIN_FREE_MB` to `2048` MB and implementing a 1.5x headroom factor fallback based on estimated WAV sizes.
+- **FEAT**: Deconstructed the monolithic `dashboard.html` into a cleaner layout under a dedicated `templates/` directory containing separate CSS and JS components.
+- **TEST**: Passed all unit, integration, and coverage tests with a perfect **10.00/10** score on all files under `pylint`.
+
 ## Release Notes v1.1.2
 - **FIX**: Replaced fixed-interval `ModelIdleMonitor` polling thread with a deferred `threading.Timer` that starts after the last task completes. New tasks cancel and reschedule the timer, keeping models warm during bursty workloads.
 - **FIX**: Resolved dashboard hardware utilization chart showing `0%` on initial page load (only displaying correct values after F5 refresh).

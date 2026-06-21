@@ -343,10 +343,10 @@ class TestConfigSSD:
                 assert config_module.TEMP_DIR == "/tmp/whisper"
 
     def test_temp_min_free_default(self):
-        """Test TEMP_DIR_MIN_FREE_BYTES defaults to 512MB."""
+        """Test TEMP_DIR_MIN_FREE_BYTES defaults to 2048MB."""
         with mock.patch.dict(os.environ, {}, clear=True):
             importlib.reload(config_module)
-            assert config_module.TEMP_DIR_MIN_FREE_BYTES == 512 * 1024 * 1024
+            assert config_module.TEMP_DIR_MIN_FREE_BYTES == 2048 * 1024 * 1024
 
     def test_temp_min_free_from_env(self):
         """Test TEMP_DIR_MIN_FREE_BYTES from env."""

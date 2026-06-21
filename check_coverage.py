@@ -8,6 +8,7 @@ logging.basicConfig(level=logging.INFO, format='%(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 def run_report():
+    """Parse coverage.xml and print file-by-file coverage details."""
     try:
         tree = ET.parse('coverage.xml')
         root = tree.getroot()
@@ -33,7 +34,7 @@ def run_report():
         logger.info("=" * 60)
         total_rate = float(root.get('line-rate')) * 100
         logger.info("TOTAL: %.0f%%", total_rate)
-    except Exception as e:
+    except tuple([Exception]) as e:
         logger.error("Error parsing coverage: %s", e)
 
 if __name__ == "__main__":

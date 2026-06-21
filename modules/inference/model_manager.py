@@ -189,6 +189,7 @@ def _consume_segments(
         try:
             # 1. Consume generator to collect all raw segments first
             raw_segments = []
+            live_srt_blocks = []
             for segment in segments:
                 _check_preemption()
                 raw_segments.append({
@@ -198,20 +199,28 @@ def _consume_segments(
                 })
 
                 # Live updates during transcription
-                live_results = [{
-                    "start": round(s["start"], 2),
-                    "end": round(s["end"], 2),
-                    "text": s["text"].strip()
-                } for s in raw_segments]
-                live_srt = utils.generate_srt({"segments": live_results})
-                scheduler.update_task_metadata(live_text=live_srt)
+                # Append only the new segment block for O(1) performance (no O(N²) rebuilds)
+                seg_idx = len(raw_segments)
+                block = utils.format_single_srt_block(
+                    idx=seg_idx,
+                    start_ts=segment.start,
+                    end_ts=segment.end,
+                    text=segment.text
+                )
+                live_srt_blocks.append(block)
+                scheduler.update_task_metadata(live_text="".join(live_srt_blocks), current_position=segment.end)
 
                 if info.duration > 0:
-                    progress = min(80, int((segment.end / info.duration) * 80))
-                    time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
-                    verb = "Translating" if task == "translate" else "Transcribing"
                     scheduler.update_task_progress(
-                        progress, f"{verb} (Seg {len(raw_segments)} | {time_ratio})")
+                        min(80, int((segment.end / info.duration) * 80)),
+                        f"{'Translating' if task == 'translate' else 'Transcribing'} (Seg {len(raw_segments)} | "
+                        f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)})"
+                    )
+
+                if seg_idx % 100 == 0 or seg_idx == 1:
+                    logger.info("[Engine] %s segment %d (Audio: %s / %s)",
+                                "Translating" if task == "translate" else "Transcribing",
+                                seg_idx, utils.format_duration(segment.end), utils.format_duration(info.duration))
 
             if raw_segments:
                 results = diarization.run_diarization(
@@ -238,26 +247,37 @@ def _consume_segments(
                 })
     else:
         results = []
+        live_srt_blocks = []
         for segment in segments:
             _check_preemption()
-            seg_text = segment.text.strip()
             results.append({
                 "start": round(segment.start, 2),
                 "end": round(segment.end, 2),
-                "text": seg_text
+                "text": segment.text.strip()
             })
 
-            # Generate live SRT content (includes timestamps and newlines)
-            live_srt = utils.generate_srt({"segments": results})
-            logger.debug("[Live] Updating SRT for %d segments", len(results))
-            scheduler.update_task_metadata(live_text=live_srt)
+            # Append the new segment's formatted SRT block
+            block = utils.format_single_srt_block(
+                idx=len(results),
+                start_ts=segment.start,
+                end_ts=segment.end,
+                text=segment.text
+            )
+            live_srt_blocks.append(block)
+            scheduler.update_task_metadata(live_text="".join(live_srt_blocks), current_position=segment.end)
 
             if info.duration > 0:
-                progress = min(95, int((segment.end / info.duration) * 100))
-                time_ratio = f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)}"
-                verb = "Translating" if task == "translate" else "Transcribing"
                 scheduler.update_task_progress(
-                    progress, f"{verb} (Seg {len(results)} | {time_ratio})")
+                    min(95, int((segment.end / info.duration) * 100)),
+                    f"{'Translating' if task == 'translate' else 'Transcribing'} (Seg {len(results)} | "
+                    f"{utils.format_duration(segment.end)} / {utils.format_duration(info.duration)})"
+                )
+
+            seg_count = len(results)
+            if seg_count % 100 == 0 or seg_count == 1:
+                logger.info("[Engine] %s segment %d (Audio: %s / %s)",
+                            "Translating" if task == "translate" else "Transcribing",
+                            seg_count, utils.format_duration(segment.end), utils.format_duration(info.duration))
     return results
 
 
@@ -270,6 +290,13 @@ def run_transcription(
     _LIFECYCLE_STATE["last_activity"] = time.time()
     perf = {'dur_iso': 0}
     with model_lock_ctx() as (model, unit_id):
+        # Determine and set audio duration early for estimated speed display on dashboard
+        try:
+            audio_duration = utils.get_audio_duration(audio_path)
+            scheduler.update_task_metadata(video_duration=audio_duration)
+        except tuple([Exception]) as e:
+            logger.warning("[Engine] Failed to get audio duration early: %s", e)
+
         processed_path = audio_path
         if config.ENABLE_VOCAL_SEPARATION:
             perf['start_iso'] = time.time()
@@ -281,6 +308,7 @@ def run_transcription(
 
         try:
             perf['start_inf'] = time.time()
+            scheduler.update_task_metadata(start_inference=perf['start_inf'])
             scheduler.update_task_progress(10, "Inference")
             trans_res = model.transcribe(
                 processed_path,

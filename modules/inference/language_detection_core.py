@@ -68,6 +68,7 @@ def run_batch_language_detection_direct(model, audio_path, segment_count):
 
 def run_language_detection_core(model, audio_input, skip_vad=False):
     """Internal core using detect_language optimization."""
+    speech_sec = 30.0
     if not skip_vad:
         if isinstance(audio_input, str):
             speech_ts = vad.get_speech_timestamps_from_path(audio_input, threshold=config.LD_VAD_THRESHOLD)
@@ -79,8 +80,10 @@ def run_language_detection_core(model, audio_input, skip_vad=False):
                 "detected_language": "en",
                 "language": "en",
                 "confidence": 0.0,
-                "all_probabilities": {"en": 0.0}
+                "all_probabilities": {"en": 0.0},
+                "speech_duration": 0.0
             }
+        speech_sec = sum(ts['end'] - ts['start'] for ts in speech_ts)
 
     try:
         # Optimization: Use detect_language to avoid full decoding
@@ -96,7 +99,8 @@ def run_language_detection_core(model, audio_input, skip_vad=False):
             "detected_language": lang_code,
             "language": lang_code,
             "confidence": lang_prob,
-            "all_probabilities": dict(all_probs_list) if all_probs_list else {lang_code: lang_prob}
+            "all_probabilities": dict(all_probs_list) if all_probs_list else {lang_code: lang_prob},
+            "speech_duration": round(speech_sec, 3)
         }
     except tuple([Exception]) as e:
         logger.info("[Engine] detect_language fallback: %s", e)
@@ -106,5 +110,6 @@ def run_language_detection_core(model, audio_input, skip_vad=False):
             "detected_language": info.language,
             "language": info.language,
             "confidence": info.language_probability,
-            "all_probabilities": dict(info.all_language_probs) if info.all_language_probs else {}
+            "all_probabilities": dict(info.all_language_probs) if info.all_language_probs else {},
+            "speech_duration": round(speech_sec, 3)
         }

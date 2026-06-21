@@ -200,7 +200,7 @@ def test_ld_low_confidence_filtering():
             language_detection._step_run_inference(
                 (mock.MagicMock(), mock_mm), "isolated.wav", 2, perf
             )
-            mock_agg.assert_called_once_with([{"fr": 0.8, "en": 0.2}])
+            mock_agg.assert_called_once_with([{"fr": 0.8, "en": 0.2, "_speech_duration": 30.0}])
 
 
 def test_prepare_montage_success():

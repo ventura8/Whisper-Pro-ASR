@@ -75,4 +75,5 @@ docker compose logs -f
 - **Model not loading on NPU**: Some NPU versions have memory limits for static shapes. If the model fails to load or the server crashes on startup, set `ASR_BEAM_SIZE=4` in `docker-compose.yml`.
 - **Diarization not working**: Ensure `HF_TOKEN` is set and you have accepted the PyAnnote model license on Hugging Face.
 - **Models consuming too much RAM when idle**: Set `MODEL_IDLE_TIMEOUT=300` to automatically unload models after 5 minutes of inactivity. A deferred cleanup timer starts after the last task completes and is cancelled when new tasks arrive, preventing unnecessary model reloads.
+- **Out of memory or hangs during long movie transcription/vocal separation**: Ensure chunked processing is enabled. Check that `INTEL_ASR_CHUNK_DURATION` (default `300` seconds) and `UVR_CHUNK_DURATION` (default `600` seconds) are configured in your environment.
 - **Optimization**: Check `docs/TUNING.md` for performance profiles.

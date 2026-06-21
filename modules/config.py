@@ -282,7 +282,7 @@ except PermissionError:
     os.makedirs(LOG_DIR, exist_ok=True)
 
 TEMP_DIR_MIN_FREE_BYTES = int(os.environ.get(
-    "WHISPER_TEMP_MIN_FREE_MB", 512)) * 1024 * 1024
+    "WHISPER_TEMP_MIN_FREE_MB", 2048)) * 1024 * 1024
 
 PERSISTENT_TEMP_DIR = os.path.join(OV_CACHE_DIR, "temp")
 try:
@@ -292,11 +292,25 @@ except PermissionError:
 
 
 def get_temp_dir(required_bytes=0):
-    """Return the best temp directory for transient file I/O."""
-    threshold = max(TEMP_DIR_MIN_FREE_BYTES, required_bytes)
+    """Return the best temp directory for transient file I/O.
+
+    Uses a 1.5× headroom multiplier on ``required_bytes`` so that the
+    temp filesystem retains breathing room for concurrent operations
+    (e.g. a second FFmpeg pass or UVR stems).  For very long movies
+    (15 h+) the estimated WAV size alone can approach or exceed the
+    tmpfs capacity; the multiplier ensures an early, graceful fallback
+    to persistent (SSD) storage instead of an ENOSPC crash.
+    """
+    # Require 1.5× the estimated file size as headroom for other transient files
+    headroom_bytes = int(required_bytes * 1.5) if required_bytes > 0 else 0
+    threshold = max(TEMP_DIR_MIN_FREE_BYTES, headroom_bytes)
     try:
         free = shutil.disk_usage(TEMP_DIR).free
         if free < threshold:
+            logger.debug(
+                "[Config] tmpfs free space (%d MB) below threshold (%d MB) "
+                "— falling back to persistent temp dir.",
+                free // (1024 * 1024), threshold // (1024 * 1024))
             return PERSISTENT_TEMP_DIR
     except tuple([Exception]):
         return PERSISTENT_TEMP_DIR
@@ -332,6 +346,14 @@ else:
     UVR_MODEL_DIR = os.path.join(OV_CACHE_DIR, "preprocessing_models")
 
 VOCAL_SEPARATION_MODEL = UVR_ENV
+
+# Chunk duration in seconds for UVR stem separation to limit RAM usage / prevent OOM on long files.
+# Default is 600 (10 minutes). Set to 0 to disable chunking.
+UVR_CHUNK_DURATION = int(os.environ.get("UVR_CHUNK_DURATION", 600))
+
+# Chunk duration in seconds for Intel Whisper transcription to show periodic progress logs.
+# Default is 300 (5 minutes).
+INTEL_ASR_CHUNK_DURATION = int(os.environ.get("INTEL_ASR_CHUNK_DURATION", 300))
 
 # --- [LANGUAGE PROCESSING & VAD] ---
 VAD_MIN_SILENCE_DURATION_MS = int(

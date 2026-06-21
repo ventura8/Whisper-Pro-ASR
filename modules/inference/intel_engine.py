@@ -11,10 +11,65 @@ import importlib
 from argparse import Namespace
 from typing import Optional, Any, Tuple, List
 import numpy as np
-from modules import config
+from modules import config, utils
 from modules.inference import vad
 
 logger = logging.getLogger(__name__)
+
+
+def find_split_points(audio_len_sec: float, speech_ts: List[dict],
+                      target_chunk_len: float = 300.0) -> List[float]:
+    """
+    Find optimal split points at silent intervals (gaps between speech segments)
+    closest to target_chunk_len to avoid splitting words.
+    """
+    split_points = [0.0]
+    gaps = []
+    if not speech_ts:
+        gaps.append((0.0, audio_len_sec))
+    else:
+        if speech_ts[0]['start'] > 0:
+            gaps.append((0.0, speech_ts[0]['start']))
+        for i in range(len(speech_ts) - 1):
+            if speech_ts[i+1]['start'] > speech_ts[i]['end']:
+                gaps.append((speech_ts[i]['end'], speech_ts[i+1]['start']))
+        if speech_ts[-1]['end'] < audio_len_sec:
+            gaps.append((speech_ts[-1]['end'], audio_len_sec))
+
+    while split_points[-1] < audio_len_sec:
+        current_start = split_points[-1]
+        target_end = current_start + target_chunk_len
+        if target_end >= audio_len_sec - 10.0:
+            split_points.append(audio_len_sec)
+            break
+
+        window_start = target_end - 30.0
+        window_end = target_end + 30.0
+
+        candidates = []
+        for g_start, g_end in gaps:
+            mid = (g_start + g_end) / 2.0
+            if window_start <= mid <= window_end:
+                candidates.append(mid)
+
+        if candidates:
+            best_mid = min(candidates, key=lambda x: abs(x - target_end))
+            split_points.append(best_mid)
+        else:
+            # Fallback to wider window [target_end - 60, target_end + 60]
+            window_start = target_end - 60.0
+            window_end = target_end + 60.0
+            for g_start, g_end in gaps:
+                mid = (g_start + g_end) / 2.0
+                if window_start <= mid <= window_end:
+                    candidates.append(mid)
+            if candidates:
+                best_mid = min(candidates, key=lambda x: abs(x - target_end))
+                split_points.append(best_mid)
+            else:
+                split_points.append(target_end)
+
+    return split_points
 
 
 class IntelWhisperEngine:
@@ -45,12 +100,8 @@ class IntelWhisperEngine:
     def transcribe(self, audio_data: Any, language: Optional[str] = None,
                    task: str = 'transcribe', **kwargs: Any) -> Tuple[Any, Namespace]:
         """
-        Transcribe audio data using the OpenVINO pipeline.
-
-        Parameters:
-            audio_data: Numpy array (16kHz, float32) OR string (file path)
-            language: ISO 639-1 language code (e.g., 'en')
-            task: 'transcribe' or 'translate'
+        Transcribe audio data using the OpenVINO pipeline in a chunked manner
+        to support incremental progress logging, live updates, and status checks.
         """
         if self.pipeline is None:
             raise RuntimeError("Intel Whisper pipeline not initialized.")
@@ -60,11 +111,35 @@ class IntelWhisperEngine:
             logger.debug("[Intel] Input is path, decoding: %s", audio_data)
             audio_data = vad.decode_audio(audio_data)
 
+        audio_data = self.sanitize_audio(audio_data)
+        total_duration = len(audio_data) / 16000.0
+
+        # Get speech timestamps for VAD filtering and split points
+        speech_ts = []
+        try:
+            speech_ts = vad.get_speech_timestamps(
+                audio_data,
+                threshold=kwargs.get('vad_threshold', 0.35),
+                min_silence_duration_ms=kwargs.get(
+                    'min_silence_duration_ms', config.VAD_MIN_SILENCE_DURATION_MS),
+                speech_pad_ms=kwargs.get(
+                    'speech_pad_ms', config.VAD_SPEECH_PAD_MS)
+            )
+        except (RuntimeError, ValueError) as e:
+            logger.warning("[Intel] VAD detection failed: %s", e)
+
         # Silence suppression (Matched VAD Filter behavior)
         if kwargs.get('vad_filter', False):
-            audio_data = self._apply_vad(audio_data, **kwargs)
-            # Fix: If VAD suppressed everything, return empty early to avoid hallucinations
-            if np.all(audio_data == 0):
+            if speech_ts:
+                # Mask non-speech with zero to preserve temporal context while removing noise
+                mask = np.zeros_like(audio_data, dtype=bool)
+                for ts_item in speech_ts:
+                    mask[int(ts_item['start'] * 16000):int(ts_item['end'] * 16000)] = True
+                audio_data[~mask] = 0.0
+                logger.debug(
+                    "[Intel] VAD suppression applied to %d speech segments.", len(speech_ts))
+            else:
+                logger.info("[Intel] VAD found no speech.")
                 return (s for s in []), Namespace(
                     language=language or "en",
                     language_probability=0.0,
@@ -72,25 +147,68 @@ class IntelWhisperEngine:
                 )
 
         # Robust generation configuration retrieval
-        gen_config = self._prepare_gen_config(language, task, **kwargs)
+        gen_config = self.prepare_gen_config(language, task, **kwargs)
 
-        try:
-            # --- [TENSOR SANITIZATION] ---
-            audio_data = self._sanitize_audio(audio_data)
+        # Construct the immediate info Namespace. If language is auto-detected (None),
+        # we will populate it dynamically once the first chunk completes.
+        info = Namespace(
+            language=language or "en",
+            language_probability=1.0,
+            duration=total_duration
+        )
 
-            # --- [SINGLE PASS INFERENCE] ---
-            # Using CPU backend (per config.py) to support Beam Search + Timestamps in one pass.
-            logger.info("[Intel] Detecting: Beam: %d, Timestamps: True",
-                        gen_config.num_beams)
-            result = self.pipeline.generate(audio_data, gen_config)
+        # Find split points for chunking
+        split_points = find_split_points(
+            total_duration, speech_ts, float(config.INTEL_ASR_CHUNK_DURATION)
+        )
+        total_chunks = len(split_points) - 1
 
-            segments, info = self._parse_response(result, language)
-            return (s for s in segments), info
-        except (RuntimeError, ValueError) as e:
-            logger.error("[Intel] Single-pass transcription failed: %s", e)
-            raise
+        def segment_generator():
+            for i in range(total_chunks):
+                chunk_start = split_points[i]
+                chunk_end = split_points[i+1]
+                start_idx = int(chunk_start * 16000)
+                end_idx = int(chunk_end * 16000)
+                chunk_audio = audio_data[start_idx:end_idx]
 
-    def _apply_vad(self, audio_data: np.ndarray, **kwargs: Any) -> np.ndarray:
+                # Skip completely silent/zeroed-out chunks if VAD is active
+                if kwargs.get('vad_filter', False) and np.all(chunk_audio == 0.0):
+                    continue
+
+                logger.info("[Intel] Transcribing chunk %d/%d (Audio range: %s - %s)...",
+                            i + 1, total_chunks,
+                            utils.format_duration(chunk_start),
+                            utils.format_duration(chunk_end))
+
+                try:
+                    logger.info("[Intel] Detecting: Beam: %d, Timestamps: True",
+                                gen_config.num_beams)
+                    result = self.pipeline.generate(chunk_audio, gen_config)
+                    res_segments, res_info = self._parse_response(
+                        result, info.language)
+
+                    # Update and lock language dynamically if auto-detected on the first chunk
+                    if i == 0 and not language:
+                        detected_lang = res_info.language
+                        info.language = detected_lang
+                        token = self.resolve_language(
+                            detected_lang, gen_config)
+                        if token:
+                            gen_config.language = token
+
+                    for seg in res_segments:
+                        yield Namespace(
+                            text=seg.text,
+                            start=seg.start + chunk_start,
+                            end=seg.end + chunk_start
+                        )
+                except (RuntimeError, ValueError) as e:
+                    logger.error("[Intel] Chunk transcription failed: %s", e)
+                    raise
+
+        return segment_generator(), info
+
+    def apply_vad(self, audio_data: np.ndarray, **kwargs: Any) -> np.ndarray:
         """Apply Voice Activity Detection to suppress silence."""
         try:
             v_threshold = kwargs.get('vad_threshold', 0.35)
@@ -122,8 +240,8 @@ class IntelWhisperEngine:
             logger.warning("[Intel] VAD suppression failed: %s", e)
         return audio_data
 
-    def _prepare_gen_config(self, language: Optional[str], task: str,
-                            **kwargs: Any) -> Any:
+    def prepare_gen_config(self, language: Optional[str], task: str,
+                           **kwargs: Any) -> Any:
         """Prepare WhisperGenerationConfig for inference."""
         ov_genai = importlib.import_module("openvino_genai")
         try:
@@ -141,7 +259,7 @@ class IntelWhisperEngine:
 
         # Language resolution
         if language:
-            token = self._resolve_language(language, gen_config)
+            token = self.resolve_language(language, gen_config)
             if token:
                 gen_config.language = token
             else:
@@ -149,7 +267,8 @@ class IntelWhisperEngine:
                     "[Intel] Language '%s' not found in model map. Using auto-detection.", language)
 
         # Quality & Performance Parameters (Aligned with CPU/CUDA defaults)
-        gen_config.num_beams = kwargs.get('beam_size', config.DEFAULT_BEAM_SIZE)
+        gen_config.num_beams = kwargs.get(
+            'beam_size', config.DEFAULT_BEAM_SIZE)
         gen_config.max_new_tokens = kwargs.get('max_new_tokens', 448)
         gen_config.temperature = kwargs.get('temperature', 0.0)
         gen_config.length_penalty = 1.0
@@ -165,8 +284,8 @@ class IntelWhisperEngine:
 
         return gen_config
 
-    def _resolve_language(self, language: str,
-                          gen_config: Any) -> Optional[str]:
+    def resolve_language(self, language: str,
+                         gen_config: Any) -> Optional[str]:
         """Map language code to model tokens."""
         supported_langs = getattr(gen_config, 'lang_to_id', {})
         if not supported_langs:
@@ -184,7 +303,7 @@ class IntelWhisperEngine:
                 return k
         return None
 
-    def _sanitize_audio(self, audio_data: Any) -> np.ndarray:
+    def sanitize_audio(self, audio_data: Any) -> np.ndarray:
         """Ensure audio tensor meets requirements."""
         if not isinstance(audio_data, np.ndarray):
             audio_data = np.array(audio_data, dtype=np.float32)
@@ -213,7 +332,7 @@ class IntelWhisperEngine:
             raise RuntimeError("Intel Whisper pipeline not initialized.")
 
         # Ensure sanitized numpy array
-        audio_data = self._sanitize_audio(audio_data)
+        audio_data = self.sanitize_audio(audio_data)
 
         # Detect language using the pipeline
         # OpenVINO GenAI WhisperPipeline.generate with a specific config can be used
@@ -240,8 +359,10 @@ class IntelWhisperEngine:
         res_segments = getattr(result, 'chunks', None)
         if res_segments is not None:
             for segment in res_segments:
-                start = getattr(segment, 'start_ts', getattr(segment, 'start_time', 0.0))
-                end = getattr(segment, 'end_ts', getattr(segment, 'end_time', 0.0))
+                start = getattr(segment, 'start_ts', getattr(
+                    segment, 'start_time', 0.0))
+                end = getattr(segment, 'end_ts', getattr(
+                    segment, 'end_time', 0.0))
                 text = getattr(segment, 'text', "")
                 # Create a mock segment object
                 segments.append(Namespace(

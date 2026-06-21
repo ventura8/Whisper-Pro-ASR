@@ -27,10 +27,11 @@ from modules.subtitles import (
     format_timestamp,
     generate_vtt,
     generate_txt,
-    generate_tsv
+    generate_tsv,
+    format_single_srt_block
 )
 # Re-export for public API and compatibility
-_ = (wrap_text, generate_srt, format_timestamp, generate_vtt, generate_txt, generate_tsv)
+_ = (wrap_text, generate_srt, format_timestamp, generate_vtt, generate_txt, generate_tsv, format_single_srt_block)
 
 # Global process object for telemetry consistency
 _PROCESS_OBJ = psutil.Process(os.getpid())

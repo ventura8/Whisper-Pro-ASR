@@ -87,6 +87,10 @@ To use this service with **Bazarr**:
 ## 🌟 Key Features
 
 - **🗣 Speaker Diarization**: Identify who said what using WhisperX alignment and PyAnnote speaker segmentation. Output formats (SRT, VTT, TXT) include speaker labels (e.g., `[SPEAKER_00]: Hello world`).
+- **Intel ASR Chunking & Streaming**: Refactored OpenVINO engine transcription to split long media files dynamically into structured chunks guided by speech VAD timestamps, ensuring stability on very long movies.
+- **O(1) Live Subtitle Updates**: Appends pre-formatted subtitle blocks incrementally to the live SRT stream during processing instead of doing full $O(N^2)$ stream reconstructions.
+- **UVR Chunk Progress Tracking**: Computes and emits real-time preprocessing progress updates per UVR chunk to keep the dashboard progress bar fluid during vocal separation.
+- **Graceful Temp-Storage Fallback**: Establishes a 2GB minimum free space threshold and 1.5x file-size headroom multiplier to fallback gracefully to persistent storage when tmpfs runs low on space, preventing ENOSPC crashes.
 - **16kHz WAV Standardization**: High-performance audio normalization layer for consistent cross-format results.
 - **Global VAD & In-Memory Batch ID**: Optimized language identification using a single VAD pass and zero-I/O NumPy slicing.
 - **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt`, `vad_filter`, and `word_timestamps`.
@@ -128,8 +132,11 @@ To use this service with **Bazarr**:
 | **ASR_PARALLEL_LIMIT_ACCEL** | `1` | Max concurrent tasks on GPU/NPU |
 | **HF_TOKEN** | *(empty)* | Hugging Face token for speaker diarization (PyAnnote models) |
 | **MODEL_IDLE_TIMEOUT** | `300` | Seconds to keep models loaded after last task (0 = immediate offload) |
+| **INTEL_ASR_CHUNK_DURATION** | `300` | Chunk duration in seconds for Intel Whisper transcription |
 | **INITIAL_PROMPT** | *(multilingual)* | Default context prompt for guiding transcription |
 | **AGGRESSIVE_OFFLOAD** | `false` | Immediately unload models when idle (overridden by `MODEL_IDLE_TIMEOUT`) |
+| **UVR_CHUNK_DURATION** | `600` | Chunk duration in seconds for UVR separation (0 to disable) |
+| **WHISPER_TEMP_MIN_FREE_MB** | `2048` | Fallback threshold to disk if RAM-disk is full |
 | **DEBUG** | `false` | Enable verbose debug logging |
 
 ---

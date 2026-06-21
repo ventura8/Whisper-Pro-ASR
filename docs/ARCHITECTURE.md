@@ -11,7 +11,7 @@ Whisper Pro ASR implements a **Heterogeneous Model Pool** architecture designed 
 | `modules/logging_setup.py` | Orchestrates hardware banners and thread-local context filtering. |
 | `modules/inference/` | Core logic for `model_manager` (transcription, diarization, idle monitoring), `scheduler` (re-entrant locks), `preprocessing` (UVR), `vad`, `language_detection` (batch language ID pipeline), and `intel_engine`. |
 | `modules/api/` | Flask API layer: `routes_asr` (transcription), `routes_detect` (language detection), `routes_system` (dashboard, settings, analytics, history), and `routes_utils` (shared request utilities, file upload handling, cleanup). |
-| `modules/monitoring/` | `dashboard` & `dashboard_ui` (Material Design UI), `analytics_ui` (analytics dashboard), `telemetry` & `telemetry_manager` (persistent telemetry history), `history_manager` (task history with dual-tier storage), and `metrics_discovery` (hardware metrics). |
+| `modules/monitoring/` | `dashboard` & `dashboard_ui` (Material Design UI renderer utilizing modular `templates/` CSS/JS components), `analytics_ui` (analytics dashboard), `telemetry` & `telemetry_manager` (persistent telemetry history), `history_manager` (task history with dual-tier storage), and `metrics_discovery` (hardware metrics). |
 | `modules/utils.py` | Managed FFmpeg normalization, **16kHz WAV Standardization**, subtitle generation with `wrap_text()` layout control, and speaker label formatting. |
 
 ### 🧩 Hardware Compatibility Matrix
@@ -159,12 +159,17 @@ The system features a thread-aware logging and telemetry engine designed for ind
 - **Telemetry Downsampling**: A dual-layer downsampling strategy caps telemetry data at 300 points for dashboard chart rendering. Server-side downsampling in `telemetry.py` reduces payloads before transmission, while client-side downsampling in `dashboard_ui.py` provides an additional safety net for chart performance.
 - **Service Analytics**: The `/analytics` endpoint and dedicated analytics UI (`analytics_ui.py`) provide cumulative and daily breakdowns of task counts, durations, and usage patterns from persistent task history.
 - **Industrial Quality Standard**: The entire ecosystem is maintained at a **10.0/10 Pylint score** and strict **>90% test coverage** across all modules, representing a zero-regression baseline for enterprise deployments.
-- **Incremental Dashboard Updates**: The monitoring UI utilizes an incremental DOM update pattern to maintain scroll positions in log buffers and live streams while polling the `/status` endpoint every 2 seconds.
+- **Incremental Dashboard Updates**: The monitoring UI utilizes an incremental DOM update pattern to maintain scroll positions in log buffers and live streams while polling the `/status` endpoint every 2 seconds. The HTML dashboard UI is structured as a collection of modular CSS and JS components loaded from `modules/monitoring/templates/`.
+- **O(1) Live Subtitle Updates**: Appends pre-formatted subtitle blocks incrementally to the live SRT display stream during processing instead of doing full $O(N^2)$ stream reconstructions, preventing performance bottlenecks and memory bloat on large media files.
+
+### 5. Long-Movie Processing & Audio Chunking
+- **Intel ASR Chunking & Streaming**: Refactored OpenVINO engine transcription (`IntelWhisperEngine`) to split long media files dynamically into structured chunks (configured via `INTEL_ASR_CHUNK_DURATION`, default 300 seconds), guided by speech VAD timestamps (`find_split_points()`), and auto-detecting/locking the language on the first chunk to ensure stability on very long movies.
+- **UVR Chunk Progress Tracking**: Patches the UVR vocal separation process dynamically on the scheduler to compute and emit real-time chunk progress status according to `UVR_CHUNK_DURATION` (default 600 seconds) to prevent visual hangs.
+- **Graceful Temp-Storage Fallback**: Establishes a 2GB minimum free space threshold and 1.5x file-size headroom multiplier to fallback gracefully to persistent storage (`PERSISTENT_TEMP_DIR`) when tmpfs runs low on space.
 
 ---
 
 ## 🏛 Hardware Interface & Host Dependencies
-
 - **Intel NPU/GPU**: Leverages `/dev/dri` and `/dev/accel` nodes.
 - **NVIDIA CUDA**: Requires the **NVIDIA Container Toolkit** on the host.
 - **SSD Optimization**: All transient I/O is redirected to a RAM-backed `tmpfs` volume to prevent physical wear.

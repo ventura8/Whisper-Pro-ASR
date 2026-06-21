@@ -60,6 +60,8 @@ def get_service_stats():
     history, history_stats = history_manager.get_history_stats()
 
     # Engine status helpers
+    # Whisper is 'busy' only when a task is actively in the transcription/inference sub-stage.
+    # During UVR/vocal-separation, the stage does not match, so whisper correctly shows 'loaded'.
     whisper_active = any(t.get('status') == 'active' and
                          any(s in t.get('stage', '').lower() for s in ['transcrib', 'inference'])
                          for t in tasks)
@@ -88,6 +90,7 @@ def get_service_stats():
         u_copy = u.copy()
         unit_id = u['id']
 
+        # Whisper is 'busy' on this unit only when the task is in the transcription/inference sub-stage.
         whisper_unit_active = any(
             t.get('status') == 'active' and
             str(t.get('unit_id')) == str(unit_id) and

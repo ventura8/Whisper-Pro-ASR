@@ -35,6 +35,18 @@ def wrap_text(text, max_line_width, max_line_count=None):
     return "\n".join(lines)
 
 
+def format_single_srt_block(idx, start_ts, end_ts, text, *, speaker=None, max_line_width=None, max_line_count=None):
+    """Format a single subtitle segment into its SRT block representation."""
+    start_fmt = format_timestamp(start_ts or 0.0)
+    end_fmt = format_timestamp(end_ts or 0.0)
+    clean_text = text.strip()
+    if speaker:
+        clean_text = f"[{speaker}]: {clean_text}"
+    if max_line_width is not None:
+        clean_text = wrap_text(clean_text, max_line_width, max_line_count)
+    return f"{idx}\n{start_fmt} --> {end_fmt}\n{clean_text}\n\n"
+
+
 def generate_srt(result, max_line_width=None, max_line_count=None):
     """
     Compose industrial-standard SubRip (SRT) content from segment metadata.

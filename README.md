@@ -78,6 +78,10 @@ services:
 - **FFmpeg 8.1.0 Integration**: Features optimized hardware-accelerated decoding. All media (MKV, AVI, MP4, etc.) is automatically standardized to **16kHz Mono WAV** using the `utils.py` core before entering the AI pipeline for maximum accuracy.
 
 ### Advanced Intelligence
+- **Intel ASR Chunking & Streaming**: Refactored OpenVINO engine transcription to split long media files dynamically into structured chunks guided by speech VAD timestamps, ensuring stability on very long movies.
+- **O(1) Live Subtitle Updates**: Appends pre-formatted subtitle blocks incrementally to the live SRT stream during processing instead of doing full $O(N^2)$ stream reconstructions.
+- **UVR Chunk Progress Tracking**: Computes and emits real-time preprocessing progress updates per UVR chunk to keep the dashboard progress bar fluid during vocal separation.
+- **Graceful Temp-Storage Fallback**: Establishes a 2GB minimum free space threshold and 1.5x file-size headroom multiplier to fallback gracefully to persistent storage when tmpfs runs low on space, preventing ENOSPC crashes.
 - **Zero-Latency Pre-emption**: High-priority operations (such as language detection) instantly pause long-running transcription batches, ensuring immediate API responsiveness.
 - **Consolidated Batch Montage**: Consolidates multiple sampling targets into a single high-density montage. This allows for a **single-pass UVR isolation** across multiple non-contiguous segments, eliminating repeated model loading overhead.
 - **Global VAD & In-Memory Slicing**: Features a unified Voice Activity Detection scan across the entire montage. segments are then sliced as **NumPy arrays in memory**, eliminating temporary file I/O and reducing VAD overhead by up to 900%.
@@ -95,6 +99,7 @@ services:
 - **Centralized Storage Hygiene**: Features a thread-local tracking system that registers every transient asset (uploads, HQ prep files, isolated stems) created during a request. The system ensures a **100% cleanup rate** by purging all tracked files immediately upon request completion or failure.
 - **On-Demand History Tiering**: Implements a dual-tier storage strategy. The dashboard and RAM are strictly capped at the last 20 tasks, while a durable history of up to 1000 tasks is maintained on the persistent volume.
 - **Hardened Diagnostic Logging**: System logs (`whisper_pro.log`) are redirected to the persistent state volume with real-time flush-to-disk logic. Log downloads are optimized with zero-caching headers to ensure the latest diagnostic data is always available.
+
 
 ### Production Ready
 - **OpenAI Standard API**: Drop-in compatible with the OpenAI whisper specification, allowing immediate integration with existing clients.
@@ -150,6 +155,7 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | **Transcription Tuning** | | |
 | `INITIAL_PROMPT` | *(multilingual)* | Default context prompt to guide Whisper transcription. |
 | `MODEL_IDLE_TIMEOUT` | `300` | Seconds to keep models loaded after last task (0 = immediate offload). |
+| `INTEL_ASR_CHUNK_DURATION` | `300` | Chunk duration in seconds for Intel Whisper transcription. |
 | `AGGRESSIVE_OFFLOAD` | `false` | Immediately unload models when idle (overridden by `MODEL_IDLE_TIMEOUT`). |
 | **Optimization** | | |
 | `OV_PERFORMANCE_HINT` | `LATENCY` | OpenVINO scheduling hint (Latency/Throughput). |
@@ -159,9 +165,10 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | `ASR_PREPROCESS_THREADS` | `4` | CPU core allocation for UVR/ONNX (Auto-capped by hardware). |
 | **SSD Protection** | | |
 | `WHISPER_TEMP_DIR`| `/tmp/whisper`| Redirects transient I/O (uploads, WAVs, stems) to this path. |
-| `WHISPER_TEMP_MIN_FREE_MB` | `512` | Fallback threshold to disk if RAM-disk is full. |
+| `WHISPER_TEMP_MIN_FREE_MB` | `2048` | Fallback threshold to disk if RAM-disk is full. |
 | **Preprocessing** | | |
 | `ENABLE_VOCAL_SEPARATION`| `true` | Toggles UVR background removal engine for translate/transcribe. |
+| `UVR_CHUNK_DURATION` | `600` | Chunk duration in seconds for UVR separation (0 to disable). |
 | `ENABLE_LD_PREPROCESSING`| `true` | Toggles UVR background removal engine for language detection. |
 | `LD_VAD_THRESHOLD` | `0.3` | Aggressiveness of VAD during language identification (0.0 to 1.0). |
 | `SMART_SAMPLING_SEARCH` | `true` | Enables localized entropy-based signal searching in sparse audio. |
@@ -338,7 +345,14 @@ To use this service with **Bazarr**:
 │   │   └── intel_engine.py  # Intel NPU/GPU engine adapter
 │   ├── monitoring/          # Dashboard, Telemetry & Metrics
 │   │   ├── dashboard.py     # Dashboard entry point
-│   │   ├── dashboard_ui.py  # Material Design HTML dashboard
+│   │   ├── dashboard_ui.py  # Material Design dashboard renderer (loads from templates)
+│   │   ├── templates/       # HTML, CSS, and JS dashboard templates
+│   │   │   ├── dashboard.html
+│   │   │   ├── dashboard.css
+│   │   │   ├── dashboard_charts.js
+│   │   │   ├── dashboard_main.js
+│   │   │   ├── dashboard_state.js
+│   │   │   └── dashboard_utils.js
 │   │   ├── analytics_ui.py  # Analytics dashboard HTML
 │   │   ├── telemetry.py     # Real-time telemetry collection
 │   │   ├── telemetry_manager.py  # Persistent telemetry history

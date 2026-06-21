@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Pro Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' style='stop-color:%2300d2ff;stop-opacity:1' /><stop offset='100%25' style='stop-color:%233a7bd5;stop-opacity:1' /></linearGradient></defs><path d='M6 10 L11 22 L16 12 L21 22 L26 10' fill='none' stroke='url(%23g)' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/><path d='M4 16 L6 16 M26 16 L28 16' fill='none' stroke='url(%23g)' stroke-width='2' stroke-linecap='round'/></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Roboto:wght@300;400;500;700&family=Roboto+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Sharp" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        /* {{DASHBOARD_CSS}} */
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-title">
+            <span class="material-icons-sharp" style="font-size: 32px; color: var(--md-sys-color-primary)">analytics</span>
+            <h1 id="app-name">Whisper Pro Monitor</h1>
+        </div>
+        <div class="header-actions">
+            <a href="/logs/download" class="btn-swagger btn-download">
+                <span class="material-icons-sharp" style="font-size: 18px">download</span>
+                Download Logs
+            </a>
+            <a href="/docs" class="btn-swagger">
+                <span class="material-icons-sharp" style="font-size: 18px">api</span>
+                Swagger UI
+            </a>
+            <button id="toggle-refresh" class="btn-swagger" onclick="toggleRefresh()" style="border:none; cursor:pointer; min-width: 130px;">
+                <span class="material-icons-sharp" style="font-size: 18px" id="refresh-icon">sync</span>
+                <span id="refresh-text">Live Refresh</span>
+            </button>
+            <div id="app-version" style="font-size: 14px; font-weight: 500; color: var(--md-sys-color-primary)">v--</div>
+        </div>
+    </header>
+
+    <div class="stats-grid" id="top-grid">
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">terminal</span> App CPU</div>
+            <div class="card-value" id="app-cpu-val">--%</div>
+            <div class="progress-container"><div class="progress-bar" id="app-cpu-bar" style="width: 0%"></div></div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">speed</span> System CPU</div>
+            <div class="card-value" id="sys-cpu-val">--%</div>
+            <div class="progress-container"><div class="progress-bar" id="sys-cpu-bar" style="width: 0%"></div></div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">layers</span> App Memory</div>
+            <div class="card-value" id="app-mem-val">-- GB</div>
+            <div class="progress-container"><div class="progress-bar" id="app-mem-bar" style="width: 0%"></div></div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">memory</span> System Memory</div>
+            <div class="card-value" id="sys-mem-val">-- GB</div>
+            <div class="progress-container"><div class="progress-bar" id="sys-mem-bar" style="width: 0%"></div></div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">play_arrow</span> Active</div>
+            <div class="card-value" id="active-val">0</div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">pause</span> Queued</div>
+            <div class="card-value" id="queued-val">0</div>
+        </div>
+    </div>
+
+    <div class="dashboard-main">
+        <div class="section">
+            <div class="tabs">
+                <div class="tab active" id="tab-active" onclick="showTab('active')">Active</div>
+                <div class="tab" id="tab-history" onclick="showTab('history')">History</div>
+                <div class="tab" id="tab-charts" onclick="showTab('charts')">Charts</div>
+                <div class="tab" id="tab-analytics" onclick="showTab('analytics')">Analytics</div>
+                <div class="tab" id="tab-settings" onclick="showTab('settings')">Settings</div>
+            </div>
+
+            <div id="active-section">
+                <div class="task-list" id="task-list"></div>
+            </div>
+
+            <div id="history-section">
+                <div class="history-list" id="history-list"></div>
+            </div>
+
+            <div id="charts-section">
+                <div class="charts-list">
+                    <div class="chart-header" style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                        <span class="section-title" style="margin:0"><span class="material-icons-sharp">show_chart</span> Device Telemetry History</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <label for="chart-window-select" style="font-size: 12px; font-weight: 600; color: var(--md-sys-color-secondary);">Time Window:</label>
+                            <select id="chart-window-select" onchange="changeChartWindow(this.value)" style="background: var(--item-bg); color: var(--md-sys-color-on-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 12px; font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; outline: none; transition: border-color 0.2s;">
+                                <option value="1" selected>1 Minute</option>
+                                <option value="3">3 Minutes</option>
+                                <option value="5">5 Minutes</option>
+                                <option value="10">10 Minutes</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="section-title"><span class="material-icons-sharp">speed</span> CPU Utilization (App vs System)</div>
+                        <div class="chart-container" id="cpuChart"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="section-title"><span class="material-icons-sharp">memory</span> Memory Allocation (GB)</div>
+                        <div class="chart-container" id="memChart"></div>
+                    </div>
+                    <div class="chart-header">
+                        <div class="card-title">Hardware Acceleration</div>
+                    </div>
+                    <div id="hwChart" class="chart-container"></div>
+                </div>
+            </div>
+
+            <div id="analytics-section">
+                <div class="stats-list">
+                    <div class="card">
+                        <div class="section-title"><span class="material-icons-sharp">bar_chart</span> Output Analytics</div>
+                        <div class="stat-grid-inner" id="analytics-grid"></div>
+                        <div style="margin-top: 24px; display: flex; justify-content: flex-end;">
+                            <a href="/analytics" class="btn-swagger" id="btn-full-analytics">
+                                <span class="material-icons-sharp" style="font-size: 18px">query_stats</span>
+                                View Full Analytics Report
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="settings-section">
+                <div class="card">
+                    <div class="section-title"><span class="material-icons-sharp">settings</span> Service Configuration</div>
+                    <div style="display:flex; flex-direction:column; gap:24px; padding: 10px;">
+                        <div>
+                            <label style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">Telemetry History Retention (Hours)</label>
+                            <div style="display:flex; align-items:center; gap:16px;">
+                                <input type="range" id="retention-range" min="1" max="168" value="24" style="flex:1;" oninput="document.getElementById('retention-label').innerText = this.value + 'h'">
+                                <span id="retention-label" style="font-family:'Roboto Mono'; font-weight:700; color:var(--md-sys-color-primary); width:40px;">24h</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">System Log Retention (Days)</label>
+                            <div style="display:flex; align-items:center; gap:16px;">
+                                <input type="range" id="log-retention-range" min="1" max="30" value="7" style="flex:1;" oninput="document.getElementById('log-retention-label').innerText = this.value + 'd'">
+                                <span id="log-retention-label" style="font-family:'Roboto Mono'; font-weight:700; color:var(--md-sys-color-primary); width:40px;">7d</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:flex-end;">
+                            <button onclick="saveSettings()" class="btn-swagger" style="border:none; cursor:pointer; padding: 10px 40px; font-size:15px;">Save Configuration</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title"><span class="material-icons-sharp">info</span> System Information</div>
+            <div class="info-list">
+                <div class="card" style="padding: 16px; gap: 12px;">
+                    <div style="font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--md-sys-color-secondary);">Hardware Resource Pool</div>
+                    <div id="hw-pool" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="refresh-indicator" id="last-update">Updating...</div>
+
+    <script>
+        // {{DASHBOARD_JS}}
+    </script>
+</body>
+</html>

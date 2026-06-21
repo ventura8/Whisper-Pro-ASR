@@ -5,6 +5,7 @@ import logging
 import time
 import os
 import json
+import urllib.parse
 from flask import Blueprint, request, jsonify, Response
 from modules import config
 from modules.inference import model_manager, language_detection
@@ -309,5 +310,9 @@ def build_response(result, params, stats, path, start):
 
     resp = Response(content, mimetype='text/plain')
     fname = os.path.splitext(os.path.basename(path))[0]
-    resp.headers["Content-Disposition"] = f'attachment; filename="{fname}.{fmt}"'
+    ascii_filename = f"{fname}.{fmt}".encode('ascii', 'ignore').decode('ascii').replace('"', '')
+    if not ascii_filename.strip():
+        ascii_filename = f"transcription.{fmt}"
+    quoted_filename = urllib.parse.quote(f"{fname}.{fmt}")
+    resp.headers["Content-Disposition"] = f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{quoted_filename}"
     return resp

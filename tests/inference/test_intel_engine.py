@@ -1,15 +1,17 @@
 """Tests for modules/inference/intel_engine.py using mocks."""
 
-from modules.inference import intel_engine
+from modules.inference import intel_engine  # pylint: disable=wrong-import-position
+import importlib
 import sys
+from argparse import Namespace
 from unittest import mock
 import numpy as np
 import pytest
-import importlib
 
 # Mock OpenVINO GenAI before any imports
 mock_genai = mock.MagicMock()
 sys.modules['openvino_genai'] = mock_genai
+
 
 importlib.reload(intel_engine)
 
@@ -23,14 +25,37 @@ def reset_mocks():
     yield
 
 
+def test_find_split_points():
+    """Test find_split_points helper."""
+    # Test empty speech timestamps
+    res = intel_engine.find_split_points(600.0, [], target_chunk_len=300.0)
+    assert res == [0.0, 300.0, 600.0]
+
+    # Test speech timestamps with gaps
+    speech_ts = [
+        {'start': 10.0, 'end': 20.0},
+        {'start': 285.0, 'end': 295.0},  # gap around 295-310
+        {'start': 310.0, 'end': 320.0},
+        {'start': 590.0, 'end': 595.0}
+    ]
+    res = intel_engine.find_split_points(
+        600.0, speech_ts, target_chunk_len=300.0)
+    assert len(res) == 3
+    assert res[0] == 0.0
+    assert 295.0 <= res[1] <= 310.0
+    assert res[2] == 600.0
+
+
 class TestIntelWhisperEngine:
     """Tests for IntelWhisperEngine class."""
 
     def test_init_success(self):
         """Test successful initialization."""
-        engine = intel_engine.IntelWhisperEngine("/path/to/model", device="CPU")
+        engine = intel_engine.IntelWhisperEngine(
+            "/path/to/model", device="CPU")
         assert engine.pipeline is not None
-        mock_genai.WhisperPipeline.assert_called_once_with("/path/to/model", "CPU")
+        mock_genai.WhisperPipeline.assert_called_once_with(
+            "/path/to/model", "CPU")
 
     def test_init_failure(self):
         """Test initialization failure handles exception."""
@@ -61,6 +86,7 @@ class TestIntelWhisperEngine:
             engine.pipeline.generate.return_value = mock_result
 
             segments, info = engine.transcribe("/path/audio.wav")
+            list(segments)
             mock_decode.assert_called_once_with("/path/audio.wav")
             assert info.language == "en"
 
@@ -76,7 +102,9 @@ class TestIntelWhisperEngine:
             mock_result.chunks = []
             engine.pipeline.generate.return_value = mock_result
 
-            engine.transcribe(audio, vad_filter=True, vad_threshold=0.5)
+            segments, _ = engine.transcribe(
+                audio, vad_filter=True, vad_threshold=0.5)
+            list(segments)
 
             mock_get_timestamps.assert_called_once()
             engine.pipeline.generate.assert_called_once()
@@ -87,7 +115,8 @@ class TestIntelWhisperEngine:
         """Test early return when VAD finds no speech."""
         engine = intel_engine.IntelWhisperEngine("/path/to/model")
         with mock.patch("modules.inference.vad.get_speech_timestamps", return_value=[]):
-            segments, info = engine.transcribe(np.zeros(16000), vad_filter=True)
+            segments, info = engine.transcribe(
+                np.zeros(16000), vad_filter=True)
             assert not list(segments)
             assert info.language == "en"
 
@@ -102,7 +131,8 @@ class TestIntelWhisperEngine:
         mock_result.chunks = []
         engine.pipeline.generate.return_value = mock_result
 
-        engine.transcribe(np.zeros(10), language='fr')
+        segments, _ = engine.transcribe(np.zeros(10), language='fr')
+        list(segments)
         assert mock_config.language == '<|fr|>'
 
     def test_transcribe_tensor_sanitization(self):
@@ -114,7 +144,8 @@ class TestIntelWhisperEngine:
         mock_result.chunks = []
         engine.pipeline.generate.return_value = mock_result
 
-        engine.transcribe(audio)
+        segments, _ = engine.transcribe(audio)
+        list(segments)
 
         call_args = engine.pipeline.generate.call_args[0]
         sanitized_audio = call_args[0]
@@ -154,28 +185,29 @@ def test_intel_engine_exceptions():
 
         # transcribe failure
         engine.pipeline.generate.side_effect = RuntimeError("Infer Fail")
+        segments, _ = engine.transcribe(np.zeros(16000))
         with pytest.raises(RuntimeError):
-            engine.transcribe(np.zeros(16000))
+            list(segments)
 
-        # _apply_vad failure
+        # apply_vad failure
         with mock.patch("modules.inference.vad.get_speech_timestamps", side_effect=ValueError("VAD Fail")):
-            res = engine._apply_vad(np.zeros(16000))
+            res = engine.apply_vad(np.zeros(16000))
             assert len(res) == 16000
 
-        # _prepare_gen_config fallback
+        # prepare_gen_config fallback
         engine.pipeline.get_generation_config.side_effect = AttributeError()
-        cfg = engine._prepare_gen_config("en", "transcribe")
+        cfg = engine.prepare_gen_config("en", "transcribe")
         assert cfg.task == "transcribe"
 
         # Language resolution fallbacks
         cfg.lang_to_id = {}
-        assert engine._resolve_language("en", cfg) is None
+        assert engine.resolve_language("en", cfg) is None
 
         cfg.lang_to_id = {"English": 1}
-        assert engine._resolve_language("en", cfg) == "English"
+        assert engine.resolve_language("en", cfg) == "English"
 
         # Sanitize audio branches
-        res = engine._sanitize_audio([0.1, 0.2])
+        res = engine.sanitize_audio([0.1, 0.2])
         assert res.dtype == np.float32
 
         # Unload
@@ -190,12 +222,11 @@ def test_intel_detect_language_branches():
         engine.pipeline = mock.MagicMock()
 
         # Success
-        from argparse import Namespace
         engine.pipeline.generate.return_value = Namespace(language="fr")
-        lang, prob, _ = engine.detect_language(np.zeros(16000))
+        lang, _, _ = engine.detect_language(np.zeros(16000))
         assert lang == "fr"
 
         # Failure
         engine.pipeline.generate.side_effect = RuntimeError("Detect Fail")
-        lang, prob, _ = engine.detect_language(np.zeros(16000))
+        lang, _, _ = engine.detect_language(np.zeros(16000))
         assert lang == "en"

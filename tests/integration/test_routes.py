@@ -386,6 +386,21 @@ class TestHelperFunctions:
             stats = {'active_sessions': 0}
             response = build_response(result, params, stats, '/fake/path', 100.0)
             assert 'text/plain' in response.content_type
+            assert response.headers['Content-Disposition'] == 'attachment; filename="path.srt"; filename*=UTF-8\'\'path.srt'
+
+    def test_build_response_unicode_filename(self):
+        """Test response building with unicode filename to ensure no encoding issues occur."""
+        test_app = Flask(__name__)
+        with test_app.app_context():
+            result = {'text': 'Hello', 'segments': []}
+            params = {'output_format': 'srt'}
+            stats = {'active_sessions': 0}
+            unicode_path = '/movies/Liceenii Extemporal la dirigenție (1987) DVD-R.mkv'
+            response = build_response(result, params, stats, unicode_path, 100.0)
+            assert 'text/plain' in response.content_type
+            cd_header = response.headers['Content-Disposition']
+            assert 'filename="Liceenii Extemporal la dirigenie (1987) DVD-R.srt"' in cd_header
+            assert "filename*=UTF-8''Liceenii%20Extemporal%20la%20dirigen%C8%9Bie%20%281987%29%20DVD-R.srt" in cd_header
 
 
 class TestRequestLogging:

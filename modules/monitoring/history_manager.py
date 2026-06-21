@@ -155,7 +155,19 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
             logger.warning("[History] Saving task WITHOUT result field! Task: %s",
                            task_data.get("task_id"))
 
-        # Memory Protection: Keep full data as requested by user
+        # Memory Protection: Truncate very large segment lists before persisting.
+        # A 15h+ movie can produce 10K+ segments (2–5 MB per task entry).
+        # We keep the first 100 for history/dashboard preview; the client
+        # already received the full output from the HTTP response.
+        # Note: result.text (full SRT) is intentionally preserved.
+        if "result" in task_data:
+            res = task_data["result"]
+            segs = res.get("segments")
+            if segs and len(segs) > 100:
+                res["segments_total_count"] = len(segs)
+                res["segments_truncated"] = True
+                res["segments"] = segs[:100]
+
         module.HISTORY_CACHE.insert(0, task_data.copy())
         module.HISTORY_CACHE = module.HISTORY_CACHE[:MAX_HISTORY_DISK]
 

@@ -30,9 +30,10 @@ Edit `Dockerfile`:
 Then rebuild: `docker compose up -d --build`
 
 ## Long Movies (4h+)
-- Processing: 6h for 4h movie
-- Bazarr timeout: Set to `36000` (10 hours)
-- RAM: 32GB recommended for language detection
+- **Intel ASR Chunking & Streaming**: For OpenVINO engine transcription, set `INTEL_ASR_CHUNK_DURATION` (default `300` seconds) to chunk audio processing. This prevents execution hangs and out-of-memory errors on massive files while maintaining continuous progress metrics.
+- **UVR Preprocessing Chunking**: Set `UVR_CHUNK_DURATION` (default `600` seconds / 10 minutes) to segment vocal separation. This caps peak RAM utilization and enables periodic chunk-level progress updates on the dashboard.
+- **Bazarr timeout**: Set to `36000` (10 hours) for high reliability.
+- **RAM**: 32GB recommended for language detection on extremely large libraries.
 
 ## Troubleshooting
 | Issue | Fix |
@@ -113,6 +114,6 @@ tmpfs:
 ```
 
 ### Sizing Guidance
-- **Default (2GB)**: Sufficient for 95% of use cases (including 2h movies).
+- **Default (2GB)**: Sufficient for 95% of use cases (including ≤4h movies).
 - **Large (4GB+)**: Recommended if you frequently process 4h+ movies or 4K videos with large upload sizes.
-- **Dynamic Fallback**: If the RAM-disk fills up, Whisper Pro will automatically fallback to physical disk to prevent crashes.
+- **Dynamic Fallback**: If the free space in the RAM-disk drops below `WHISPER_TEMP_MIN_FREE_MB` (default `2048` MB), or if the estimated audio size exceeds the tmpfs capacity factoring in a 1.5× headroom multiplier, the service automatically falls back to persistent storage (`PERSISTENT_TEMP_DIR` / SSD) to prevent ENOSPC crashes.

@@ -41,7 +41,7 @@ _LANG_PATTERN = re.compile(r'<\|([a-z]{2,3})\|>')
 
 def aggregate_language_probs(segment_probs_list):
     """
-    Consolidate probabilities across all segments using Squared Weighting.
+    Consolidate probabilities across all segments using Squared Weighting and Speech Duration Weighting.
 
     Squaring the softmax probabilities punishes low-confidence noise and
     rewards clear identification 'peaks', preventing consistent false-positives
@@ -53,9 +53,12 @@ def aggregate_language_probs(segment_probs_list):
         return {}
 
     for cp in valid:
+        weight = cp.get('_speech_duration', cp.get('speech_duration', 30.0))
         for lang, prob in cp.items():
-            # Apply Squared Confidence Weighting
-            combined_scores[lang] = combined_scores.get(lang, 0) + (prob**2)
+            if lang.startswith('_') or lang in ('speech_duration', 'speech_ratio'):
+                continue
+            # Apply Squared Confidence and Speech Duration Weighting
+            combined_scores[lang] = combined_scores.get(lang, 0) + (prob**2) * weight
 
     # Normalize scores back to probability range
     total_score = sum(combined_scores.values())
@@ -170,7 +173,9 @@ def _step_run_inference(model_context, isolated_path, scans, perf):
         if r and 'all_probabilities' in r:
             conf = r.get('confidence', 0.0)
             if conf >= config.LD_MIN_CONFIDENCE:
-                probs.append(r['all_probabilities'])
+                prob_dict = r['all_probabilities'].copy()
+                prob_dict['_speech_duration'] = r.get('speech_duration', 30.0)
+                probs.append(prob_dict)
             else:
                 logger.warning(
                     "[Engine] Skipping segment %d vote due to low confidence: %s (%.1f%% < %.1f%%)",

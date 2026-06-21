@@ -10,9 +10,11 @@ segment-level audio cleaning.
 import errno
 import gc
 import logging
+import math
 import os
 import shutil
 import tempfile
+import types
 from pathlib import Path
 import threading
 import time
@@ -31,6 +33,7 @@ except ImportError:
 
 from modules import config
 from modules import utils
+from modules.inference import scheduler
 
 
 logger = logging.getLogger(__name__)
@@ -95,8 +98,50 @@ def _separate_with_fallback(sep, sep_factory, audio_path):
             if i > 0:
                 # Re-instantiate with the new output directory
                 current_sep = sep_factory(out_dir)
-                logger.warning(
-                    "[UVR] Primary output dir full — retrying with fallback: %s", out_dir)
+            # Apply progress patching if chunk_duration is active
+            audio_dur = utils.get_audio_duration(audio_path)
+            chunk_duration = getattr(current_sep, "chunk_duration", None)
+            is_valid_duration = (
+                chunk_duration
+                and isinstance(chunk_duration, (int, float))
+                and not hasattr(chunk_duration, "_mock_self")
+                and audio_dur > chunk_duration
+            )
+            if is_valid_duration:
+                total_chunks = math.ceil(audio_dur / chunk_duration)
+                setattr(current_sep, "_chunk_paths_len", total_chunks)
+                setattr(current_sep, "_chunk_index", 0)
+                setattr(current_sep, "_audio_dur", audio_dur)
+
+                original_separate_file = getattr(current_sep, "_separate_file")
+
+                def patched_separate_file(
+                    self,
+                    audio_file_path,
+                    custom_output_names=None,
+                    *,
+                    orig_sep_file=original_separate_file,
+                    chunk_dur=chunk_duration,
+                    sched=scheduler
+                ):
+                    res = orig_sep_file(audio_file_path, custom_output_names)
+                    chunk_paths_len = getattr(self, "_chunk_paths_len", 0)
+                    if chunk_paths_len > 0:
+                        chunk_idx = getattr(self, "_chunk_index", 0) + 1
+                        setattr(self, "_chunk_index", chunk_idx)
+                        audio_dur_val = getattr(self, "_audio_dur", 0.0)
+                        processed_dur = min(chunk_idx * chunk_dur, audio_dur_val)
+                        pct = 5.0 + (float(chunk_idx) / chunk_paths_len) * 5.0
+                        sched.update_task_metadata(current_position=processed_dur)
+                        sched.update_task_progress(
+                            int(pct),
+                            f"Vocal Separation (Chunk {chunk_idx}/{chunk_paths_len} | "
+                            f"{utils.format_duration(processed_dur)} / {utils.format_duration(audio_dur_val)})"
+                        )
+                    return res
+
+                setattr(current_sep, "_separate_file", types.MethodType(patched_separate_file, current_sep))
+
             return current_sep.separate(audio_path)
         except OSError as exc:
             last_err = exc
@@ -272,6 +317,7 @@ class PreprocessingManager:
                 output_format="WAV",
                 normalization_threshold=0.01,
                 output_single_stem="Vocals",
+                chunk_duration=config.UVR_CHUNK_DURATION,
                 log_level=logging.INFO
             )
 
@@ -395,6 +441,7 @@ class PreprocessingManager:
                         output_format="WAV",
                         normalization_threshold=0.01,
                         output_single_stem="Vocals",
+                        chunk_duration=config.UVR_CHUNK_DURATION,
                         log_level=logging.INFO
                     )
                     new_sep.onnx_execution_provider = sep.onnx_execution_provider
