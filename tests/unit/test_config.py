@@ -1,9 +1,14 @@
 """Tests for modules/config.py"""
-import os
+
 import importlib
+import os
 import tempfile
 from unittest import mock
-import modules.config as config_module
+
+import pytest
+
+import modules.core.config as config_module
+from modules.core import engine_registry
 
 
 class TestConfig:
@@ -12,8 +17,10 @@ class TestConfig:
     def test_default_model_value(self):
         """Test that DEFAULT_MODEL is set correctly."""
         # Default model for Faster-Whisper
-        assert "faster-whisper" in config_module.DEFAULT_WHISPER.lower() or \
-               "whisper" in config_module.DEFAULT_WHISPER.lower()
+        assert (
+            "faster-whisper" in config_module.DEFAULT_WHISPER.lower()
+            or "whisper" in config_module.DEFAULT_WHISPER.lower()
+        )
 
     def test_model_id_from_env(self):
         """Test MODEL_ID reads from environment."""
@@ -96,11 +103,11 @@ class TestConfigEnv:
     def test_app_constants(self):
         """Test app name and version constants."""
         assert "Whisper" in config_module.APP_NAME
-        assert config_module.VERSION == "1.1.2"
+        assert config_module.VERSION == "1.1.4"
 
     def test_device_constant_exists(self):
         """Test DEVICE constant exists."""
-        assert hasattr(config_module, 'DEVICE')
+        assert hasattr(config_module, "DEVICE")
         assert config_module.DEVICE in ["CPU", "CUDA", "GPU", "NPU"]
 
     def test_asr_threads_default(self):
@@ -137,7 +144,7 @@ class TestConfigEnv:
         env = {"ASR_THREADS": "64", "ASR_PREPROCESS_THREADS": "64", "CPU_CORE_LIMIT": "8"}
         with mock.patch.dict(os.environ, env):
             # Force CPU mode for test priority check
-            with mock.patch("modules.config.DEVICE", "CPU"):
+            with mock.patch("modules.core.config.DEVICE", "CPU"):
                 importlib.reload(config_module)
                 assert config_module.ASR_THREADS == 8
                 # Prep is now allowed to use the full pool sequentially
@@ -159,13 +166,13 @@ class TestConfigEnv:
 
     def test_hallucination_phrases_exist(self):
         """Test HALLUCINATION_PHRASES list exists and is populated."""
-        assert hasattr(config_module, 'HALLUCINATION_PHRASES')
+        assert hasattr(config_module, "HALLUCINATION_PHRASES")
         assert isinstance(config_module.HALLUCINATION_PHRASES, list)
         assert len(config_module.HALLUCINATION_PHRASES) > 0
 
     def test_compute_type_exists(self):
         """Test COMPUTE_TYPE exists."""
-        assert hasattr(config_module, 'COMPUTE_TYPE')
+        assert hasattr(config_module, "COMPUTE_TYPE")
 
 
 class TestConfigHardware:
@@ -187,8 +194,8 @@ class TestConfigHardware:
                 mock_core.get_property.return_value = "Intel(R) AI Boost"
                 with mock.patch("openvino.Core", return_value=mock_core):
                     importlib.reload(config_module)
-                    # NPU detected means Preprocess=NPU but ASR=CPU (for Quality)
-                    assert config_module.DEVICE == "CPU"
+                    # NPU detected and selected as primary AUTO device when CUDA is absent.
+                    assert config_module.DEVICE == "NPU"
                     assert config_module.PREPROCESS_DEVICE == "NPU"
 
     def test_hardware_detection_logic_gpu_amd(self):
@@ -200,8 +207,8 @@ class TestConfigHardware:
                 mock_core.get_property.return_value = "Intel(R) Arc(TM) Graphics"
                 with mock.patch("openvino.Core", return_value=mock_core):
                     importlib.reload(config_module)
-                    # GPU detected means Preprocess=GPU but ASR=CPU (for Quality)
-                    assert config_module.DEVICE == "CPU"
+                    # Intel GPU detected and selected as primary AUTO device when CUDA is absent.
+                    assert config_module.DEVICE == "GPU"
                     assert config_module.PREPROCESS_DEVICE == "GPU"
 
     def test_hardware_resource_pooling(self):
@@ -215,15 +222,12 @@ class TestConfigHardware:
                     importlib.reload(config_module)
                     # Should have 2 units (GPU and NPU)
                     assert len(config_module.HARDWARE_UNITS) == 2
-                    assert any(u['type'] == 'GPU' for u in config_module.HARDWARE_UNITS)
-                    assert any(u['type'] == 'NPU' for u in config_module.HARDWARE_UNITS)
+                    assert any(u["type"] == "GPU" for u in config_module.HARDWARE_UNITS)
+                    assert any(u["type"] == "NPU" for u in config_module.HARDWARE_UNITS)
 
     def test_hardware_unit_limits(self):
         """Test that MAX_*_UNITS correctly limits the pool."""
-        with mock.patch.dict(os.environ, {
-            "MAX_GPU_UNITS": "1",
-            "MAX_NPU_UNITS": "0"
-        }):
+        with mock.patch.dict(os.environ, {"MAX_GPU_UNITS": "1", "MAX_NPU_UNITS": "0"}):
             with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
                 mock_core = mock.MagicMock()
                 mock_core.available_devices = ["GPU.0", "GPU.1", "NPU.0", "CPU"]
@@ -231,8 +235,8 @@ class TestConfigHardware:
                 with mock.patch("openvino.Core", return_value=mock_core):
                     importlib.reload(config_module)
                     # Should only have 1 GPU and 0 NPUs
-                    assert len([u for u in config_module.HARDWARE_UNITS if u['type'] == 'GPU']) == 1
-                    assert len([u for u in config_module.HARDWARE_UNITS if u['type'] == 'NPU']) == 0
+                    assert len([u for u in config_module.HARDWARE_UNITS if u["type"] == "GPU"]) == 1
+                    assert len([u for u in config_module.HARDWARE_UNITS if u["type"] == "NPU"]) == 0
 
     def test_max_cpu_units_logic(self):
         """Test MAX_CPU_UNITS parsing and impact on CPU_PARALLEL_LIMIT."""
@@ -243,15 +247,22 @@ class TestConfigHardware:
 
     def test_cpu_parallel_limit_auto_scaling(self):
         """Test auto-scaling of CPU_PARALLEL_LIMIT when MAX_CPU is AUTO."""
-        with mock.patch.dict(os.environ, {
-            "MAX_CPU_UNITS": "AUTO",
-            "ASR_THREADS": "2",
-            "ASR_PREPROCESS_THREADS": "2",
-            "CPU_CORE_LIMIT": "8"
-        }):
+        with mock.patch.dict(
+            os.environ,
+            {"MAX_CPU_UNITS": "AUTO", "ASR_THREADS": "2", "ASR_PREPROCESS_THREADS": "2", "CPU_CORE_LIMIT": "8"},
+        ):
             importlib.reload(config_module)
             # cores // max(threads) = 8 // 2 = 4
             assert config_module.CPU_PARALLEL_LIMIT == 4
+
+    def test_cpu_parallel_limit_auto_zero_threads_safe(self):
+        """MAX_CPU=AUTO with zero thread envs should not crash and should compute deterministically."""
+        with mock.patch.dict(
+            os.environ,
+            {"MAX_CPU_UNITS": "AUTO", "ASR_THREADS": "0", "ASR_PREPROCESS_THREADS": "0", "CPU_CORE_LIMIT": "8"},
+        ):
+            importlib.reload(config_module)
+            assert config_module.CPU_PARALLEL_LIMIT == 8
 
     def test_hardware_property_exception(self):
         """Test that hardware names fall back on property exception."""
@@ -259,7 +270,7 @@ class TestConfigHardware:
             with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
                 mock_core = mock.MagicMock()
                 mock_core.available_devices = ["GPU"]
-                mock_core.get_property.side_effect = Exception("Property fail")
+                mock_core.get_property.side_effect = RuntimeError("Property fail")
                 with mock.patch("openvino.Core", return_value=mock_core):
                     importlib.reload(config_module)
                     expected = ["CPU", "GPU", "NPU", "NVIDIA GPU"]
@@ -271,11 +282,53 @@ class TestConfigHardware:
         with mock.patch.dict(os.environ, {"ASR_DEVICE": "AUTO"}):
             fail_patch = mock.patch(
                 "ctranslate2.get_cuda_device_count",
-                side_effect=Exception("Hard fail"),
+                side_effect=RuntimeError("Hard fail"),
             )
             with fail_patch:
                 importlib.reload(config_module)
                 assert config_module.DEVICE == "CPU"
+
+    def test_asr_engine_auto_prefers_cuda_over_intel(self):
+        """ASR_ENGINE=AUTO should resolve to FASTER-WHISPER when CUDA is available."""
+        env = {"ASR_ENGINE": "AUTO", "ASR_DEVICE": "AUTO"}
+        with mock.patch.dict(os.environ, env):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=1):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["GPU.0", "NPU.0"]
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    importlib.reload(config_module)
+                    assert config_module.ASR_ENGINE == "FASTER-WHISPER"
+                    assert config_module.DEVICE == "CUDA"
+
+    def test_asr_engine_auto_prefers_intel_gpu_over_npu(self):
+        """ASR_ENGINE=AUTO should resolve Intel GPU tier before Intel NPU."""
+        env = {"ASR_ENGINE": "AUTO", "ASR_DEVICE": "AUTO"}
+        with mock.patch.dict(os.environ, env):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["NPU.0", "GPU.0", "CPU"]
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    importlib.reload(config_module)
+                    assert config_module.ASR_ENGINE == "INTEL-WHISPER"
+                    assert config_module.DEVICE == "GPU"
+
+    def test_asr_engine_auto_uses_npu_when_no_gpu(self):
+        """ASR_ENGINE=AUTO should resolve to Intel Whisper on NPU when GPU is absent."""
+        env = {"ASR_ENGINE": "AUTO", "ASR_DEVICE": "AUTO"}
+        with mock.patch.dict(os.environ, env):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["NPU.0", "CPU"]
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    importlib.reload(config_module)
+                    assert config_module.ASR_ENGINE == "INTEL-WHISPER"
+                    assert config_module.DEVICE == "NPU"
+
+    def test_asr_engine_invalid_value_fails_fast(self):
+        """Invalid ASR_ENGINE values should fail startup with a clear error."""
+        with mock.patch.dict(os.environ, {"ASR_ENGINE": "INVALID-ENGINE"}):
+            with pytest.raises(ValueError, match="Invalid ASR_ENGINE"):
+                importlib.reload(config_module)
 
     def test_hardware_detection_logic_manual_override(self):
         """Test manual ASR_DEVICE override path."""
@@ -303,27 +356,74 @@ class TestConfigHardware:
         assert "thank you for watching" in config_module.HALLUCINATION_PHRASES
         assert "vă mulțumim pentru vizionare" in config_module.HALLUCINATION_PHRASES
 
+
+class TestConfigHardwareIntelResolution:
+    """Config hardware tests for Intel model/device resolution branches."""
+
     def test_intel_engine_redirection(self):
         """Test that MODEL_ID redirects for INTEL-WHISPER."""
-        env = {
-            "ASR_ENGINE": "INTEL-WHISPER",
-            "ASR_MODEL": "Systran/faster-whisper-large-v3"
-        }
+        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_MODEL": "Systran/faster-whisper-large-v3"}
         with mock.patch.dict(os.environ, env):
-            with mock.patch("os.path.exists", side_effect=lambda p: "whisper-openvino" in p):
-                importlib.reload(config_module)
-                assert "whisper-openvino" in config_module.MODEL_ID
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["GPU.0"]
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    with mock.patch("os.path.exists", side_effect=lambda p: "whisper-openvino" in p):
+                        importlib.reload(config_module)
+                        assert "whisper-openvino" in config_module.MODEL_ID
 
     def test_intel_engine_hf_fallback(self):
         """Test that MODEL_ID falls back to HF for INTEL-WHISPER if local missing."""
-        env = {
-            "ASR_ENGINE": "INTEL-WHISPER",
-            "ASR_MODEL": "Systran/faster-whisper-large-v3"
-        }
+        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_MODEL": "Systran/faster-whisper-large-v3"}
         with mock.patch.dict(os.environ, env):
-            with mock.patch("os.path.exists", return_value=False):
-                importlib.reload(config_module)
-                assert "OpenVINO" in config_module.MODEL_ID
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["GPU.0"]
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    with mock.patch("os.path.exists", return_value=False):
+                        importlib.reload(config_module)
+                        assert config_module.MODEL_ID == "OpenVINO"
+
+    def test_intel_engine_explicit_falls_back_to_faster_without_intel_hardware(self):
+        """INTEL-WHISPER should resolve to Faster-Whisper when no Intel GPU/NPU is detected."""
+        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_DEVICE": "AUTO"}
+        with mock.patch.dict(os.environ, env):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                with mock.patch("openvino.Core", side_effect=RuntimeError("No Intel accel")):
+                    importlib.reload(config_module)
+                    assert config_module.ASR_ENGINE == "FASTER-WHISPER"
+
+    def test_intel_engine_explicit_auto_device_prefers_intel_hardware(self):
+        """Explicit INTEL-WHISPER with ASR_DEVICE=AUTO should propagate detected Intel device."""
+        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_DEVICE": "AUTO"}
+        with mock.patch.dict(os.environ, env):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["GPU.0", "CPU"]
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    importlib.reload(config_module)
+                    assert config_module.ASR_ENGINE == "INTEL-WHISPER"
+                    assert config_module.DEVICE == "GPU"
+
+
+def test_engine_registry_validation_paths():
+    """Engine registry should validate supported values and hardware unit input."""
+    assert engine_registry.normalize_and_validate_engine("faster-whisper") == engine_registry.ENGINE_FASTER_WHISPER
+
+    with pytest.raises(ValueError, match="Supported values"):
+        engine_registry.normalize_and_validate_engine("AUTO")
+
+    with pytest.raises(ValueError, match="non-empty list"):
+        engine_registry.resolve_auto_engine([])
+
+    with pytest.raises(ValueError, match="type"):
+        engine_registry.resolve_auto_engine([{"id": "CPU"}])
+
+    assert engine_registry.resolve_auto_engine([{"type": "CPU"}]) == (
+        engine_registry.ENGINE_FASTER_WHISPER,
+        "CPU",
+    )
+    assert engine_registry.resolve_auto_device([{"type": "OTHER"}]) == "CPU"
 
 
 class TestConfigSSD:
@@ -356,18 +456,13 @@ class TestConfigSSD:
 
     def test_get_temp_dir_disk_usage_fail(self):
         """Test get_temp_dir fallback when disk_usage fails."""
-        with mock.patch("shutil.disk_usage", side_effect=Exception("Disk fail")):
+        with mock.patch("shutil.disk_usage", side_effect=OSError("Disk fail")):
             # Should return PERSISTENT_TEMP_DIR
             assert config_module.get_temp_dir() == config_module.PERSISTENT_TEMP_DIR
 
     def test_validate_thread_concurrency_warning(self):
         """Test the over-provisioning warning in validate_thread_concurrency."""
-        env = {
-            "ASR_THREADS": "8",
-            "ASR_PREPROCESS_THREADS": "8",
-            "FFMPEG_THREADS": "8",
-            "CPU_CORE_LIMIT": "4"
-        }
+        env = {"ASR_THREADS": "8", "ASR_PREPROCESS_THREADS": "8", "FFMPEG_THREADS": "8", "CPU_CORE_LIMIT": "4"}
         with mock.patch.dict(os.environ, env):
             with mock.patch("logging.getLogger") as mock_get_logger:
                 mock_logger = mock.MagicMock()
@@ -377,12 +472,10 @@ class TestConfigSSD:
                 warning_calls = mock_logger.warning.call_args_list
                 assert any("OVER-PROVISIONING" in str(call) for call in warning_calls)
 
-    def test_get_parallel_unit_limit_cuda_fail(self):
-        """Test hardware unit limit fallback when ctranslate2 fails."""
-        with mock.patch("ctranslate2.get_cuda_device_count", side_effect=Exception("No CUDA")):
-            # Should return 0 or default
-            res = config_module.get_parallel_limit("CUDA")
-            assert res >= 0
+    def test_get_parallel_unit_limit_cuda_fallback(self):
+        """Test hardware unit limit fallback when accelerator registry lacks CUDA."""
+        with mock.patch("modules.core.config.HARDWARE_UNITS", [{"type": "CPU", "id": "CPU", "name": "Host CPU"}]):
+            assert config_module.get_parallel_limit("CUDA") == 1
 
     def test_update_env(self):
         """Test update_env function."""
@@ -394,11 +487,17 @@ class TestConfigSSD:
         # 1. CPU
         assert config_module.get_parallel_limit("CPU") == config_module.CPU_PARALLEL_LIMIT
 
-        # 2. GPU/NPU with mock Core
-        mock_core = mock.MagicMock()
-        mock_core.available_devices = ["GPU.0", "GPU.1"]
-        with mock.patch("openvino.Core", return_value=mock_core):
+        # 2. GPU/NPU from capped hardware registry
+        with mock.patch(
+            "modules.core.config.HARDWARE_UNITS",
+            [
+                {"type": "GPU", "id": "GPU.0", "name": "Intel GPU 0"},
+                {"type": "GPU", "id": "GPU.1", "name": "Intel GPU 1"},
+                {"type": "NPU", "id": "NPU.0", "name": "Intel NPU 0"},
+            ],
+        ):
             assert config_module.get_parallel_limit("GPU") == 2
+            assert config_module.get_parallel_limit("NPU") == 1
 
     def test_permission_error_fallbacks(self):
         """Test that PermissionError during directory creation defaults to fallbacks."""
@@ -406,11 +505,13 @@ class TestConfigSSD:
             "WHISPER_TEMP_DIR": "/fail_temp",
             "WHISPER_PERSISTENT_DIR": "/fail_persist",
             "WHISPER_STATE_DIR": "/fail_state",
-            "OV_CACHE_DIR": "/fail_cache"
+            "OV_CACHE_DIR": "/fail_cache",
         }
 
         def mock_makedirs(path, *_args, **_kwargs):
-            if any(fail_path in str(path) for fail_path in ["/fail_temp", "/fail_persist", "/fail_state", "/fail_cache"]):
+            if any(
+                fail_path in str(path) for fail_path in ["/fail_temp", "/fail_persist", "/fail_state", "/fail_cache"]
+            ):
                 raise PermissionError("Permission denied")
 
         with mock.patch.dict(os.environ, env):
@@ -426,17 +527,13 @@ class TestConfigSSD:
     def test_validate_thread_concurrency_error(self):
         """Test exception handling in validate_thread_concurrency."""
         # Force a TypeError by passing None
-        with mock.patch("modules.config.PREPROCESS_THREADS", None):
+        with mock.patch("modules.core.config.PREPROCESS_THREADS", None):
             # Should not raise any exception due to try-except
             config_module.validate_thread_concurrency()
 
     def test_capping_preprocess_threads_hardware_limit(self):
         """Test capping preprocess threads to hardware limit message."""
-        env = {
-            "ASR_PREPROCESS_DEVICE": "GPU",
-            "ASR_PREPROCESS_THREADS": "8",
-            "CPU_CORE_LIMIT": "2"
-        }
+        env = {"ASR_PREPROCESS_DEVICE": "GPU", "ASR_PREPROCESS_THREADS": "8", "CPU_CORE_LIMIT": "2"}
         with mock.patch.dict(os.environ, env):
             # We mock core.available_devices to return GPU
             mock_core = mock.MagicMock()
@@ -452,17 +549,44 @@ class TestConfigSSD:
             with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
                 mock_core = mock.MagicMock()
                 mock_core.available_devices = ["NPU"]
-                mock_core.get_property.side_effect = Exception("Property error")
+                mock_core.get_property.side_effect = RuntimeError("Property error")
                 with mock.patch("openvino.Core", return_value=mock_core):
                     importlib.reload(config_module)
                     # Verify unit was added with fallback name "Intel NPU"
-                    assert any(u['name'] == "Intel NPU" for u in config_module.HARDWARE_UNITS)
+                    assert any(u["name"] == "Intel NPU" for u in config_module.HARDWARE_UNITS)
 
     def test_intel_accelerator_detection_exception(self):
         """Test that Intel accelerator detection failure logs skipping message."""
         with mock.patch.dict(os.environ, {"ASR_DEVICE": "AUTO"}):
             with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
-                with mock.patch("openvino.Core", side_effect=Exception("OpenVINO Core init error")):
+                with mock.patch("openvino.Core", side_effect=RuntimeError("OpenVINO Core init error")):
                     importlib.reload(config_module)
                     # Skip logs error and falls back to CPU
                     assert config_module.DEVICE == "CPU"
+
+    def test_get_custom_mount_points(self):
+        """Test parsing of /proc/mounts to automatically detect custom directories."""
+        # 1. When /proc/mounts does not exist, return empty list
+        with mock.patch("os.path.exists", return_value=False):
+            assert not config_module.get_custom_mount_points()
+
+        # 2. When /proc/mounts exists, correctly parse custom mount points and ignore system ones
+        fake_mounts = """sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+udev /dev devtmpfs rw,nosuid,noexec,relatime,size=8000492k,nr_inodes=2000123,mode=755 0 0
+/dev/sda1 /tv ext4 rw,relatime 0 0
+/dev/sda2 /movies ext4 rw,relatime 0 0
+/dev/sda3 /app/data ext4 rw,relatime 0 0
+shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0
+"""
+        with (
+            mock.patch("os.path.exists", return_value=True),
+            mock.patch("builtins.open", mock.mock_open(read_data=fake_mounts)),
+        ):
+            mounts = config_module.get_custom_mount_points()
+            assert "/tv" in mounts
+            assert "/movies" in mounts
+            # System mount points and subdir mount points like /dev/shm should be filtered out
+            assert "/sys" not in mounts
+            assert "/proc" not in mounts
+            assert "/dev/shm" not in mounts

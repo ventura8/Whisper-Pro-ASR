@@ -9,6 +9,8 @@
 
 It features native hardware acceleration for **Intel Core Ultra (NPU)**, **Intel iGPUS/Arc**, and **NVIDIA CUDA**, offloading heavy AI tasks from your CPU for industrial-grade speed.
 
+Concurrency correctness is the top engineering priority: detect-language preemption is cooperative and unit-aware, critical priority waits are intentionally unbounded under saturation, and scheduler liveness is continuously validated by test gates.
+
 ---
 
 ## 🚀 Quick Start (Docker Compose)
@@ -95,8 +97,10 @@ To use this service with **Bazarr**:
 - **Global VAD & In-Memory Batch ID**: Optimized language identification using a single VAD pass and zero-I/O NumPy slicing.
 - **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt`, `vad_filter`, and `word_timestamps`.
 - **Subtitle Layout Control**: Custom character-per-line wrapping (`max_line_width`) and max line limits (`max_line_count`) for SRT/VTT output.
+- **Plex-Compatible AI Subtitle Tagging**: Subtitle files are named `<source>.<language>-ai.<format>` (e.g. `movie.en-ai.srt`). Plex maps the `-ai` suffix (ISO 3166-1 code for Anguilla) to display tracks as `<Language> (AI)` — for every language, for both transcription and translation, without falling back to `xx (Unknown)`.
+- **Subtitle Word Highlighting**: `subtitle_highlight_words=true` highlights the active spoken word in SRT/VTT output with karaoke-style per-word timing.
 - **Smart Model Lifecycle**: Configurable idle timeout (`MODEL_IDLE_TIMEOUT`) keeps models warm in memory for rapid response to bursty workloads. A deferred cleanup timer starts after the last task completes and is cancelled when new tasks arrive.
-- **Service Analytics Dashboard**: Dedicated `/analytics` page with interactive charts showing cumulative and daily breakdown of task counts and durations.
+- **Service Analytics Dashboard**: Dedicated `/analytics` page with interactive charts showing cumulative and daily breakdown of task counts and durations, categorized by endpoint (/asr, /detect-language, /v1/audio/...).
 - **Runtime Configuration**: Dynamic `/settings` endpoint allows model, device, and retention changes without container restart.
 - **Telemetry Downsampling**: Dual-layer downsampling (server + client) caps chart data at 300 points for smooth dashboard rendering during extended operation.
 
@@ -112,8 +116,11 @@ To use this service with **Bazarr**:
 - **Re-entrant Hardware Orchestration**: Intelligent thread-local locking for nested AI sub-tasks.
 - **Hybrid "Split" Architecture**: Efficiently distribute workloads across multiple accelerators (e.g., Intel NPU for isolation and NVIDIA for transcription).
 - **Priority-First Engine**: Instant sub-second pre-emption for high-priority tasks (like language detection).
+- **FIFO with Priority Yielding**: Requests are processed by `start_time` order (tie-break `task_id`) within their own priority class while language detection still preempts ASR under saturation.
+- **Stable Task Timeline**: Dashboard task cards (active + history) are displayed in deterministic `start_time` + `task_id` order for operations monitoring.
 - **Bazarr Ready**: Direct compatibility with the full media automation stack via standard formats (SRT, VTT, JSON).
 - **Industrial Telemetry**: Real-time speed multipliers, ETA calculation, and detailed hardware state reporting.
+- **Intel GPU Saturation Reporting**: Intel iGPU/Arc dashboard charts report full busy-load saturation as `100%` instead of capping at `99%`.
 - **Interactive Documentation**: Full OpenAPI/Swagger interface available at `/docs`.
 - **Live SRT Streaming**: Real-time auto-scrolling subtitle display during processing for immediate visual feedback.
 
@@ -124,6 +131,7 @@ To use this service with **Bazarr**:
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | **ASR_MODEL** | `Systran/faster-whisper-large-v3` | Model ID (HuggingFace) or local path |
+| **ASR_ENGINE** | `FASTER-WHISPER` | Selects ASR backend engine: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX` |
 | **ASR_DEVICE** | `AUTO` | Device: `AUTO`, `CUDA`, or `CPU` |
 | **ASR_PREPROCESS_DEVICE** | `AUTO` | Device for Isolation: `AUTO`, `NPU`, `GPU`, `CUDA`, or `CPU` |
 | **ENABLE_VOCAL_SEPARATION** | `true` | Pre-clean audio with UVR/MDX-NET engine |

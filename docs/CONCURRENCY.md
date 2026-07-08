@@ -2,6 +2,27 @@
 
 This document provides a technical reference for the multithreading and resource management strategies implemented in **Whisper Pro ASR**.
 
+## Concurrency-First Contract
+
+Concurrency correctness is Priority 1 for this project.
+
+- The scheduler must avoid deadlock and livelock under normal operating assumptions.
+- Synchronization waits in critical priority paths are intentionally unbounded to prevent timeout-driven request failures under load.
+- Lock ordering must remain consistent and documented.
+- Concurrency behavior changes require matching liveness tests and docs updates before merge.
+
+### Global Lock Order
+
+To avoid cyclic waits, use this order whenever more than one primitive is involved:
+
+1. `STATE.task_order_lock`
+2. `STATE.task_registry_lock`
+3. `STATE.priority_lock`
+4. `STATE.model_lock`
+5. preprocessor and model-internal locks
+
+If a call path cannot preserve this order, it must use immutable snapshots to avoid nested lock acquisition.
+
 ---
 
 ## 🏗 Heterogeneous Model Pooling
@@ -14,16 +35,24 @@ Whisper Pro uses a **Hardware Resource Pool** to balance I/O-bound tasks, CPU-bo
 |:---|:---|:---|:---|
 | `STATE.model_lock` | `threading.Semaphore` | Global | Governs total parallel tasks based on physical hardware units. |
 | `STATE.hw_pool` | `queue.Queue` | Global | Holds specific hardware IDs (e.g. `GPU.0`, `NPU.0`) for task assignment. |
-| `STATE.priority_sequential_lock` | `threading.Semaphore` | Global | Prevents CPU thrashing by governing heavy non-accelerated tasks. |
 | `model_lock_ctx` | **Re-entrant Lock** | Thread-Local | Allows nested sub-tasks (UVR → ASR → Diarization) to share the same hardware claim. |
 | `STATE.priority_lock` | `threading.Lock` | Global | Protects priority counters and pre-emption signals. |
 | `_POOL_LOCK` | `threading.Lock` | Global | Serializes model loading and unloading operations to prevent race conditions during engine state transitions. |
 
+### Indefinite Wait Policy
+
+- Unit pause confirmation waits remain active until the expected unit generation token is confirmed.
+- Unit resume waits remain active until the targeted hardware unit is resumed.
+- Hardware acquisition loops remain queued until a unit becomes available.
+- Liveness is protected by cooperative yielding and regression tests, not timeout exceptions.
+
 ### Resource Orchestration Flow
 ```mermaid
 graph TD
-    REQ["Incoming Request"] --> STD["Standardization: 16kHz WAV"]
-    STD --> TYPE{"Task Type?"}
+    REQ["Incoming Request"] --> CLS{"Endpoint Class?"}
+    CLS -->|"/asr or /v1/audio/..."| STD["Standardization: 16kHz WAV"]
+    CLS -->|"/detect-language or /detectlang"| TYPE{"Task Type?"}
+    STD --> TYPE
     
     subgraph POOL ["Heterogeneous Unit Pool"]
     SLOT1["NVIDIA GPU (CUDA)"]
@@ -55,25 +84,41 @@ graph TD
 Whisper Pro implements a **Zero-Wait Detection** system that allows high-priority tasks to interrupt batch transcriptions only when the hardware is fully saturated.
 
 ### The Yielding Workflow
-1. **Priority Arrival**: A high-priority `/detect-language` request enters the system.
+1. **Priority Arrival**: A high-priority `/detect-language` (or `/detectlang`) request enters the system.
 2. **Hardware Check**: If any unit in the `_HW_POOL` is idle, it is claimed via `model_lock_ctx` and the task proceeds.
-3. **Saturation Signal**: If all units are busy, the global `STATE.pause_requested` event is triggered.
-4. **Cooperative Yield**: Active transcription threads check this event at segment boundaries. They release their claimed hardware units, confirm the pause (`STATE.pause_confirmed`), and wait.
+3. **Saturation Signal**: If all units are busy, the scheduler marks a targeted hardware unit as paused in `STATE.unit_sync[unit_id]`.
+4. **Cooperative Yield**: The active transcription thread owning that unit checks the unit pause event at yield boundaries, releases its claimed hardware unit, confirms pause for the matching generation token, and waits on that same unit's resume event.
 5. **Priority Execution**: The priority task claims the now-free unit and executes its batch montage pipeline.
-6. **Automated Resumption**: Once the priority task completes, the `release_priority()` function is called (integrated into the `early_task_registration` cleanup). This clears the `pause_requested` state and sets the `resume_event`. The transcription threads re-acquire their units and continue exactly where they left off.
+6. **Automated Resumption**: Once the priority task completes, the `release_priority()` function is called (integrated into the `early_task_registration` cleanup). This clears the targeted unit pause request and sets that unit's resume event. The transcription thread re-acquires its unit and continues exactly where it left off.
 
 > [!NOTE]
-> **v1.0.6 Strict Priority Serialization & Yielding**:
-> - **Strict Priority Serialization**: The `STATE.priority_sequential_lock` is held for the entire context lifetime of `early_task_registration`. This ensures that concurrent priority requests are scheduled and executed sequentially, preventing race conditions that could lead to double-preemption and deadlocking standard tasks in a permanent paused state.
+> **Current Priority Yielding Behavior**:
+> - **Parallel Priority Capacity**: Priority tasks are not globally serialized; concurrent detect-language requests can run in parallel across multiple available/borrowed units.
 > - **Standard Task Yielding**: Standard tasks yield resource acquisition and loop-sleep instead of blocking on the model lock semaphore whenever priority tasks are present in the registry, preventing priority starvation.
 > - **Priority Preemption Bypass**: Running priority tasks ignore preemption requests, preventing them from pausing themselves if multiple priority tasks are queued.
 > - **Preemption Visibility**: Preempted tasks temporarily transition to `"queued"` status with a `"Paused for Priority Task"` stage, ensuring they display in the dashboard queue.
+> - **Unit-Only Gating Rule**: All pause/resume synchronization that affects execution is bound to `STATE.unit_sync[unit_id]`; shared events are compatibility mirrors only and must not gate execution.
 >
-> **v1.1.0 FFmpeg Standardization Synchronization**:
-> - **Active FFmpeg Tracking**: Standard tasks track active FFmpeg processes via a public condition variable and count state (`STANDARD_FFMPEG_COND` and `STANDARD_FFMPEG_STATE`).
-> - **Priority Yielding to FFmpeg**: Incoming high-priority requests (like `/detect-language`) dynamically block inside `wait_for_priority()` if a standard task is performing CPU-heavy FFmpeg standardization, preventing CPU over-subscription.
-> - **Dynamic Handoff**: The priority task starts immediately after the standard task's FFmpeg phase completes.
-> - **Model Lock Pre-emption**: When the standard `/asr` task finishes FFmpeg and attempts to proceed to vocal separation or inference, it will block on `model_lock_ctx` and yield to the active priority task, resuming only after the priority task finishes.
+> **FIFO Within Priority Tier (Current Scheduler Semantics)**:
+> - **Arrival Tracking**: The scheduler records per-task arrival timestamps (`task_arrival_order`) at early registration.
+> - **Same-Tier FIFO**: Resource acquisition blocks only when an earlier task of the same priority tier is still waiting for hardware.
+> - **No False Blocking**: Earlier tasks already running on a unit do not block later same-tier tasks from taking other available units.
+> - **Priority Preserved**: Detect-language (priority) tasks are never blocked by earlier standard ASR tasks.
+> - **Alias Equivalence**: `/detect-language` and `/detectlang` are treated identically by scheduler priority logic.
+>
+> **FFmpeg Coordination Note**:
+> - `wait_for_priority()` does not block on shared FFmpeg drain counters.
+> - **Scope**: Preemption decisions are based on hardware saturation, unit ownership, and unit-scoped pause/resume generation tokens.
+>
+> **Current ASR Route Checkpoints**:
+> - **Pre-Vocal-Separation Yield**: `/asr` performs a cooperative `_check_preemption()` immediately after language detection.
+> - **Pre-Inference Yield**: `/asr` performs a second cooperative `_check_preemption()` immediately before `run_transcription(...)` starts inference work.
+> - **HQ-Prep FFmpeg Yield**: During `prepare_for_uvr(...)`, FFmpeg progress updates trigger cooperative yield callbacks at stage increments so priority tasks do not wait for full HQ preparation to finish.
+> - **Goal**: Priority detect-language tasks can preempt both before expensive preprocessing and right before inference execution begins.
+>
+> **Stage-Transition Yielding (ASR Runtime)**:
+> - The ASR flow performs cooperative `_check_preemption()` checks at stage boundaries (`Initializing`, `Language Detection`, `Vocal Separation`, `Inference`, and final completion update).
+> - This ensures priority work can preempt on stage changes, not only during long-running inner loops.
 
 ---
 
@@ -115,7 +160,11 @@ When `MODEL_IDLE_TIMEOUT > 0` (or defaults to `300`), it takes precedence over `
 ### 3. Storage & Memory Hygiene
 The service implements a **Centralized Storage Hygiene** strategy. Every transient file created during a request (uploads, HQ prep files, isolated stems) is registered in a thread-local `tracked_files` registry. A mandatory `cleanup_files()` call in the request's `finally` block ensures 100% reclamation of storage space.
 
-### 4. CPU Constraint Enforcement
+### 4. Dashboard Ordering Contract
+- Active and history entries are sorted by task arrival/start time (`start_time`) to preserve operator-visible execution chronology.
+- This ordering is deterministic and independent of map/dict iteration order.
+
+### 5. CPU Constraint Enforcement
 On hardware with very limited resources (e.g., 1-CPU systems), the service automatically wraps **all** AI inference (including Whisper and UVR) in the `_CPU_LOCK`. This prevents the "thundering herd" problem where multiple AI engines attempt to over-utilize the same single CPU core, which previously caused significant latency spikes and high memory overhead.
 
 > [!IMPORTANT]

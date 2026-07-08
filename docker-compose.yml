@@ -42,6 +42,20 @@ services:
       - ASR_COMPUTE_TYPE=AUTO
       # Model Weight Source (Faster-Whisper ID or local path)
       - ASR_MODEL=Systran/faster-whisper-large-v3
+      # ASR engine backend. Supported: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
+      # AUTO resolves by available hardware in this order:
+      # CUDA -> Intel GPU -> Intel NPU -> CPU
+      # INTEL-WHISPER requires Intel GPU/NPU; otherwise runtime falls back to FASTER-WHISPER.
+      # Invalid values fail startup with a clear error.
+      - ASR_ENGINE=FASTER-WHISPER
+      # Intel Whisper long-media stability tuning (only used by INTEL-WHISPER)
+      - INTEL_ASR_CHUNK_DURATION=300
+
+      # --- [SUBTITLE PROMO CARD] ---
+      # Enable a promo subtitle card "Made with Whisper Pro ASR" for the first 3 seconds of SRT/VTT.
+      - SUBTITLE_PROMO_ENABLED=true
+      - SUBTITLE_PROMO_TEXT=Made with Whisper Pro ASR
+      - SUBTITLE_PROMO_DURATION=3.0
 
       # --- [INFERENCE PARAMETERS] ---
       # Generation Search Breadth (Higher = more accurate, lower = faster)
@@ -50,6 +64,8 @@ services:
       - ASR_BATCH_SIZE=1
 
       # --- [PREPROCESSING (UVR / MDX-NET)] ---
+      # NOTE: ASR_PREPROCESS_DEVICE controls UVR preprocessing only.
+      # It is independent from ASR_ENGINE selection for Whisper inference.
       # Target Device: AUTO, CPU, CUDA (NVIDIA), GPU (Intel), NPU (Intel)
       - ASR_PREPROCESS_DEVICE=AUTO
       # Isolation Model Filename
@@ -57,6 +73,9 @@ services:
       # Vocal Separation Logic Toggles
       - ENABLE_VOCAL_SEPARATION=true
       - ENABLE_LD_PREPROCESSING=true
+      # Coalesce identical concurrent /detect-language requests (same local_path).
+      # Keep enabled for production stability; set false to disable coalescing for test scenarios.
+      - ENABLE_LD_REQUEST_COALESCING=true
       - SMART_SAMPLING_SEARCH=false
 
       # --- [RESOURCE ALLOCATION] ---

@@ -1,9 +1,11 @@
 """Tests for SSD Write Wear Optimization."""
-import os
+
 import importlib
+import os
 import tempfile
 from unittest import mock
-import modules.config as config_module
+
+import modules.core.config as config_module
 
 
 class TestSSDOptimization:
@@ -42,7 +44,7 @@ class TestSSDOptimization:
             # 4GB free (well above the 2048 MB minimum threshold)
             mock_usage.return_value = mock.MagicMock(free=4 * 1024 * 1024 * 1024)
 
-            with mock.patch("modules.config.TEMP_DIR", "/tmp/whisper"):
+            with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 res = config_module.get_temp_dir(required_bytes=100 * 1024 * 1024)  # 100MB
                 assert res == "/tmp/whisper"
 
@@ -52,13 +54,13 @@ class TestSSDOptimization:
             # 100MB free, but we need 512MB (default min) or more
             mock_usage.return_value = mock.MagicMock(free=100 * 1024 * 1024)
 
-            with mock.patch("modules.config.TEMP_DIR", "/tmp/whisper"):
+            with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 res = config_module.get_temp_dir(required_bytes=200 * 1024 * 1024)
                 assert res == config_module.PERSISTENT_TEMP_DIR
 
     def test_get_temp_dir_error_fallback(self):
         """Test get_temp_dir falls back to persistent temp on OSError."""
         with mock.patch("shutil.disk_usage", side_effect=OSError("Drive not ready")):
-            with mock.patch("modules.config.TEMP_DIR", "/tmp/whisper"):
+            with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 res = config_module.get_temp_dir()
                 assert res == config_module.PERSISTENT_TEMP_DIR

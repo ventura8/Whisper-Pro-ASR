@@ -1,10 +1,14 @@
 [run]
-source = 
+source =
     modules
-    whisper_server.py
+    whisper_pro_asr.py
 omit =
+    tests/*
     */tests/*
     */__pycache__/*
+    check_coverage.py
+    scripts/*
+
 
 [report]
 fail_under = 90

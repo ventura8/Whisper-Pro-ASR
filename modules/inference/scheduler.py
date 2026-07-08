@@ -1,259 +1,452 @@
-"""
-Hardware Scheduling and Task Registry for Whisper Pro ASR
-"""
+"""Hardware Scheduling and Task Registry for Whisper Pro ASR."""
+
+import contextlib
 import logging
 import queue
 import threading
 import time
-import contextlib
 import uuid
-from modules import config
-from modules import utils
-from modules import logging_setup
+from types import SimpleNamespace
+
+from modules.core import config, logging_setup, utils
+from modules.inference import scheduler_state_helpers, scheduler_task_helpers
 from modules.monitoring import history_manager
 
 logger = logging.getLogger(__name__)
 
 
-class SchedulerState:
-    """Encapsulates global scheduler state to avoid global statements."""
+def _build_scheduler_state():
+    """Build scheduler state container with stable attribute names."""
+    if not config.HARDWARE_UNITS:
+        logger.warning("[Scheduler] No hardware units configured. Falling back to Host CPU.")
+        config.HARDWARE_UNITS.append({"type": "CPU", "id": "CPU", "name": "Host CPU"})
 
-    def __init__(self):
-        if not config.HARDWARE_UNITS:
-            logger.warning("[Scheduler] No hardware units configured. Falling back to Host CPU.")
-            config.HARDWARE_UNITS.append({"type": "CPU", "id": "CPU", "name": "Host CPU"})
-        self.hw_pool = queue.Queue()
-        for unit_item in config.HARDWARE_UNITS:
-            self.hw_pool.put(unit_item)
+    hw_pool = queue.Queue()
+    for unit_item in config.HARDWARE_UNITS:
+        hw_pool.put(unit_item)
 
-        self.accel_limit = len(config.HARDWARE_UNITS)
-        self.sync = {
-            "model_lock": threading.Semaphore(self.accel_limit),
-            "priority_sequential_lock": threading.Semaphore(self.accel_limit),
-            "priority_lock": threading.Lock(),
+    accel_limit = len(config.HARDWARE_UNITS)
+    model_lock = threading.Semaphore(accel_limit)
+    # Legacy field kept for backward compatibility with fixtures/tests.
+    priority_sequential_lock = threading.Semaphore(1)
+    priority_lock = threading.Lock()
+    pause_requested = threading.Event()
+    pause_confirmed = threading.Event()
+    resume_event = threading.Event()
+    resume_event.set()
+
+    unit_sync = {}
+    unit_priority_requests = {}
+    for unit_item in config.HARDWARE_UNITS:
+        u_id = unit_item["id"]
+        unit_sync[u_id] = {
             "pause_requested": threading.Event(),
             "pause_confirmed": threading.Event(),
-            "resume_event": threading.Event()
+            "resume_event": threading.Event(),
+            "pause_generation": 0,
+            "confirmed_generation": None,
         }
-        self.sync["resume_event"].set()
+        unit_sync[u_id]["resume_event"].set()
+        unit_priority_requests[u_id] = 0
 
-        self.session_stats = {
-            "active": 0,
-            "queued": 0,
-            "priority": 0
-        }
+    task_registry_lock = threading.RLock()
+    cond = threading.Condition(task_registry_lock)
 
-        self.task_registry = {}
-        self.task_registry_lock = threading.Lock()
-
-        self.unit_ownership = {}
-        self.preemptible_units = set()
-
-        self.engine_flags = {
-            "initialized": False,
-            "whisper_loaded": False,
-            "uvr_loaded": False
-        }
-
-    @property
-    def model_lock(self):
-        """Semaphore for model locking."""
-        return self.sync["model_lock"]
-
-    @property
-    def priority_sequential_lock(self):
-        """Semaphore for priority sequential tasks."""
-        return self.sync["priority_sequential_lock"]
-
-    @property
-    def priority_lock(self):
-        """Lock for priority operations."""
-        return self.sync["priority_lock"]
-
-    @property
-    def pause_requested(self):
-        """Event for pausing requested."""
-        return self.sync["pause_requested"]
-
-    @property
-    def pause_confirmed(self):
-        """Event for pause confirmed."""
-        return self.sync["pause_confirmed"]
-
-    @property
-    def resume_event(self):
-        """Event for resume."""
-        return self.sync["resume_event"]
-
-    @property
-    def active_sessions(self):
-        """Returns the number of active sessions."""
-        return self.session_stats["active"]
-
-    @active_sessions.setter
-    def active_sessions(self, val):
-        """Setter for active sessions."""
-        self.session_stats["active"] = val
-
-    @property
-    def queued_sessions(self):
-        """Returns the number of queued sessions."""
-        return self.session_stats["queued"]
-
-    @queued_sessions.setter
-    def queued_sessions(self, val):
-        """Setter for queued sessions."""
-        self.session_stats["queued"] = val
-
-    @property
-    def priority_requests(self):
-        """Returns the number of priority requests."""
-        return self.session_stats["priority"]
-
-    @priority_requests.setter
-    def priority_requests(self, val):
-        """Setter for priority requests."""
-        self.session_stats["priority"] = val
-
-    @property
-    def engine_initialized(self):
-        """Returns engine initialization status."""
-        return self.engine_flags["initialized"]
-
-    @engine_initialized.setter
-    def engine_initialized(self, val):
-        """Setter for engine initialization flag."""
-        self.engine_flags["initialized"] = val
-
-    @property
-    def whisper_loaded(self):
-        """Returns whisper loading status."""
-        return self.engine_flags["whisper_loaded"]
-
-    @whisper_loaded.setter
-    def whisper_loaded(self, val):
-        """Setter for whisper loaded flag."""
-        self.engine_flags["whisper_loaded"] = val
-
-    @property
-    def uvr_loaded(self):
-        """Returns UVR loading status."""
-        return self.engine_flags["uvr_loaded"]
-
-    @uvr_loaded.setter
-    def uvr_loaded(self, val):
-        """Setter for UVR loaded flag."""
-        self.engine_flags["uvr_loaded"] = val
+    return SimpleNamespace(
+        hw_pool=hw_pool,
+        accel_limit=accel_limit,
+        model_lock=model_lock,
+        priority_sequential_lock=priority_sequential_lock,
+        priority_lock=priority_lock,
+        pause_requested=pause_requested,
+        pause_confirmed=pause_confirmed,
+        resume_event=resume_event,
+        unit_sync=unit_sync,
+        unit_priority_requests=unit_priority_requests,
+        active_sessions=0,
+        queued_sessions=0,
+        priority_requests=0,
+        task_registry={},
+        task_registry_lock=task_registry_lock,
+        cond=cond,
+        task_arrival_order={},
+        task_order_lock=threading.Lock(),
+        unit_ownership={},
+        preemptible_units=set(),
+        targeted_units=set(),
+        pause_generation=0,
+        confirmed_generation=None,
+        engine_initialized=False,
+        whisper_loaded=False,
+        uvr_loaded=False,
+    )
 
 
-STATE = SchedulerState()
+class SchedulerState(SimpleNamespace):
+    """Backward-compatible state factory used by tests and fixtures."""
+
+    @staticmethod
+    def build():
+        """Build a fresh scheduler state instance."""
+        return _build_scheduler_state()
+
+    @staticmethod
+    def create():
+        """Alias for build() for external callers/tests."""
+        return SchedulerState.build()
+
+    def __new__(cls):
+        return cls.build()
+
+
+STATE = _build_scheduler_state()
+
+
+def _select_preemption_target_unit():
+    """Select best hardware unit to preempt."""
+    with STATE.task_registry_lock:
+        active_units = [
+            task.get("unit_id")
+            for task in STATE.task_registry.values()
+            if task.get("status") == "active" and not task.get("is_priority", False) and task.get("unit_id")
+        ]
+        unit_order = {unit["id"]: idx for idx, unit in enumerate(config.HARDWARE_UNITS)}
+        active_units.sort(key=lambda uid: unit_order.get(uid, -1), reverse=True)
+        for uid in active_units:
+            u_sync = STATE.unit_sync.get(uid)
+            if u_sync and u_sync["resume_event"].is_set():
+                return uid
+        if active_units:
+            return active_units[0]
+        for unit in config.HARDWARE_UNITS:
+            uid = unit["id"]
+            u_sync = STATE.unit_sync.get(uid)
+            if u_sync and u_sync["resume_event"].is_set():
+                return uid
+        return config.HARDWARE_UNITS[0]["id"]
+
+
+def _get_standard_task_state(task_id, thread_id):
+    """Return whether another standard task is active/initializing."""
+    has_active_standard = False
+    has_initializing_standard = False
+    with STATE.task_registry_lock:
+        if STATE.task_registry:
+            for tid, task in STATE.task_registry.items():
+                is_current = (tid == task_id) or (task.get("task_id") == task_id) or (tid == thread_id)
+                if is_current or task.get("is_priority", False):
+                    continue
+                if task.get("status") == "active":
+                    has_active_standard = True
+                    break
+                if task.get("status") == "initializing":
+                    has_initializing_standard = True
+
+        if not has_active_standard:
+            has_active_standard = (STATE.active_sessions - STATE.priority_requests) > 0
+
+    return has_active_standard, has_initializing_standard
+
+
+def _request_pause_for_target(target_unit_id):
+    """Request pause on a specific target unit using unit-scoped sync only."""
+    generation = STATE.pause_generation + 1
+    STATE.pause_generation = generation
+
+    u_sync = STATE.unit_sync.get(target_unit_id)
+    if u_sync:
+        if u_sync["resume_event"].is_set():
+            logger.info("[Scheduler] Priority request: Pausing unit %s...", target_unit_id)
+            u_sync["pause_confirmed"].clear()
+            u_sync["confirmed_generation"] = None
+            u_sync["pause_generation"] = generation
+            u_sync["resume_event"].clear()
+            u_sync["pause_requested"].set()
+            STATE.targeted_units.add(target_unit_id)
+            STATE.confirmed_generation = None
+            STATE.pause_requested.set()
+            STATE.resume_event.clear()
+            STATE.pause_confirmed.clear()
+        else:
+            logger.info("[Scheduler] Priority request: Unit %s is already pausing/paused.", target_unit_id)
+            return u_sync.get("pause_generation", generation), False
+        return u_sync.get("pause_generation", generation), True
+
+    logger.warning("[Scheduler] Missing unit sync for target %s; skipping pause request.", target_unit_id)
+    return generation, False
+
+
+def _wait_for_pause_confirmation(target_unit_id, expected_generation):
+    """Wait until pause confirmation for the requested generation is observed."""
+    last_wait_log_at = 0.0
+    with STATE.cond:
+        while True:
+            u_sync = STATE.unit_sync.get(target_unit_id) if target_unit_id else None
+            if u_sync:
+                if u_sync["pause_confirmed"].is_set():
+                    confirmed_generation = u_sync.get("confirmed_generation")
+                    if confirmed_generation in (None, expected_generation):
+                        return True
+            if scheduler_state_helpers.should_skip_pause_confirmation(STATE, target_unit_id):
+                return True
+
+            if time.time() - last_wait_log_at >= 30.0:
+                logger.info(
+                    "[Scheduler] Still waiting for pause confirmation (unit=%s, expected_generation=%s)",
+                    target_unit_id,
+                    expected_generation,
+                )
+                last_wait_log_at = time.time()
+            STATE.cond.wait(timeout=0.1)
 
 
 def wait_for_priority():
     """Handles priority task synchronization (Request pause from others)."""
-    # Mark this thread as a priority thread for the duration of the task
+    # Mark this thread as priority for the duration of the request lifecycle.
     utils.THREAD_CONTEXT.is_priority = True
 
-    # 1. Register priority request and request pause immediately to prevent race conditions
+    # Register a priority request and optionally request pause from standard workers.
     do_pause = False
+    target_unit_id = None
+    pause_generation = None
+    wait_for_confirmation = True
+    needs_activation_wait = False
+    task_id = None
+    thread_id = None
+
     with STATE.priority_lock:
         STATE.priority_requests += 1
 
-        # Calculate has_active_standard within the lock to ensure synchronization
-        has_active_standard = False
-        with STATE.task_registry_lock:
-            if STATE.task_registry:
-                thread_id = threading.get_ident()
-                for tid, task in STATE.task_registry.items():
-                    if tid != thread_id and task.get('status') == 'active' and not task.get('is_priority', False):
-                        has_active_standard = True
-                        break
+    task_id = getattr(utils.THREAD_CONTEXT, "task_id", None)
+    thread_id = getattr(utils.THREAD_CONTEXT, "registration_thread_id", None) or threading.get_ident()
+    has_active_standard, has_initializing_standard = _get_standard_task_state(task_id, thread_id)
+    if not has_active_standard and has_initializing_standard:
+        needs_activation_wait = True
+
+    if needs_activation_wait:
+        has_active_standard = scheduler_state_helpers.wait_for_standard_task_to_activate(STATE, task_id, thread_id)
+
+    with STATE.task_registry_lock:
+        has_registered_tasks = bool(STATE.task_registry)
+
+    with STATE.priority_lock:
+        if not has_active_standard:
+            has_active_standard, has_initializing_standard = _get_standard_task_state(task_id, thread_id)
+
+        # Pause only when saturated by active standard work and no preferred idle unit exists.
+
+        should_pause = STATE.active_sessions >= STATE.accel_limit and has_active_standard
+
+        if should_pause:
+            target_candidate = _select_preemption_target_unit()
+
+            if has_registered_tasks and scheduler_state_helpers.has_preferred_idle_unit(
+                STATE, config.HARDWARE_UNITS, target_candidate
+            ):
+                logger.info(
+                    "[Scheduler] Skipping preemption for target %s because a preferred idle unit exists.",
+                    target_candidate,
+                )
             else:
-                # Fallback if registry is empty (e.g. during some unit tests)
-                # Since we already incremented priority_requests, both priority requests are counted.
-                has_active_standard = (STATE.active_sessions - STATE.priority_requests) > 0
-
-        # Only pause others if we are actually at capacity (no free units) and there is a running standard task to pause
-        if STATE.active_sessions > STATE.accel_limit and has_active_standard:
-            do_pause = True
-            logger.info("[Scheduler] Priority request: Pausing other tasks...")
-            STATE.pause_requested.set()
-            STATE.resume_event.clear()
-
-    # 2. Wait until all active standard (non-priority) FFmpeg processes have completed.
-    # While we wait, standard tasks will see pause_requested as True and will not proceed to isolation/inference.
-    with utils.STANDARD_FFMPEG_COND:
-        while utils.STANDARD_FFMPEG_STATE["count"] > 0:
-            logger.info("[Scheduler] Priority task waiting for %d active standard FFmpeg processes to complete...",
-                        utils.STANDARD_FFMPEG_STATE["count"])
-            utils.STANDARD_FFMPEG_COND.wait()
-        logger.info("[Scheduler] All active standard FFmpeg processes completed. Proceeding with priority task.")
+                do_pause = True
+                target_unit_id = target_candidate
+                utils.THREAD_CONTEXT.target_unit_id = target_unit_id
+                logger.info("[Scheduler] Priority task targeting unit %s for preemption", target_unit_id)
+                if not hasattr(STATE, "unit_priority_requests"):
+                    STATE.unit_priority_requests = {}
+                STATE.unit_priority_requests[target_unit_id] = STATE.unit_priority_requests.get(target_unit_id, 0) + 1
+                pause_request = _request_pause_for_target(target_unit_id)
+                if isinstance(pause_request, tuple):
+                    pause_generation, wait_for_confirmation = pause_request
+                else:
+                    pause_generation = pause_request
+                    wait_for_confirmation = True
+                utils.THREAD_CONTEXT.target_pause_generation = pause_generation
 
     if do_pause:
-        # Wait for others to confirm they are paused
-        logger.debug("[Scheduler] Waiting for preemption confirmation...")
-        # If it takes > 30s, we proceed anyway to avoid service deadlock,
-        # but in normal operation, tasks will signal via pause_confirmed.
-        STATE.pause_confirmed.wait(timeout=30)
+        logger.debug(
+            "[Scheduler] Priority preemption requested for %s; using per-unit pause confirmation only.",
+            target_unit_id,
+        )
+
+    if do_pause and wait_for_confirmation:
+        with STATE.task_registry_lock:
+            still_active_standard = any(
+                task.get("status") == "active" and not task.get("is_priority", False)
+                for task in STATE.task_registry.values()
+            )
+        if not still_active_standard:
+            logger.debug(
+                "[Scheduler] No active standard tasks remain. Skipping preemption confirmation wait for unit %s.",
+                target_unit_id,
+            )
+            return
+
+        logger.debug("[Scheduler] Waiting for preemption confirmation on unit %s...", target_unit_id)
+        expected_generation = pause_generation if pause_generation is not None else STATE.pause_generation
+        _wait_for_pause_confirmation(
+            target_unit_id=target_unit_id,
+            expected_generation=expected_generation,
+        )
+    elif do_pause:
+        logger.debug(
+            "[Scheduler] Skipping duplicate pause confirmation wait for unit %s (already pausing/paused).",
+            target_unit_id,
+        )
+
+
+def release_unit_preemption_hold(unit_id):
+    """Release preemption hold on a specific target unit (e.g. when fallback borrowing)."""
+    with STATE.cond:
+        u_sync = STATE.unit_sync.get(unit_id)
+        if u_sync:
+            if not hasattr(STATE, "unit_priority_requests"):
+                STATE.unit_priority_requests = {}
+            current_unit_requests = max(0, STATE.unit_priority_requests.get(unit_id, 0) - 1)
+            STATE.unit_priority_requests[unit_id] = current_unit_requests
+
+            # If no targeted requests remain for this unit, resume it
+            if current_unit_requests == 0:
+                logger.info("[Scheduler] Resuming unit %s due to fallback preemption release...", unit_id)
+                u_sync["pause_requested"].clear()
+                u_sync["resume_event"].set()
+                u_sync["pause_confirmed"].clear()
+                u_sync["confirmed_generation"] = None
+                STATE.targeted_units.discard(unit_id)
+        STATE.cond.notify_all()
 
 
 def release_priority():
     """Releases priority hold and resumes paused tasks."""
-    # Safety: Only proceed if this thread actually holds a priority token
+    # Safety: only release if this thread actually holds a priority token.
     if not getattr(utils.THREAD_CONTEXT, "is_priority", False):
         return
 
-    # Reset priority flag to prevent double-release
+    # Reset thread-local priority flag to avoid double-release.
     utils.THREAD_CONTEXT.is_priority = False
 
-    try:
-        with STATE.priority_lock:
-            STATE.priority_requests = max(0, STATE.priority_requests - 1)
+    with STATE.priority_lock:
+        queued_priority_count = scheduler_state_helpers.get_queued_priority_count(
+            STATE,
+            exclude_task_id=getattr(utils.THREAD_CONTEXT, "task_id", None),
+        )
+        STATE.priority_requests = max(0, STATE.priority_requests - 1)
+        keep_pause_for_backlog = queued_priority_count >= STATE.accel_limit
+
+        with STATE.cond:
+            target_unit_id = getattr(utils.THREAD_CONTEXT, "target_unit_id", None)
+            if target_unit_id:
+                u_sync = STATE.unit_sync.get(target_unit_id)
+                if u_sync:
+                    if not hasattr(STATE, "unit_priority_requests"):
+                        STATE.unit_priority_requests = {}
+                    current_unit_requests = max(0, STATE.unit_priority_requests.get(target_unit_id, 0) - 1)
+                    STATE.unit_priority_requests[target_unit_id] = current_unit_requests
+
+                    keep_paused = keep_pause_for_backlog or current_unit_requests > 0
+                    if keep_paused:
+                        if keep_pause_for_backlog:
+                            logger.info(
+                                "[Scheduler] Keeping unit %s paused: queued priority backlog (%d) saturates capacity (%d).",
+                                target_unit_id,
+                                queued_priority_count,
+                                STATE.accel_limit,
+                            )
+                        else:
+                            logger.info(
+                                "[Scheduler] Keeping unit %s paused: %d unit-targeted priority request(s) still active.",
+                                target_unit_id,
+                                current_unit_requests,
+                            )
+                    else:
+                        logger.info("[Scheduler] Resuming unit %s...", target_unit_id)
+                        u_sync["pause_requested"].clear()
+                        u_sync["resume_event"].set()
+                        u_sync["pause_confirmed"].clear()
+                        u_sync["confirmed_generation"] = None
+                        STATE.targeted_units.discard(target_unit_id)
+                # Clear thread-local targeting metadata after release processing.
+                utils.THREAD_CONTEXT.target_unit_id = None
+                utils.THREAD_CONTEXT.target_pause_generation = None
+
             if STATE.priority_requests == 0:
-                logger.info("[Scheduler] Priority released. Active: %d | Queued: %d",
-                            STATE.active_sessions, STATE.queued_sessions)
-                STATE.pause_requested.clear()
-                STATE.resume_event.set()
-                STATE.pause_confirmed.clear()
-    finally:
-        # Note: priority_sequential_lock is now released by the early_task_registration
-        # context manager via a 'with' block.
-        pass
+                if keep_pause_for_backlog:
+                    logger.info(
+                        "[Scheduler] Priority active request completed, but queued priority tasks remain. "
+                        "Keeping targeted unit pauses while backlog (%d) saturates capacity (%d). "
+                        "Active: %d | Queued: %d",
+                        queued_priority_count,
+                        STATE.accel_limit,
+                        STATE.active_sessions,
+                        STATE.queued_sessions,
+                    )
+                else:
+                    logger.info(
+                        "[Scheduler] Priority released. Active: %d | Queued: %d",
+                        STATE.active_sessions,
+                        STATE.queued_sessions,
+                    )
+                    STATE.pause_requested.clear()
+                    STATE.resume_event.set()
+                    STATE.pause_confirmed.clear()
+                    STATE.confirmed_generation = None
+                    # Reset all unit sync primitives when no priority workload remains.
+                    STATE.targeted_units.clear()
+                    for u_sync in STATE.unit_sync.values():
+                        u_sync["pause_requested"].clear()
+                        u_sync["resume_event"].set()
+                        u_sync["pause_confirmed"].clear()
+                        u_sync["confirmed_generation"] = None
+                    for unit_id in list(getattr(STATE, "unit_priority_requests", {}).keys()):
+                        STATE.unit_priority_requests[unit_id] = 0
+
+            STATE.cond.notify_all()
 
 
 @contextlib.contextmanager
 def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=None, is_priority=False):
-    """Registers a task immediately for dashboard visibility."""
-    thread_id = threading.get_ident()
+    """
+    Context manager to handle registration and cleanup of a task lifecycle,
+    including UUID generation, registry binding, thread context assignment,
+    and priority synchronization.
+    """
     task_id = str(uuid.uuid4())
+    utils.THREAD_CONTEXT.task_id = task_id
+    thread_id = threading.get_ident()
+    utils.THREAD_CONTEXT.registration_thread_id = thread_id
     display_name = filename or getattr(utils.THREAD_CONTEXT, "filename", "Unknown")
 
-    # Determine initial status
+    # Priority tasks start queued for immediate dashboard visibility.
     initial_status = "queued" if is_priority else "initializing"
     initial_stage = "Waiting for Priority Slot" if is_priority else stage
 
-    with STATE.task_registry_lock:
-        if thread_id not in logging_setup.TASK_LOGS:
-            logging_setup.TASK_LOGS[thread_id] = []
-        STATE.task_registry[thread_id] = {
+    arrival_time = time.time()
+    with STATE.cond:
+        with logging_setup.TASK_LOGS_LOCK:
+            if task_id not in logging_setup.TASK_LOGS:
+                logging_setup.TASK_LOGS[task_id] = []
+        STATE.task_registry[task_id] = {
             "task_id": task_id,
             "filename": display_name,
-            "start_time": time.time(),
+            "start_time": arrival_time,
             "status": initial_status,
             "progress": 0,
             "stage": initial_stage,
             "type": task_type,
             "is_priority": is_priority,
+            "endpoint": getattr(utils.THREAD_CONTEXT, "endpoint", ""),
             "video_duration": getattr(utils.THREAD_CONTEXT, "total_duration", 0),
             "caller_info": getattr(utils.THREAD_CONTEXT, "caller_info", {}),
             "request_json": getattr(utils.THREAD_CONTEXT, "request_json", {}),
             "live_text": "",
-            "logs": []
+            "logs": [],
         }
+        with STATE.task_order_lock:
+            STATE.task_arrival_order[task_id] = arrival_time
+        STATE.cond.notify_all()
 
-    # 1. Hardware-aware enforcement for priority tasks
-    # Using 'with' satisfies Pylint R1732 (consider-using-with)
-    lock_ctx = STATE.priority_sequential_lock if is_priority else contextlib.nullcontext()
+    # Priority task ordering is enforced at acquisition time.
+    lock_ctx = contextlib.nullcontext()
 
     try:
         if is_priority:
@@ -261,63 +454,54 @@ def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=N
         with lock_ctx:
             if is_priority:
                 decrement_queued_session()
-                with STATE.task_registry_lock:
-                    if thread_id in STATE.task_registry:
-                        STATE.task_registry[thread_id]["status"] = "initializing"
-                        STATE.task_registry[thread_id]["stage"] = stage
             try:
                 yield
-            finally:
-                pass
+            except Exception as e:
+                with STATE.cond:
+                    if task_id in STATE.task_registry:
+                        STATE.task_registry[task_id]["status"] = "failed"
+                    STATE.cond.notify_all()
+                raise e
     finally:
-        # Ensure priority is released if this task was a priority task
-        # Since initialize_task_context calls wait_for_priority, we should always try to release
+        # Always release priority if this task entered priority flow.
         release_priority()
 
-        with STATE.task_registry_lock:
-            if thread_id in STATE.task_registry:
-                task = STATE.task_registry[thread_id]
-                task['logs'] = logging_setup.TASK_LOGS.get(thread_id, [])
-                task['status'] = 'completed' if task.get('status') != 'failed' else 'failed'
-                task['progress'] = 100
-                history_manager.log_completed_task(task.copy())
-                del STATE.task_registry[thread_id]
-            if thread_id in logging_setup.TASK_LOGS:
-                del logging_setup.TASK_LOGS[thread_id]
+        history_task = None
+        with STATE.cond:
+            if task_id in STATE.task_registry:
+                task = STATE.task_registry[task_id]
+                with logging_setup.TASK_LOGS_LOCK:
+                    task["logs"] = logging_setup.TASK_LOGS.get(task_id, [])
+                task["status"] = "completed" if task.get("status") != "failed" else "failed"
+                task["progress"] = 100
+                history_task = task.copy()
+                del STATE.task_registry[task_id]
+            with logging_setup.TASK_LOGS_LOCK:
+                if task_id in logging_setup.TASK_LOGS:
+                    del logging_setup.TASK_LOGS[task_id]
+            # Remove from FIFO arrival-order tracking.
+            with STATE.task_order_lock:
+                if task_id in STATE.task_arrival_order:
+                    del STATE.task_arrival_order[task_id]
+            STATE.cond.notify_all()
+
+        if history_task is not None:
+            history_manager.log_completed_task(history_task)
 
 
 def cleanup_failed_task():
     """Removes task from registry on early failure."""
-    thread_id = threading.get_ident()
-    with STATE.task_registry_lock:
-        if thread_id in STATE.task_registry:
-            del STATE.task_registry[thread_id]
-        if thread_id in logging_setup.TASK_LOGS:
-            del logging_setup.TASK_LOGS[thread_id]
+    scheduler_task_helpers.cleanup_failed_task(STATE)
 
 
 def update_task_metadata(**kwargs):
     """Updates metadata for the current thread's task."""
-    thread_id = threading.get_ident()
-    with STATE.task_registry_lock:
-        if thread_id in STATE.task_registry:
-            STATE.task_registry[thread_id].update(kwargs)
-            if 'live_text' in kwargs:
-                logger.debug("[Scheduler] Updated live_text for task %s",
-                             STATE.task_registry[thread_id].get('task_id'))
-        else:
-            logger.warning("[Scheduler] Attempted to update metadata for unknown thread %s. Keys: %s",
-                           thread_id, list(kwargs.keys()))
+    scheduler_task_helpers.update_task_metadata(STATE, logger, **kwargs)
 
 
 def update_task_progress(progress, stage=None):
     """Updates progress percentage and stage."""
-    thread_id = threading.get_ident()
-    with STATE.task_registry_lock:
-        if thread_id in STATE.task_registry:
-            STATE.task_registry[thread_id]["progress"] = progress
-            if stage:
-                STATE.task_registry[thread_id]["stage"] = stage
+    scheduler_task_helpers.update_task_progress(STATE, progress, stage=stage)
 
 
 def increment_active_session():
@@ -348,7 +532,6 @@ def get_preemptible_unit():
     """Finds a unit that can be borrowed from a paused task."""
     with STATE.task_registry_lock:
         for unit_id in list(STATE.preemptible_units):
-            # For now, any preemptible unit works as they all have Whisper loaded
             STATE.preemptible_units.remove(unit_id)
             logger.info("[Scheduler] Borrowing unit %s for priority task", unit_id)
             return unit_id
@@ -368,26 +551,31 @@ def unmark_unit_preemptible(unit_id):
             STATE.preemptible_units.remove(unit_id)
 
 
+def has_earlier_task(current_task_id, is_priority=None):
+    """FIFO check delegate."""
+    return scheduler_state_helpers.has_earlier_task(STATE, current_task_id, is_priority=is_priority)
+
+
+def has_queued_priority_tasks(exclude_task_id=None):
+    """Priority check delegate."""
+    return scheduler_state_helpers.has_queued_priority_tasks(STATE, exclude_task_id=exclude_task_id)
+
+
+def get_queued_priority_count(exclude_task_id=None):
+    """Priority count delegate."""
+    return scheduler_state_helpers.get_queued_priority_count(STATE, exclude_task_id=exclude_task_id)
+
+
 def get_service_stats_minimal():
-    """Lightweight status check for circular-safe metrics discovery."""
-    with STATE.task_registry_lock:
-        active = []
-        for task in STATE.task_registry.values():
-            if task.get('status') == 'active':
-                active.append({
-                    "unit_type": task.get('unit_type'),
-                    "unit_name": task.get('unit_name', ''),
-                    "unit_id": task.get('unit_id'),
-                    "stage": task.get('stage', '')
-                })
-        return {"active_tasks": active}
+    """Stats delegate."""
+    return scheduler_state_helpers.get_service_stats_minimal(STATE)
 
 
 def is_engine_initialized():
-    """Checks if any models are loaded (Placeholder, will be set by model_manager)."""
-    return STATE.engine_initialized
+    """Engine init check delegate."""
+    return scheduler_state_helpers.is_engine_initialized(STATE)
 
 
 def is_uvr_loaded():
-    """Checks if UVR is loaded (Placeholder, will be set by model_manager)."""
-    return STATE.uvr_loaded
+    """UVR load check delegate."""
+    return scheduler_state_helpers.is_uvr_loaded(STATE)

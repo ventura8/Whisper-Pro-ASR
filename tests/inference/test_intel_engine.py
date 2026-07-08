@@ -1,19 +1,17 @@
 """Tests for modules/inference/intel_engine.py using mocks."""
 
-from modules.inference import intel_engine  # pylint: disable=wrong-import-position
-import importlib
 import sys
 from argparse import Namespace
 from unittest import mock
+
 import numpy as np
 import pytest
 
 # Mock OpenVINO GenAI before any imports
 mock_genai = mock.MagicMock()
-sys.modules['openvino_genai'] = mock_genai
+sys.modules["openvino_genai"] = mock_genai
 
-
-importlib.reload(intel_engine)
+from modules.inference import intel_engine
 
 
 @pytest.fixture(autouse=True)
@@ -33,13 +31,12 @@ def test_find_split_points():
 
     # Test speech timestamps with gaps
     speech_ts = [
-        {'start': 10.0, 'end': 20.0},
-        {'start': 285.0, 'end': 295.0},  # gap around 295-310
-        {'start': 310.0, 'end': 320.0},
-        {'start': 590.0, 'end': 595.0}
+        {"start": 10.0, "end": 20.0},
+        {"start": 285.0, "end": 295.0},  # gap around 295-310
+        {"start": 310.0, "end": 320.0},
+        {"start": 590.0, "end": 595.0},
     ]
-    res = intel_engine.find_split_points(
-        600.0, speech_ts, target_chunk_len=300.0)
+    res = intel_engine.find_split_points(600.0, speech_ts, target_chunk_len=300.0)
     assert len(res) == 3
     assert res[0] == 0.0
     assert 295.0 <= res[1] <= 310.0
@@ -51,11 +48,9 @@ class TestIntelWhisperEngine:
 
     def test_init_success(self):
         """Test successful initialization."""
-        engine = intel_engine.IntelWhisperEngine(
-            "/path/to/model", device="CPU")
+        engine = intel_engine.IntelWhisperEngine("/path/to/model", device="CPU")
         assert engine.pipeline is not None
-        mock_genai.WhisperPipeline.assert_called_once_with(
-            "/path/to/model", "CPU")
+        mock_genai.WhisperPipeline.assert_called_once_with("/path/to/model", "CPU")
 
     def test_init_failure(self):
         """Test initialization failure handles exception."""
@@ -95,15 +90,14 @@ class TestIntelWhisperEngine:
         engine = intel_engine.IntelWhisperEngine("/path/to/model")
         audio = np.ones(16000, dtype=np.float32)
 
-        msg = {'start': 0.0, 'end': 0.5}
+        msg = {"start": 0.0, "end": 0.5}
 
         with mock.patch("modules.inference.vad.get_speech_timestamps", return_value=[msg]) as mock_get_timestamps:
             mock_result = mock.MagicMock()
             mock_result.chunks = []
             engine.pipeline.generate.return_value = mock_result
 
-            segments, _ = engine.transcribe(
-                audio, vad_filter=True, vad_threshold=0.5)
+            segments, _ = engine.transcribe(audio, vad_filter=True, vad_threshold=0.5)
             list(segments)
 
             mock_get_timestamps.assert_called_once()
@@ -115,8 +109,7 @@ class TestIntelWhisperEngine:
         """Test early return when VAD finds no speech."""
         engine = intel_engine.IntelWhisperEngine("/path/to/model")
         with mock.patch("modules.inference.vad.get_speech_timestamps", return_value=[]):
-            segments, info = engine.transcribe(
-                np.zeros(16000), vad_filter=True)
+            segments, info = engine.transcribe(np.zeros(16000), vad_filter=True)
             assert not list(segments)
             assert info.language == "en"
 
@@ -124,16 +117,16 @@ class TestIntelWhisperEngine:
         """Test language resolution."""
         engine = intel_engine.IntelWhisperEngine("/path/to/model")
         mock_config = mock.MagicMock()
-        mock_config.lang_to_id = {'<|en|>': 1, '<|fr|>': 2}
+        mock_config.lang_to_id = {"<|en|>": 1, "<|fr|>": 2}
         engine.pipeline.get_generation_config.return_value = mock_config
 
         mock_result = mock.MagicMock()
         mock_result.chunks = []
         engine.pipeline.generate.return_value = mock_result
 
-        segments, _ = engine.transcribe(np.zeros(10), language='fr')
+        segments, _ = engine.transcribe(np.zeros(10), language="fr")
         list(segments)
-        assert mock_config.language == '<|fr|>'
+        assert mock_config.language == "<|fr|>"
 
     def test_transcribe_tensor_sanitization(self):
         """Test tensor sanitization."""

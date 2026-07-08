@@ -1,19 +1,19 @@
 """Tests for model_manager post-processing filters."""
 
 from unittest import mock
+
 from modules.inference import model_manager
-from modules import config
 
 
 def test_post_process_silence_threshold():
     """Test that low probability segments are dropped."""
     # Mock config
-    with mock.patch("modules.config.HALLUCINATION_SILENCE_THRESHOLD", 0.85):
-        with mock.patch("modules.config.HALLUCINATION_PHRASES", []):
+    with mock.patch("modules.core.config.HALLUCINATION_SILENCE_THRESHOLD", 0.85):
+        with mock.patch("modules.core.config.HALLUCINATION_PHRASES", []):
             segments = [
                 {"text": "Normal speech", "probability": 0.90},
                 {"text": "Ghost noise", "probability": 0.80},
-                {"text": "Clear speech", "probability": 0.99}
+                {"text": "Clear speech", "probability": 0.99},
             ]
             result = {"segments": segments}
 
@@ -27,14 +27,14 @@ def test_post_process_silence_threshold():
 
 def test_post_process_repetition_threshold():
     """Test that repetitive segments are dropped after threshold."""
-    with mock.patch("modules.config.HALLUCINATION_REPETITION_THRESHOLD", 2):
-        with mock.patch("modules.config.HALLUCINATION_PHRASES", []):
+    with mock.patch("modules.core.config.HALLUCINATION_REPETITION_THRESHOLD", 2):
+        with mock.patch("modules.core.config.HALLUCINATION_PHRASES", []):
             segments = [
                 {"text": "Loop", "probability": 0.9},
                 {"text": "Loop", "probability": 0.9},  # 1 repetition (allowed)
                 {"text": "Loop", "probability": 0.9},  # 2 repetitions (dropped)
                 {"text": "Break", "probability": 0.9},
-                {"text": "Loop", "probability": 0.9}  # Reset
+                {"text": "Loop", "probability": 0.9},  # Reset
             ]
             result = {"segments": segments}
 
@@ -51,12 +51,12 @@ def test_post_process_repetition_threshold():
 
 def test_post_process_phrases():
     """Test that known hallucination phrases are dropped."""
-    with mock.patch("modules.config.HALLUCINATION_PHRASES", ["bad phrase"]):
+    with mock.patch("modules.core.config.HALLUCINATION_PHRASES", ["bad phrase"]):
         segments = [
             {"text": "Good text", "probability": 0.9},
             {"text": "Bad phrase", "probability": 0.9},
             # Keep if too long diff, logic: len(clean) < len(phrase) + 10
-            {"text": "Bad phrase here", "probability": 0.9}
+            {"text": "Bad phrase here", "probability": 0.9},
         ]
         result = {"segments": segments}
 

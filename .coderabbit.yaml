@@ -1,0 +1,22 @@
+reviews:
+  high_level_summary: true
+  review_status: true
+  poem: false
+  path_instructions:
+    - path: "modules/monitoring/templates/*.js"
+      instructions: |
+        Focus on correctness, DOM behavior, and regression risk in dashboard UI code.
+        Prefer minimal, testable changes.
+        Call out any coverage impact, especially for branch and function thresholds.
+        Keep changes aligned with npm run quality:frontend.
+    - path: "tests/js/*.test.js"
+      instructions: |
+        Keep tests deterministic and jsdom-friendly.
+        Prefer focused edge-case coverage over broad integration-only assertions.
+        Avoid timing-sensitive assertions unless fake timers are used.
+    - path: "modules/**/*.py"
+      instructions: |
+        Focus on correctness, error handling, and compatibility with the existing Python service architecture.
+        Prefer small, targeted refactors over broad rewrites.
+        Call out missing tests, especially for branch-heavy or concurrency-sensitive code.
+        Check that changes keep alignment with the existing pytest and coverage workflow.

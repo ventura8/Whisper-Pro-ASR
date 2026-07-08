@@ -4,18 +4,20 @@ Logging Configuration and Performance Diagnostics
 This module initializes the global logging system, applies noisy warning filters,
 and builds the interactive hardware-diagnostic banner displayed at startup.
 """
-import os
+
+import importlib
 import logging
+import os
 import sys
 import threading
 from logging.handlers import TimedRotatingFileHandler
-import importlib
-from modules import config
-from modules import utils
+
+from modules.core import config, utils
 
 # Thread-safe global log buffer for dashboard visibility
 # Key: thread_id, Value: list of strings
 TASK_LOGS = {}
+TASK_LOGS_LOCK = threading.Lock()
 
 # --- [GLOBAL LOGGING CONFIGURATION] ---
 LOG_LEVEL = logging.INFO
@@ -27,8 +29,7 @@ def setup_logging():
     log_level = sys.modules[__name__].LOG_LEVEL
 
     # Configure root logger with the desired format
-    logging.basicConfig(level=log_level, format='%(asctime)s %(task_ctx)s %(message)s',
-                        force=True, stream=sys.stdout)
+    logging.basicConfig(level=log_level, format="%(asctime)s %(task_ctx)s %(message)s", force=True, stream=sys.stdout)
 
     # Re-apply filters to the newly created handlers (basicConfig removes old ones)
     for _h in logging.root.handlers[:]:
@@ -37,6 +38,7 @@ def setup_logging():
     # Ensure log buffer is also present
     if log_buffer not in logging.root.handlers:
         logging.root.addHandler(log_buffer)
+    _apply_standard_filters(log_buffer)
 
     # Ensure file handler is present (to persist logs across basicConfig(force=True))
     fh = get_file_handler()
@@ -58,8 +60,9 @@ def _apply_standard_filters(handler):
 
 # Suppress noisy library-level logging for transformers and optimum
 try:
-    import transformers
     import optimum.utils.logging
+    import transformers
+
     transformers.utils.logging.set_verbosity_error()
     optimum.utils.logging.set_verbosity_error()
 except ImportError:  # pragma: no cover
@@ -74,15 +77,15 @@ class ContextualFilter(logging.Filter):
     def filter(self, record):
         """Inject filename and step info into log record."""
         # Allow pre-existing task_ctx to persist (useful for logo/banner)
-        if hasattr(record, 'task_ctx'):
+        if hasattr(record, "task_ctx"):
             return True
 
-        filename = getattr(utils.THREAD_CONTEXT, 'filename', 'System')
-        step_info = getattr(utils.THREAD_CONTEXT, 'step_info', None)
+        filename = getattr(utils.THREAD_CONTEXT, "filename", None) or "System"
+        step_info = getattr(utils.THREAD_CONTEXT, "step_info", None)
 
         # Logic: If it's a System task, we rely on explicit prefixes in the message
         # (e.g. [System], [Engine]) to avoid [System] [System] redundancy.
-        if filename == 'System' and not step_info:
+        if filename == "System" and not step_info:
             record.task_ctx = ""
             return True
 
@@ -108,11 +111,11 @@ class IgnoreSpecificWarnings(logging.Filter):
         # Suppress common but non-critical AI backend messages
         suppressions = [
             "default values have been modified",  # generation_config defaults
-            "a custom logits processor of type",   # processor registration
-            "chunk_length_s",                      # experimental feature warnings
-            "device set to use cpu",               # CPU fallback notices
-            "will use cpu instead",                # CPU fallback notices
-            "this is a development server"         # Flask dev mode warning
+            "a custom logits processor of type",  # processor registration
+            "chunk_length_s",  # experimental feature warnings
+            "device set to use cpu",  # CPU fallback notices
+            "will use cpu instead",  # CPU fallback notices
+            "this is a development server",  # Flask dev mode warning
         ]
 
         if any(substring in msg for substring in suppressions):
@@ -151,20 +154,26 @@ class LogBufferHandler(logging.Handler):
 
     def emit(self, record):
         try:
-            thread_id = threading.get_ident()
-            # We only store logs if a registry entry exists for this thread
-            if thread_id in TASK_LOGS:
-                msg = self.format(record)
-                TASK_LOGS[thread_id].append(msg)
-                # No truncation: capturing all logs for the duration of the task.
-                # Note: Memory is automatically reclaimed when the task finishes.
+            task_id = getattr(utils.THREAD_CONTEXT, "task_id", None)
+            thread_id = getattr(utils.THREAD_CONTEXT, "registration_thread_id", None) or threading.get_ident()
+            with TASK_LOGS_LOCK:
+                if task_id and task_id in TASK_LOGS:
+                    msg = self.format(record)
+                    TASK_LOGS[task_id].append(msg)
+                    return
+                # We only store logs if a registry entry exists for this thread
+                if thread_id in TASK_LOGS:
+                    msg = self.format(record)
+                    TASK_LOGS[thread_id].append(msg)
+                    # No truncation: capturing all logs for the duration of the task.
+                    # Note: Memory is automatically reclaimed when the task finishes.
         except (AttributeError, ValueError, TypeError):
             pass
 
 
 # Apply filters to the root logger and specific third-party modules
 log_buffer = LogBufferHandler()
-log_buffer.setFormatter(logging.Formatter('%(asctime)s %(message)s', datefmt='%H:%M:%S'))
+log_buffer.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
 
 for hand in logging.root.handlers:
     _apply_standard_filters(hand)
@@ -185,12 +194,8 @@ def get_file_handler():
         os.makedirs(config.LOG_DIR, exist_ok=True)
         # Retention is configurable via environment, defaults to 7 days
         retention_days = int(os.environ.get("LOG_RETENTION_DAYS", 7))
-        handler = TimedRotatingFileHandler(
-            log_file, when="D", interval=1, backupCount=retention_days, encoding="utf-8"
-        )
-        handler.setFormatter(logging.Formatter(
-            '%(asctime)s %(task_ctx)s [%(levelname)s] %(message)s'
-        ))
+        handler = TimedRotatingFileHandler(log_file, when="D", interval=1, backupCount=retention_days, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(task_ctx)s [%(levelname)s] %(message)s"))
         _apply_standard_filters(handler)
         _FILE_HANDLER_HOLDER[0] = handler
         return _FILE_HANDLER_HOLDER[0]
@@ -215,18 +220,12 @@ _INIT_HANDLER = get_file_handler()
 if _INIT_HANDLER:
     logging.root.addHandler(_INIT_HANDLER)
 
-LOGGERS_TO_FILTER = [
-    "transformers",
-    "optimum",
-    "optimum.intel",
-    "openvino",
-    "werkzeug"
-]
+LOGGERS_TO_FILTER = ["transformers", "optimum", "optimum.intel", "openvino", "werkzeug", "uvicorn.access"]
 
 for logger_name in LOGGERS_TO_FILTER:
     _logger = logging.getLogger(logger_name)
     _logger.addFilter(IgnoreSpecificWarnings())
-    if logger_name == "werkzeug":
+    if logger_name in ["werkzeug", "uvicorn.access"]:
         _logger.addFilter(WerkzeugStatusFilter())
     _logger.propagate = True
 
@@ -250,8 +249,11 @@ def _extract_hardware_properties(core, real_device):
     info_lines = []
     supported_props = core.get_property(real_device, "SUPPORTED_PROPERTIES")
     skip_props = {
-        "SUPPORTED_PROPERTIES", "FULL_DEVICE_NAME", "DEVICE_ID",
-        "CACHING_PROPERTIES", "SUPPORTED_CONFIG_KEYS"
+        "SUPPORTED_PROPERTIES",
+        "FULL_DEVICE_NAME",
+        "DEVICE_ID",
+        "CACHING_PROPERTIES",
+        "SUPPORTED_CONFIG_KEYS",
     }
 
     for prop_key in supported_props:
@@ -300,8 +302,7 @@ def _get_device_properties(device_alias):
 
         # Get Descriptive Name
         try:
-            device_full_name = core.get_property(
-                real_device, "FULL_DEVICE_NAME")
+            device_full_name = core.get_property(real_device, "FULL_DEVICE_NAME")
         except tuple([Exception]):
             device_full_name = real_device
 
@@ -359,11 +360,7 @@ def _banner_logo():
 
 def _model_and_cache_status():
     """Assess local model availability and OpenVINO kernel cache state."""
-    model_status = (
-        "Locally Found (Fast)"
-        if os.path.exists(config.MODEL_ID)
-        else "Hugging Face (Download/Cache)"
-    )
+    model_status = "Locally Found (Fast)" if os.path.exists(config.MODEL_ID) else "Hugging Face (Download/Cache)"
     cache_dir = config.OV_CACHE_DIR
     cache_status = (
         "FOUND (Optimized Load)"
@@ -375,11 +372,7 @@ def _model_and_cache_status():
 
 def _threads_str():
     """Retrieve current thread allocation settings."""
-    return (
-        f"ASR={config.ASR_THREADS} | "
-        f"Preprocess={config.PREPROCESS_THREADS} | "
-        f"FFmpeg={config.FFMPEG_THREADS}"
-    )
+    return f"ASR={config.ASR_THREADS} | Preprocess={config.PREPROCESS_THREADS} | FFmpeg={config.FFMPEG_THREADS}"
 
 
 def _unique_device_props(asr_props, prep_props):
@@ -397,15 +390,9 @@ def _banner_config_lines(cfg):
     if config.ASR_ENGINE == "INTEL-WHISPER":
         asr_runtime_val = f"OpenVINO ({config.DEVICE})"
     else:
-        asr_runtime_val = (
-            f"{config.ASR_ENGINE_DEVICE.upper()} "
-            f"(Compute: {config.ASR_ENGINE_COMPUTE_TYPE})"
-        )
+        asr_runtime_val = f"{config.ASR_ENGINE_DEVICE.upper()} (Compute: {config.ASR_ENGINE_COMPUTE_TYPE})"
 
-    preprocess_val = (
-        f"Vocals={config.ENABLE_VOCAL_SEPARATION} | "
-        f"LD-Pre={config.ENABLE_LD_PREPROCESSING}"
-    )
+    preprocess_val = f"Vocals={config.ENABLE_VOCAL_SEPARATION} | LD-Pre={config.ENABLE_LD_PREPROCESSING}"
     lines = [
         "================================================================",
         f"      {config.APP_NAME} {config.VERSION}",
@@ -413,6 +400,8 @@ def _banner_config_lines(cfg):
         "  [ENGINE CONFIG]",
         f"  {'Whisper Model ID':<{w}}: {_get_real_model_name()}",
         f"  {'Vocal Separator Model ID':<{w}}: {_get_vocal_separator_model_display()}",
+        f"  {'ASR Engine':<{w}}: {config.ASR_ENGINE}",
+        f"  {'ASR Engine Source':<{w}}: {getattr(config, 'ASR_ENGINE_SOURCE', 'explicit')}",
         f"  {'Beam Size':<{w}}: {config.DEFAULT_BEAM_SIZE}",
         f"  {'Threads':<{w}}: {cfg['threads']}",
         f"  {'Preprocess Flags':<{w}}: {preprocess_val}",
@@ -429,11 +418,13 @@ def _banner_config_lines(cfg):
         lines.extend(cfg["unique_props"])
         lines.append("")
 
-    lines.extend([
-        f"  {'Model Source':<{w}}: {cfg['model_status']}",
-        f"  {'Binary Cache Status':<{w}}: {cfg['cache_status']}",
-        "================================================================",
-    ])
+    lines.extend(
+        [
+            f"  {'Model Source':<{w}}: {cfg['model_status']}",
+            f"  {'Binary Cache Status':<{w}}: {cfg['cache_status']}",
+            "================================================================",
+        ]
+    )
     return lines
 
 
@@ -443,10 +434,10 @@ def log_banner():
     model_status, cache_status = _model_and_cache_status()
     threads = _threads_str()
 
-    logger.info("%sWhisper Pro ASR Startup%s", "\033[96m", "\033[0m", extra={'task_ctx': ''})
+    logger.info("%sWhisper Pro ASR Startup%s", "\033[96m", "\033[0m", extra={"task_ctx": ""})
     for logo_line in logo.split("\n"):
         if logo_line.strip():
-            logger.info("%s%s%s", "\033[96m", logo_line, "\033[0m", extra={'task_ctx': ''})
+            logger.info("%s%s%s", "\033[96m", logo_line, "\033[0m", extra={"task_ctx": ""})
 
     # Fetch hardware details
     asr_full, asr_props = _get_device_properties(config.DEVICE)
@@ -462,12 +453,12 @@ def log_banner():
         "threads": threads,
         "asr_display": asr_display,
         "prep_display": prep_display,
-        "resource_pool": ", ".join([u['id'] for u in config.HARDWARE_UNITS]),
+        "resource_pool": ", ".join([u["id"] for u in config.HARDWARE_UNITS]),
         "unique_props": unique_props,
     }
 
     for line in _banner_config_lines(cfg):
         if line.startswith("==="):
-            logger.info("%s", line, extra={'task_ctx': ''})
+            logger.info("%s", line, extra={"task_ctx": ""})
         else:
             logger.info("%s", line)

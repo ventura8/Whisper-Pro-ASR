@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Pro Analytics</title>
+    <meta name="description" content="Detailed historical performance and usage analytics for Whisper Pro ASR service.">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' style='stop-color:%2300d2ff;stop-opacity:1' /><stop offset='100%25' style='stop-color:%233a7bd5;stop-opacity:1' /></linearGradient></defs><path d='M6 10 L11 22 L16 12 L21 22 L26 10' fill='none' stroke='url(%23g)' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/><path d='M4 16 L6 16 M26 16 L28 16' fill='none' stroke='url(%23g)' stroke-width='2' stroke-linecap='round'/></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Roboto:wght@300;400;500;700&family=Roboto+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Sharp" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        /* {{ANALYTICS_CSS}} */
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-title">
+            <span class="material-icons-sharp" style="font-size: 32px; color: var(--md-sys-color-primary)">bar_chart</span>
+            <h1>Whisper Pro Analytics</h1>
+        </div>
+        <div class="header-actions">
+            <a href="/dashboard" class="btn-action btn-secondary" id="btn-back">
+                <span class="material-icons-sharp" style="font-size: 18px">dashboard</span>
+                Dashboard
+            </a>
+            <button onclick="exportJson()" class="btn-action" id="btn-export">
+                <span class="material-icons-sharp" style="font-size: 18px">download</span>
+                Export Data
+            </button>
+        </div>
+    </header>
+
+    <div class="stats-grid">
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">all_inclusive</span> All-Time Processed</div>
+            <div class="card-value" id="val-all-time">--</div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">calendar_month</span> This Month's Processed</div>
+            <div class="card-value" id="val-this-month">--</div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">task_alt</span> Total Tasks</div>
+            <div class="card-value" id="val-total-tasks">--</div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">today</span> Today's Processed</div>
+            <div class="card-value" id="val-today">--</div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">playlist_add_check</span> Today's Tasks</div>
+            <div class="card-value" id="val-today-tasks">--</div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="material-icons-sharp">hourglass_empty</span> Avg Task Duration</div>
+            <div class="card-value" id="val-avg-duration">--</div>
+        </div>
+    </div>
+
+    <div class="section-title" style="margin-top: 12px; margin-bottom: 4px;"><span class="material-icons-sharp">extension</span> Endpoint Cumulative Breakdown</div>
+    <div class="stats-grid">
+        <div class="card" style="border-left: 4px solid var(--md-sys-color-primary);">
+            <div class="card-title"><span class="material-icons-sharp">keyboard</span> /asr Endpoints</div>
+            <div class="card-value" id="val-asr-cumulative">--</div>
+            <div style="font-size: 12px; color: var(--md-sys-color-outline)" id="val-asr-count">0 tasks</div>
+        </div>
+        <div class="card" style="border-left: 4px solid var(--md-sys-color-warning);">
+            <div class="card-title"><span class="material-icons-sharp">translate</span> /detect-language</div>
+            <div class="card-value" id="val-detectlang-cumulative">--</div>
+            <div style="font-size: 12px; color: var(--md-sys-color-outline)" id="val-detectlang-count">0 tasks</div>
+        </div>
+        <div class="card" style="border-left: 4px solid var(--md-sys-color-success);">
+            <div class="card-title"><span class="material-icons-sharp">settings_input_component</span> /v1/audio/...</div>
+            <div class="card-value" id="val-audio-cumulative">--</div>
+            <div style="font-size: 12px; color: var(--md-sys-color-outline)" id="val-audio-count">0 tasks</div>
+        </div>
+    </div>
+
+    <div class="layout-grid">
+        <div class="charts-container">
+            <div class="chart-card">
+                <div class="section-title"><span class="material-icons-sharp">show_chart</span> Daily Tasks Completed</div>
+                <div id="tasksChart" class="chart-element"></div>
+            </div>
+            <div class="chart-card">
+                <div class="section-title"><span class="material-icons-sharp">hourglass_full</span> Daily Transcription Volume (Minutes)</div>
+                <div id="durationChart" class="chart-element"></div>
+            </div>
+        </div>
+
+        <div class="table-card">
+            <div class="section-title"><span class="material-icons-sharp">list_alt</span> Daily Breakdown History</div>
+            <div class="table-container">
+                <table id="daily-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Total Tasks</th>
+                            <th>/asr</th>
+                            <th>/detect-language</th>
+                            <th>/v1/audio/...</th>
+                            <th>Total Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: var(--md-sys-color-secondary)">Loading...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="refresh-indicator" id="last-update">Updating...</div>
+
+    <script>
+        // {{ANALYTICS_JS}}
+    </script>
+</body>
+</html>

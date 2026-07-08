@@ -3,9 +3,27 @@
 This skill automates the process of synchronizing all project documentation with the current state of the codebase.
 
 ## Objective
-Update `README.md`, all files in `docs/`, and all Mermaid diagrams in `.md` files to reflect recent architectural changes including Speaker Diarization (WhisperX), ASR parameter customization, Model Idle Timeout, and Subtitle Layout Customization.
+Review the whole current commit for documentation drift, then update `README.md`, all files in `docs/`, and all Mermaid diagrams in `.md` files to reflect recent architectural changes including Speaker Diarization (WhisperX), ASR parameter customization, Model Idle Timeout, and Subtitle Layout Customization.
+
+Also enforce the Concurrency-First policy: concurrency correctness must be reflected consistently across user docs and agent governance docs.
+Also enforce endpoint taxonomy consistency: `/asr` and `/v1/audio/...` are one standard ASR class; `/detect-language` and `/detectlang` are one priority language-ID class.
+
+## Required Concurrency-First Checklist
+- `README.md`: includes project-level concurrency priority statement.
+- `Instructions.md`: includes mandatory concurrency checklist.
+- `docs/CONCURRENCY.md`: canonical lock order and bounded-wait policy.
+- `docs/ARCHITECTURE.md`: concurrency safety/liveness boundaries.
+- `docs/API.md`: endpoint concurrency semantics.
+- `docs/TUNING.md`: liveness-safe tuning guidance.
+- `docs/SETUP.md`: concurrency verification commands.
+- `docs/DOCKERHUB_DESCRIPTION.md`: concise reliability wording.
+- `.agent/instructions.md` and relevant `.agent/skills/*.md`: concurrency-first governance alignment.
+- `docs/API.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/CONCURRENCY.md`, `Instructions.md`: endpoint taxonomy and alias policy alignment.
 
 ## Procedure
+
+### 0. Review the Full Current Commit
+Before editing docs, inspect the full current commit diff so documentation and release notes are checked against every changed file, not just the obvious feature surface.
 
 ### 1. Update Mermaid Diagrams
 Locate and update Mermaid diagrams in all project `.md` files to match the current architecture, including the diarization post-processing pipeline and idle timeout monitor thread.

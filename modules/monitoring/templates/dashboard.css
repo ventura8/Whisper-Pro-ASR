@@ -328,9 +328,18 @@ h1 { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 28px; }
 .stat-grid-inner {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px;
 }
+.chart-stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+    margin-bottom: 12px;
+}
 .stat-box {
     padding: 16px; background: var(--item-bg); border-radius: 16px; border: 1px solid var(--border-color);
     transition: background-color 0.3s, border-color 0.3s;
+}
+.stat-box-compact {
+    padding: 14px 16px;
 }
 .stat-label { font-size: 11px; color: var(--md-sys-color-secondary); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; }
 .stat-value { font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 500; }

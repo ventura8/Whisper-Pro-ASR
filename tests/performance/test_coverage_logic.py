@@ -1,6 +1,8 @@
 """Comprehensive coverage for the coverage check utility."""
+
 import xml.etree.ElementTree as ET
 from unittest import mock
+
 import check_coverage
 
 
@@ -25,8 +27,7 @@ def test_run_report_success():
         with mock.patch("check_coverage.logger") as mock_logger:
             check_coverage.run_report()
             # Just check that it was called with the right data
-            mock_logger.info.assert_any_call(
-                mock.ANY, mock.ANY, "modules/mod1.py", 90.0)
+            mock_logger.info.assert_any_call(mock.ANY, mock.ANY, "modules/mod1.py", 90.0)
             mock_logger.info.assert_any_call(mock.ANY, 95.0)
 
 

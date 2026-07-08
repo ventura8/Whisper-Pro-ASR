@@ -1,56 +1,50 @@
 """
 System and Diagnostic Routes for Whisper Pro ASR
 """
+
+import json
 import logging
 import os
-from flask import Blueprint, request, jsonify, send_from_directory
-from modules import config, utils, logging_setup
-from modules.monitoring import dashboard, history_manager
-from modules.inference import model_manager
 
-bp = Blueprint('system', __name__)
+import anyio
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from modules.core import config, engine_registry, logging_setup, utils
+from modules.inference import model_manager
+from modules.monitoring import dashboard, history_manager
+
+router = APIRouter(tags=["System"])
 logger = logging.getLogger(__name__)
 
 
-@bp.route('/', methods=['GET'])
-def root():
+@router.get("/")
+def root(request: Request):
     """
     Service Health Check / Dashboard
     ---
-    tags:
-      - System
-    summary: Check service status or view dashboard.
-    description: Returns JSON health status or HTML dashboard depending on Accept header.
-    responses:
-      200:
-        description: Service is healthy.
+    Returns JSON health status or HTML dashboard depending on Accept header.
     """
-    if 'text/html' in request.headers.get('Accept', ''):
-        return dashboard.get_dashboard_html()
+    if "text/html" in request.headers.get("accept", ""):
+        return HTMLResponse(content=dashboard.get_dashboard_html())
 
     logger.info("[System] Health check (JSON): OK")
-    return jsonify({
+    return {
         "message": "Whisper ASR Webservice is working",
         "status": "healthy",
         "app": config.APP_NAME,
         "version": config.VERSION,
-        "dashboard": f"{request.host_url}dashboard"
-    })
+        "dashboard": f"{request.base_url}dashboard",
+    }
 
 
-@bp.route('/status', methods=['GET'])
-@bp.route('/system/stats', methods=['GET'])
+@router.get("/status")
+@router.get("/system/stats")
 def status():
     """
     Hardware and Model Diagnostics
     ---
-    tags:
-      - System
-    summary: Get real-time telemetry and model state.
-    description: Returns CPU, Memory, GPU/NPU utilization and active session counts.
-    responses:
-      200:
-        description: Current system metrics.
+    Returns CPU, Memory, GPU/NPU utilization and active session counts.
     """
     stats = dashboard.get_status_data()
     # Add 'telemetry' alias for test compatibility if one is missing
@@ -64,91 +58,79 @@ def status():
         stats["system"] = {}
 
     # Add 'engines' for test compatibility
-    if "engines" not in stats:
+    if "engines" not in stats or not isinstance(stats.get("engines"), dict):
         stats["engines"] = {}
 
-    logger.debug("[System] Status check: %d active, %d queued",
-                 stats.get("active_sessions", 0), stats.get("queued_sessions", 0))
-    return jsonify(stats)
+    engine_meta = {
+        "selected": config.ASR_ENGINE,
+        "source": getattr(config, "ASR_ENGINE_SOURCE", "explicit"),
+        "resolution": getattr(
+            config,
+            "ASR_ENGINE_RESOLUTION",
+            getattr(config, "asr_engine_resolution", f"explicit -> {config.ASR_ENGINE}"),
+        ),
+        "supported": engine_registry.supported_engines(),
+    }
+    stats["engines"].update(engine_meta)
+    stats["asr_engine"] = engine_meta["selected"]
+    stats["supported_asr_engines"] = engine_meta["supported"]
+
+    logger.debug(
+        "[System] Status check: %d active, %d queued", stats.get("active_sessions", 0), stats.get("queued_sessions", 0)
+    )
+    return stats
 
 
-@bp.route('/history', methods=['GET'])
-@bp.route('/system/history', methods=['GET'])
+@router.get("/history")
+@router.get("/system/history")
 def get_history():
     """
     Retrieve full task history
     ---
-    tags:
-      - System
-    summary: Get the list of recently completed and active tasks.
-    responses:
-      200:
-        description: A list of task objects.
+    Get the list of recently completed and active tasks.
     """
-    return jsonify(history_manager.get_history())
+    return history_manager.get_history()
 
 
-@bp.route('/system/history/clear', methods=['POST'])
+@router.post("/system/history/clear")
 def clear_history():
     """
     Purge all task history
     ---
-    tags:
-      - System
-    summary: Clear all task records from the history manager.
-    responses:
-      200:
-        description: History cleared successfully.
+    Clear all task records from the history manager.
     """
     history_manager.clear_history()
-    return jsonify({"status": "success", "message": "History cleared"})
+    return {"status": "success", "message": "History cleared"}
 
 
-@bp.route('/system/cleanup', methods=['POST'])
+@router.post("/system/cleanup")
 def trigger_cleanup():
     """
     Manually trigger temporary asset cleanup
     ---
-    tags:
-      - System
-    summary: Force removal of old temporary audio files.
-    responses:
-      200:
-        description: Cleanup routine triggered.
+    Force removal of old temporary audio files.
     """
     utils.purge_temporary_assets()
     utils.cleanup_old_files(config.LOG_DIR, days=config.LOG_RETENTION_DAYS)
-    return jsonify({"status": "success", "message": "Cleanup triggered"})
+    return {"status": "success", "message": "Cleanup triggered"}
 
 
-@bp.route('/dashboard', methods=['GET'])
+@router.get("/dashboard")
 def render_dashboard():
     """
     Direct Dashboard Access
     ---
-    tags:
-      - System
-    summary: View the HTML monitoring dashboard.
-    responses:
-      200:
-        description: Rendered HTML dashboard.
+    View the HTML monitoring dashboard.
     """
-    return dashboard.get_dashboard_html()
+    return HTMLResponse(content=dashboard.get_dashboard_html())
 
 
-@bp.route('/logs/download', methods=['GET'])
+@router.get("/logs/download")
 def download_logs():
     """
     System Log Export
     ---
-    tags:
-      - System
-    summary: Download the system log file.
-    responses:
-      200:
-        description: Log file stream.
-      404:
-        description: Log file not found.
+    Download the system log file.
     """
     log_dir = config.LOG_DIR
     log_name = "whisper_pro.log"
@@ -161,7 +143,7 @@ def download_logs():
 
     if not os.path.exists(log_path):
         logger.error("[System] Log download failed: File not found at %s", log_path)
-        return jsonify({"error": "Log file not found"}), 404
+        return JSONResponse(content={"error": "Log file not found"}, status_code=404)
 
     # FORCE FLUSH all logging handlers to ensure the latest logs are on disk
     try:
@@ -171,126 +153,139 @@ def download_logs():
         logger.debug("[System] Minor error during log flush: %s", e)
 
     try:
-        response = send_from_directory(
-            log_dir,
-            log_name,
-            as_attachment=True,
-            mimetype='text/plain',
-            max_age=0
-        )
-        # Aggressive cache busting for the latest logs
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, post-check=0, pre-check=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
+        with open(log_path, "rb") as f:
+            content = f.read()
+        headers = {
+            "Content-Disposition": f'attachment; filename="{log_name}"',
+            "Cache-Control": "no-cache, no-store, must-revalidate, post-check=0, pre-check=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        return Response(content=content, media_type="text/plain", headers=headers)
     except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as e:
         logger.error("[System] Log download error: %s", e)
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-@bp.route('/settings', methods=['GET', 'POST'])
-@bp.route('/system/settings', methods=['GET', 'POST'])
-def update_settings():
+@router.get("/settings")
+@router.get("/system/settings")
+def get_settings():
+    """View current service settings."""
+    return {
+        "ASR_MODEL": config.ASR_MODEL,
+        "ASR_DEVICE": config.ASR_DEVICE,
+        "ASR_ENGINE": config.ASR_ENGINE,
+        "TELEMETRY_RETENTION_HOURS": int(os.environ.get("TELEMETRY_RETENTION_HOURS", 24)),
+    }
+
+
+@router.post("/settings")
+@router.post("/system/settings")
+async def update_settings(request: Request):
     """
     Dynamic Service Configuration
     ---
-    tags:
-      - System
-    summary: View or update service settings at runtime.
-    parameters:
-      - name: body
-        in: body
-        required: false
-        schema:
-          type: object
-          properties:
-            ASR_MODEL:
-              type: string
-            ASR_DEVICE:
-              type: string
-            telemetry_retention_hours:
-              type: integer
-            log_retention_days:
-              type: integer
-    responses:
-      200:
-        description: Settings updated or current settings returned.
+    Update service settings at runtime.
     """
-    if request.method == 'GET':
-        # Return current settings for test/UI compatibility
-        return jsonify({
-            "ASR_MODEL": config.ASR_MODEL,
-            "ASR_DEVICE": config.ASR_DEVICE,
-            "TELEMETRY_RETENTION_HOURS": os.environ.get('TELEMETRY_RETENTION_HOURS', 24)
-        })
-
     try:
-        data = request.json
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return JSONResponse(content={"error": "Malformed JSON"}, status_code=400)
+
         if not data:
-            return jsonify({"error": "No data provided"}), 400
+            return JSONResponse(content={"error": "No data provided"}, status_code=400)
 
-        if 'ASR_MODEL' in data:
-            config.update_env('ASR_MODEL', data['ASR_MODEL'])
-            logger.info("[Settings] ASR Model updated to %s", data['ASR_MODEL'])
+        # Validate settings first
+        validated_telemetry_retention = None
+        if "telemetry_retention_hours" in data:
+            try:
+                val = int(data["telemetry_retention_hours"])
+                if val < 1:
+                    raise ValueError
+                validated_telemetry_retention = val
+            except (ValueError, TypeError):
+                return JSONResponse(
+                    content={"error": "telemetry_retention_hours must be a positive integer"}, status_code=400
+                )
 
-        if 'ASR_DEVICE' in data:
-            config.update_env('ASR_DEVICE', data['ASR_DEVICE'])
-            logger.info("[Settings] ASR Device updated to %s", data['ASR_DEVICE'])
+        validated_log_retention = None
+        if "log_retention_days" in data:
+            try:
+                val = int(data["log_retention_days"])
+                if val < 1:
+                    raise ValueError
+                validated_log_retention = val
+            except (ValueError, TypeError):
+                return JSONResponse(content={"error": "log_retention_days must be a positive integer"}, status_code=400)
 
-        if 'telemetry_retention_hours' in data:
-            config.update_env('TELEMETRY_RETENTION_HOURS', data['telemetry_retention_hours'])
-            logger.info("[Settings] Telemetry retention updated to %sh",
-                        data['telemetry_retention_hours'])
+        model_changed = False
+        if "ASR_MODEL" in data:
+            old_model = os.environ.get("ASR_MODEL")
+            if old_model != str(data["ASR_MODEL"]):
+                model_changed = True
+            config.update_env("ASR_MODEL", data["ASR_MODEL"])
+            logger.info("[Settings] ASR Model updated to %s", data["ASR_MODEL"])
 
-        if 'log_retention_days' in data:
-            config.update_env('LOG_RETENTION_DAYS', data['log_retention_days'])
-            logger.info("[Settings] Log retention updated to %sd", data['log_retention_days'])
-            logging_setup.update_log_retention(data['log_retention_days'])
+        if "ASR_DEVICE" in data:
+            old_device = os.environ.get("ASR_DEVICE")
+            if old_device != str(data["ASR_DEVICE"]):
+                model_changed = True
+            config.update_env("ASR_DEVICE", data["ASR_DEVICE"])
+            logger.info("[Settings] ASR Device updated to %s", data["ASR_DEVICE"])
 
-        # Reload model pool with new settings
-        model_manager.load_model()
+        if validated_telemetry_retention is not None:
+            config.update_env("TELEMETRY_RETENTION_HOURS", validated_telemetry_retention)
+            logger.info("[Settings] Telemetry retention updated to %sh", validated_telemetry_retention)
 
-        return jsonify({"status": "success", "message": "Settings updated"})
+        if validated_log_retention is not None:
+            config.update_env("LOG_RETENTION_DAYS", validated_log_retention)
+            logger.info("[Settings] Log retention updated to %sd", validated_log_retention)
+            logging_setup.update_log_retention(validated_log_retention)
+
+        # Reload model pool with new settings without blocking the event loop only if model settings changed
+        if model_changed:
+            await anyio.to_thread.run_sync(model_manager.load_model)
+
+        return {"status": "success", "message": "Settings updated"}
     except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-@bp.route('/analytics', methods=['GET'])
-@bp.route('/system/analytics', methods=['GET'])
-def get_analytics():
+@router.get("/analytics")
+@router.get("/system/analytics")
+def get_analytics(request: Request):
     """
     Retrieve service usage analytics
     ---
-    tags:
-      - System
-    summary: Get cumulative and daily breakdown of tasks and durations.
-    description: Returns JSON stats or HTML page depending on the Accept header.
-    responses:
-      200:
-        description: Current cumulative and daily task statistics.
+    Get cumulative and daily breakdown of tasks and durations.
     """
-    if 'text/html' in request.headers.get('Accept', ''):
-        return dashboard.get_analytics_html()
+    if "text/html" in request.headers.get("accept", ""):
+        return HTMLResponse(content=dashboard.get_analytics_html())
 
     data = history_manager.get_analytics_data()
-    return jsonify(data)
+    return data
 
 
-@bp.route('/help', methods=['GET'])
-def help_endpoint():
+@router.get("/help")
+def help_endpoint(request: Request):
     """
     API Discovery
-    ---
-    tags:
-      - System
-    summary: Discover available endpoints.
-    responses:
-      200:
-        description: List of endpoints.
     """
-    return jsonify({
+    return {
         "app": config.APP_NAME,
         "version": config.VERSION,
-        "endpoints": ["/status", "/asr", "/detect-language", "/dashboard", "/logs/download", "/settings", "/analytics"],
-        "docs": f"{request.host_url}docs"
-    })
+        "endpoints": [
+            "/status",
+            "/asr",
+            "/v1/audio/transcriptions",
+            "/v1/audio/translations",
+            "/detect-language",
+            "/detectlang",
+            "/dashboard",
+            "/logs/download",
+            "/settings",
+            "/analytics",
+        ],
+        "docs": f"{request.base_url}docs",
+    }

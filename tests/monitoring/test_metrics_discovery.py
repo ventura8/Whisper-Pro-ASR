@@ -1,7 +1,10 @@
 """Tests for modules/monitoring/metrics_discovery.py."""
+
 import subprocess
 from unittest import mock
+
 import pytest
+
 from modules.monitoring import metrics_discovery
 
 
@@ -59,21 +62,17 @@ def test_get_npu_load_sysfs_fail():
 
 def test_get_intel_gpu_load_scheduler_fallback():
     """Test Intel GPU load fallback via active tasks."""
-    mock_stats = {
-        "active_tasks": [{"unit_type": "GPU", "unit_name": "Intel Arc"}]
-    }
+    mock_stats = {"active_tasks": [{"unit_type": "GPU", "unit_name": "Intel Arc"}]}
     with mock.patch("platform.system", return_value="Linux"):
         with mock.patch("glob.glob", return_value=[]):
             with mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value=mock_stats):
                 load = metrics_discovery.get_intel_gpu_load()
-                assert load == 99
+                assert load == 100
 
 
 def test_get_npu_load_scheduler_fallback():
     """Test NPU load fallback via active tasks."""
-    mock_stats = {
-        "active_tasks": [{"unit_type": "NPU"}]
-    }
+    mock_stats = {"active_tasks": [{"unit_type": "NPU"}]}
     with mock.patch("platform.system", return_value="Linux"):
         with mock.patch("glob.glob", return_value=[]):
             with mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value=mock_stats):
@@ -97,6 +96,7 @@ def test_caching_logic():
 
 
 # --- Edge Cases and Direct Coverage ---
+
 
 def test_fetch_intel_gpu_load_linux_sysfs_success():
     """Test successful Intel GPU load reading on Linux sysfs."""
@@ -182,7 +182,7 @@ def test_get_all_hardware_utilization():
         {"type": "GPU", "id": "GPU.1", "name": "Intel Arc GPU"},
         {"type": "NPU", "id": "NPU.2", "name": "Intel NPU 2"},
     ]
-    with mock.patch("modules.config.HARDWARE_UNITS", mock_units):
+    with mock.patch("modules.core.config.HARDWARE_UNITS", mock_units):
         with mock.patch("modules.monitoring.metrics_discovery.get_nvidia_metrics", return_value=[{"util": 35}]):
             with mock.patch("modules.monitoring.metrics_discovery._fetch_single_intel_gpu_load", return_value=45):
                 with mock.patch("modules.monitoring.metrics_discovery._fetch_single_npu_load", return_value=85):
@@ -214,7 +214,7 @@ def test_fetch_single_intel_gpu_load_mismatch():
         with mock.patch("platform.system", return_value="Linux"):
             with mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value=mock_stats):
                 res = metrics_discovery._fetch_single_intel_gpu_load("GPU.0")
-                assert res == 99
+                assert res == 100
 
 
 def test_fetch_single_cuda_fallback():
@@ -228,8 +228,8 @@ def test_fetch_single_cuda_fallback():
 
 def test_is_task_using_accelerator():
     """Test _is_task_using_accelerator logic across different stages and engines."""
+    from modules.core import config
     from modules.monitoring.metrics_discovery import _is_task_using_accelerator
-    from modules import config
 
     # 1. Vocal Isolation / UVR stage (always uses accelerator)
     task_uvr = {"stage": "Vocal Isolation"}
@@ -315,7 +315,7 @@ def test_all_hardware_utilization_failures():
     mock_units = [
         {"type": "CUDA", "id": "cuda:1", "name": "NVIDIA GPU 1"},
     ]
-    with mock.patch("modules.config.HARDWARE_UNITS", mock_units):
+    with mock.patch("modules.core.config.HARDWARE_UNITS", mock_units):
         # get_nvidia_metrics returns empty list (len = 0), but index = 1, triggering IndexError
         with mock.patch("modules.monitoring.metrics_discovery.get_nvidia_metrics", return_value=[]):
             with mock.patch("modules.monitoring.metrics_discovery._fetch_single_cuda_fallback", return_value=55):

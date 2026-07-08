@@ -1,12 +1,13 @@
 """
 Bootstrap Logic for Hardware Path Patching
-Ensures that the correct hardware-optimized libraries are injected into the 
+Ensures that the correct hardware-optimized libraries are injected into the
 system path before any AI-related modules are loaded.
 """
-import sys
-import os
-import logging
+
 import importlib
+import logging
+import os
+import sys
 
 
 def initialize_hardware_path():
@@ -19,7 +20,7 @@ def initialize_hardware_path():
     if not boot_logger.handlers:
         sh = logging.StreamHandler(sys.stdout)
         # Use standard format without dashes to match the main telemetry
-        sh.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+        sh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         boot_logger.addHandler(sh)
         boot_logger.setLevel(logging.INFO)
 
@@ -28,33 +29,37 @@ def initialize_hardware_path():
     target_lib = None
     context_reason = "Default"
 
-    # Strategy 1: Intel OpenVINO Optimization (Prioritize on Intel Hardware)
-    is_intel_hw = (
-        os.path.exists("/dev/dri") or
-        os.path.exists("/dev/dxg") or
-        os.path.exists("/dev/accel")
-    )
-    if not is_intel_hw:
-        try:
-            ov = importlib.import_module("openvino")
-            core = ov.Core()
-            is_intel_hw = any("GPU" in d or "NPU" in d for d in core.available_devices)
-        except (ImportError, AttributeError, ValueError, OSError, KeyError, RuntimeError) as e:
-            boot_logger.debug("OpenVINO hardware check failed: %s", e)
+    # Strategy 1: Intel OpenVINO Optimization (OpenVINO probe is authoritative)
+    is_intel_hw = False
+    ov_probe_failed = False
+    try:
+        ov = importlib.import_module("openvino")
+        core = ov.Core()
+        is_intel_hw = any("GPU" in d or "NPU" in d for d in core.available_devices)
+    except (ImportError, AttributeError, ValueError, OSError, KeyError, RuntimeError) as e:
+        ov_probe_failed = True
+        boot_logger.debug("OpenVINO hardware check failed: %s", e)
+
+    if ov_probe_failed:
+        is_intel_hw = os.path.exists("/dev/dri") or os.path.exists("/dev/dxg") or os.path.exists("/dev/accel")
 
     # Strategy 2: NVIDIA CUDA Optimization
     is_nvidia_hw = (
-        os.path.exists("/dev/nvidia0") or
-        os.path.exists("/dev/nvidiactl") or
-        os.path.exists("/dev/nvidia-uvm")
+        os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl") or os.path.exists("/dev/nvidia-uvm")
     )
 
-    if "intel" in device or (device == "auto" and is_intel_hw and os.path.exists("/app/libs/intel")):
-        target_lib = "/app/libs/intel"
-        context_reason = "Intel OpenVINO"
-    elif device == "cuda" or (device == "auto" and is_nvidia_hw and os.path.exists("/app/libs/nvidia")):
+    if (
+        device == "cuda"
+        or "gpu" in device
+        or (device == "auto" and is_nvidia_hw and os.path.exists("/app/libs/nvidia"))
+    ):
         target_lib = "/app/libs/nvidia"
         context_reason = "NVIDIA CUDA"
+    elif (
+        "intel" in device or "npu" in device or (device == "auto" and is_intel_hw and os.path.exists("/app/libs/intel"))
+    ):
+        target_lib = "/app/libs/intel"
+        context_reason = "Intel OpenVINO"
 
     if target_lib and os.path.exists(target_lib):
         if target_lib not in sys.path:
@@ -67,7 +72,7 @@ def initialize_hardware_path():
 
         # Force reload of onnxruntime if it was somehow already loaded
         if "onnxruntime" in sys.modules:
-            importlib.reload(sys.modules["onnxruntime"])
+            del sys.modules["onnxruntime"]
         # Verify the version being loaded
         try:
             ort = importlib.import_module("onnxruntime")

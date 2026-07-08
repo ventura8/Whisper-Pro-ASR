@@ -6,6 +6,47 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 Set-Location $root
 
+function Install-WithApt {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Packages
+    )
+    if (-not (Get-Command apt-get -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    if (Get-Command sudo -ErrorAction SilentlyContinue) {
+        & sudo apt-get update
+        & sudo apt-get install -y @Packages
+    } else {
+        & apt-get update
+        & apt-get install -y @Packages
+    }
+    return $true
+}
+
+function Ensure-Command {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandName,
+        [Parameter(Mandatory = $true)]
+        [string[]]$AptPackages
+    )
+
+    if (Get-Command $CommandName -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    Write-Host "Dependency '$CommandName' is missing. Attempting auto-install..."
+    $installed = Install-WithApt -Packages $AptPackages
+    if (-not $installed -or -not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
+        throw "Required dependency '$CommandName' is missing and could not be auto-installed. Install it manually and rerun."
+    }
+}
+
+Ensure-Command -CommandName npm -AptPackages @("nodejs", "npm")
+Ensure-Command -CommandName docker -AptPackages @("docker.io")
+
 # Auto-detect if sudo is needed for Docker commands on Unix platforms
 # We check version to safely reference $IsLinux/$IsMacOS under Set-StrictMode
 $isUnix = $false
@@ -44,6 +85,15 @@ function Invoke-Docker {
         & docker @Arguments
     }
 }
+
+Write-Host "`n--- Running Frontend Quality Gates (JS/CSS Lint + JS Coverage) ---"
+npm ci
+if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+Write-Host "`n--- Running Frontend Security Audit (Fail on Any Vulnerability) ---"
+npm audit --audit-level=low
+if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
+npm run quality:frontend
+if ($LASTEXITCODE -ne 0) { throw "npm run quality:frontend failed" }
 
 Write-Host "`n--- Running Static Analysis (Linting) ---"
 # Build the lint stage specifically. This uses Docker layer caching for both dependencies and results.

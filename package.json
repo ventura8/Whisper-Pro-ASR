@@ -1,0 +1,28 @@
+{
+  "name": "whisper-pro-asr-frontend-quality",
+  "version": "1.1.4",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "lint:html": "htmlhint \"modules/monitoring/templates/*.html\"",
+    "lint:js": "eslint modules/monitoring/templates/*.js tests/js/**/*.js",
+    "lint:css": "stylelint \"static/**/*.css\" \"modules/monitoring/templates/**/*.css\"",
+    "test:js": "vitest run --coverage",
+    "quality:frontend": "npm run lint:html && npm run lint:js && npm run lint:css && npm run test:js"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.6",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.31.0",
+    "globals": "^15.9.0",
+    "htmlhint": "^1.6.3",
+    "jsdom": "^29.1.1",
+    "stylelint": "^16.9.0",
+    "stylelint-config-standard": "^36.0.1",
+    "vitest": "^3.2.6"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1",
+    "glob": "^13.0.6"
+  }
+}

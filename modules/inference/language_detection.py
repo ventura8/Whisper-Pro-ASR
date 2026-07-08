@@ -5,17 +5,19 @@ This module implements a robust, multi-zone voting system for language detection
 It strategically samples audio segments, performs one-token probability scans,
 and aggregates results using squared confidence weighting to ensure high accuracy.
 """
+
 import importlib
 import logging
-import re
-import tempfile
 import os
+import re
 import subprocess
+import tempfile
 import time
+
 import numpy as np
+
+from modules.core import config, utils
 from modules.inference import scheduler
-from modules import config
-from modules import utils
 
 # Lazy load containers
 _LIBS = {"sf": None}
@@ -31,13 +33,14 @@ def _get_sf():
 logger = logging.getLogger(__name__)
 
 # Pre-compiled regex for language token extraction
-_LANG_PATTERN = re.compile(r'<\|([a-z]{2,3})\|>')
+_LANG_PATTERN = re.compile(r"<\|([a-z]{2,3})\|>")
 
 
 # --- [CORE PIPELINE] ---
 
 
 # --- [VOTING & AGGREGATION ENGINE] ---
+
 
 def aggregate_language_probs(segment_probs_list):
     """
@@ -53,9 +56,9 @@ def aggregate_language_probs(segment_probs_list):
         return {}
 
     for cp in valid:
-        weight = cp.get('_speech_duration', cp.get('speech_duration', 30.0))
+        weight = cp.get("_speech_duration", cp.get("speech_duration", 30.0))
         for lang, prob in cp.items():
-            if lang.startswith('_') or lang in ('speech_duration', 'speech_ratio'):
+            if lang.startswith("_") or lang in ("speech_duration", "speech_ratio"):
                 continue
             # Apply Squared Confidence and Speech Duration Weighting
             combined_scores[lang] = combined_scores.get(lang, 0) + (prob**2) * weight
@@ -90,6 +93,7 @@ def _get_sampling_target(duration):
 
 # --- [VOTING CONCURRENCY] ---
 
+
 def run_voting_detection(audio_path, model_manager, start_time=None):
     """
     High-level entry point for high-performance batch language voting.
@@ -99,8 +103,12 @@ def run_voting_detection(audio_path, model_manager, start_time=None):
     """
     duration = utils.get_audio_duration(audio_path) or 300
     scans = _get_sampling_target(duration)
-    logger.info("[LD] Target: %s | Duration: %s | Density: %d segments",
-                os.path.basename(audio_path), utils.format_duration(duration), scans)
+    logger.info(
+        "[LD] Target: %s | Duration: %s | Density: %d segments",
+        os.path.basename(audio_path),
+        utils.format_duration(duration),
+        scans,
+    )
     offsets = _generate_sampling_tasks(audio_path, duration, scans)
 
     return _execute_batch_scan(audio_path, offsets, model_manager, scans, start_time)
@@ -108,15 +116,16 @@ def run_voting_detection(audio_path, model_manager, start_time=None):
 
 def _execute_batch_scan(audio_path, offsets, model_manager, scans, start_time=None):
     """Internal orchestrator for the montage/UVR/inference pipeline."""
-    perf = {'start_queue': start_time or time.time()}
+    perf = {"start_queue": start_time or time.time()}
     montage_path = None
     isolated_path = None
     try:
-        with model_manager.model_lock_ctx() as (model, unit_id):
-            perf['dur_queue'] = time.time() - perf['start_queue']
+        # Montage creation is CPU-only FFmpeg work and does not need to hold a hardware unit.
+        # Build it first so a paused ASR task cannot extend the priority task's unit claim.
+        montage_path = _step_create_montage(audio_path, offsets, scans, perf)
 
-            # Phase 1: Montage
-            montage_path = _step_create_montage(audio_path, offsets, scans, perf)
+        with model_manager.model_lock_ctx() as (model, unit_id):
+            perf["dur_queue"] = time.time() - perf["start_queue"]
 
             # Phase 2: Isolation
             isolated_path = _step_isolate_vocals(montage_path, model_manager, unit_id, perf)
@@ -127,7 +136,7 @@ def _execute_batch_scan(audio_path, offsets, model_manager, scans, start_time=No
             if res is not None:
                 return res
 
-    except (ValueError, RuntimeError, IOError) as e:
+    except (OSError, ValueError, RuntimeError, ImportError, TypeError) as e:
         logger.error("[LD] Batch consensus scan failed: %s", e)
     finally:
         _cleanup_batch_assets(montage_path, isolated_path)
@@ -136,53 +145,53 @@ def _execute_batch_scan(audio_path, offsets, model_manager, scans, start_time=No
 
 
 def _step_create_montage(audio_path, offsets, _scans, perf):
-    perf['start_montage'] = time.time()
+    perf["start_montage"] = time.time()
     scheduler.update_task_progress(10, "Montage")
     path = _prepare_montage(audio_path, offsets)
     # Also register with request-level tracker so outer cleanup catches it too
     if path:
         utils.track_file(path)
-    perf['dur_montage'] = time.time() - perf['start_montage']
+    perf["dur_montage"] = time.time() - perf["start_montage"]
     return path
 
 
 def _step_isolate_vocals(montage_path, model_manager, unit_id, perf):
     if not config.ENABLE_LD_PREPROCESSING:
-        perf['dur_iso'] = 0.0
+        perf["dur_iso"] = 0.0
         return montage_path
 
-    perf['start_iso'] = time.time()
+    perf["start_iso"] = time.time()
     scheduler.update_task_progress(20, "Vocal Isolation")
     path = model_manager.run_vocal_isolation_direct(montage_path, unit_id, force=True)
     # Register with request-level tracker as a second safety net
     if path and path != montage_path:
         utils.track_file(path)
-    perf['dur_iso'] = time.time() - perf['start_iso']
+    perf["dur_iso"] = time.time() - perf["start_iso"]
     return path
 
 
 def _step_run_inference(model_context, isolated_path, scans, perf):
     model, model_manager = model_context
-    perf['start_inf'] = time.time()
-    scheduler.update_task_progress(60, "Inference")
+    perf["start_inf"] = time.time()
+    scheduler.update_task_progress(60, f"Inference (0/{scans} segments)")
     results = model_manager.run_batch_language_detection_direct(model, isolated_path, scans)
-    perf['dur_inf'] = time.time() - perf['start_inf']
+    perf["dur_inf"] = time.time() - perf["start_inf"]
 
     probs = []
     for i, r in enumerate(results):
-        if r and 'all_probabilities' in r:
-            conf = r.get('confidence', 0.0)
+        if r and "all_probabilities" in r:
+            conf = r.get("confidence", 0.0)
             if conf >= config.LD_MIN_CONFIDENCE:
-                prob_dict = r['all_probabilities'].copy()
-                prob_dict['_speech_duration'] = r.get('speech_duration', 30.0)
+                prob_dict = r["all_probabilities"].copy()
+                prob_dict["_speech_duration"] = r.get("speech_duration", 30.0)
                 probs.append(prob_dict)
             else:
                 logger.warning(
                     "[Engine] Skipping segment %d vote due to low confidence: %s (%.1f%% < %.1f%%)",
                     i + 1,
-                    r.get('detected_language', 'unknown'),
+                    r.get("detected_language", "unknown"),
                     conf * 100,
-                    config.LD_MIN_CONFIDENCE * 100
+                    config.LD_MIN_CONFIDENCE * 100,
                 )
     voting_details = aggregate_language_probs(probs)
 
@@ -191,11 +200,11 @@ def _step_run_inference(model_context, isolated_path, scans, perf):
         return None
 
     res = _format_detection_result(voting_details, scans)
-    res['performance'] = {
-        "queue_sec": round(perf['dur_queue'], 2),
-        "montage_sec": round(perf['dur_montage'], 2),
-        "isolation_sec": round(perf['dur_iso'], 2),
-        "inference_sec": round(perf['dur_inf'], 2)
+    res["performance"] = {
+        "queue_sec": round(perf["dur_queue"], 2),
+        "montage_sec": round(perf["dur_montage"], 2),
+        "isolation_sec": round(perf["dur_iso"], 2),
+        "inference_sec": round(perf["dur_inf"], 2),
     }
     model_manager.update_task_metadata(result=res)
     return res
@@ -203,46 +212,56 @@ def _step_run_inference(model_context, isolated_path, scans, perf):
 
 def _prepare_montage(source_path, offsets):
     """Extract and concatenate audio slices into a single montage file."""
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False,
-                                     dir=config.get_temp_dir()) as montage_tmp:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=config.get_temp_dir()) as montage_tmp:
         montage_path = montage_tmp.name
+    utils.track_file(montage_path)
 
     # Phase 1: Montage Extraction (Concatenate all slices)
     # Using FFmpeg filter_complex for a single-pass extraction
     inputs = []
     filter_complex = ""
+    input_flags = getattr(utils.THREAD_CONTEXT, "input_flags", None)
     for i, offset in enumerate(offsets):
         # Extract 30s audio directly from source (video or audio)
-        inputs.extend(["-ss", str(offset), "-t", "30", "-i", source_path])
+        segment_args = ["-ss", str(offset), "-t", "30"]
+        if input_flags:
+            segment_args.extend(input_flags)
+        segment_args.extend(["-i", source_path])
+        inputs.extend(segment_args)
         # Resample to 16kHz Stereo for optimal iGPU bandwidth and MDX-NET compatibility
-        filter_complex += (f"[{i}:a]aresample=16000,aformat=sample_fmts=s16"
-                           f":channel_layouts=stereo,apad=whole_dur=30[a{i}];")
+        filter_complex += (
+            f"[{i}:a]aresample=16000,aformat=sample_fmts=s16:channel_layouts=stereo,apad=whole_dur=30[a{i}];"
+        )
 
     for i in range(len(offsets)):
         filter_complex += f"[a{i}]"
     filter_complex += f"concat=n={len(offsets)}:v=0:a=1,{utils.STANDARD_NORMALIZATION_FILTERS}[out]"
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-threads", str(config.FFMPEG_THREADS),
-        "-loglevel", "error"
-    ] + inputs + [
-        "-filter_complex", filter_complex,
-        "-map", "[out]",
-        "-acodec", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "2",
-        montage_path
-    ]
+    cmd = (
+        ["ffmpeg", "-y", "-threads", str(config.FFMPEG_THREADS), "-loglevel", "error"]
+        + inputs
+        + [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[out]",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "2",
+            montage_path,
+        ]
+    )
 
     logger.info("[LD] Extracting montage (%d samples)...", len(offsets))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        logger.error("[LD] FFmpeg montage failed (code %d): %s",
-                     result.returncode, result.stderr)
+        logger.error("[LD] FFmpeg montage failed (code %d): %s", result.returncode, result.stderr)
         raise RuntimeError(f"FFmpeg montage extraction failed with code {result.returncode}")
 
-    return utils.track_file(montage_path)
+    return montage_path
 
 
 def _cleanup_batch_assets(montage_path, isolated_path):
@@ -263,8 +282,7 @@ def _generate_sampling_tasks(audio_path, duration, scans):
     if config.SMART_SAMPLING_SEARCH:
         for i in range(scans):
             base_offset = i * zone_size
-            tasks.append(_find_best_offset_in_zone(
-                audio_path, base_offset, zone_size, duration))
+            tasks.append(_find_best_offset_in_zone(audio_path, base_offset, zone_size, duration))
     else:
         # Uniform distribution
         offsets = np.linspace(0, max(0, duration - (sample_len + 1)), scans)
@@ -281,7 +299,7 @@ def _format_detection_result(voting_details, scans):
             "language_code": "en",
             "confidence": 0.0,
             "segments_processed": scans,
-            "voting_details": {}
+            "voting_details": {},
         }
 
     best_lang = max(voting_details, key=voting_details.get)
@@ -289,10 +307,8 @@ def _format_detection_result(voting_details, scans):
 
     # Filter out very low confidence entries (below 1% threshold)
     threshold = 0.01
-    filtered_details = {
-        k: v for k, v in voting_details.items() if v >= threshold}
-    sorted_details = dict(sorted(filtered_details.items(),
-                          key=lambda item: item[1], reverse=True))
+    filtered_details = {k: v for k, v in voting_details.items() if v >= threshold}
+    sorted_details = dict(sorted(filtered_details.items(), key=lambda item: item[1], reverse=True))
 
     logger.debug("[LD] Final Winner: %s (Weight: %.4f)", best_lang, avg_conf)
 
@@ -302,7 +318,7 @@ def _format_detection_result(voting_details, scans):
         "language_code": best_lang,
         "confidence": avg_conf,
         "segments_processed": scans,
-        "voting_details": sorted_details
+        "voting_details": sorted_details,
     }
 
 
@@ -319,12 +335,13 @@ def _find_best_offset_in_zone(audio_path, base_offset, zone_size, total_duration
                 offset = max(0, total_duration - 30)
 
             # Optimization: Pick center offset if not a WAV to avoid expensive probing
-            if not audio_path.lower().endswith('.wav'):
+            if not audio_path.lower().endswith(".wav"):
                 return offset
 
             # Targeted read
-            audio, _ = current_sf.read(audio_path, start=int(offset * file_sr),
-                                       frames=int(30 * file_sr), dtype='float32')
+            audio, _ = current_sf.read(
+                audio_path, start=int(offset * file_sr), frames=int(30 * file_sr), dtype="float32"
+            )
 
             if audio.ndim == 2:
                 audio = audio.mean(axis=1)

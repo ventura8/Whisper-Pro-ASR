@@ -3,12 +3,24 @@
 > **CRITICAL DEVELOPER NOTE**: Only build or run the Docker image locally if you have compatible hardware (Intel NPU/GPU or NVIDIA GPU) mapped to the container. Otherwise, rely on the CI/CD pipeline and mocks for verification.
 
 ## AI & Development Rules
+- **Concurrency Priority #1**: Deadlock/livelock prevention and bounded progress always take precedence over performance tuning and feature additions in scheduler/resource code.
 - **File Size Constraint**: Never have a `.py` file larger than **500 lines**. If a file grows beyond this limit, refactor and modularize into smaller files within the `modules/` directory.
 - **Logging Standard**: Use the project's central logger (`logging`) instead of `print()` statements for all modules and scripts.
 - **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST strictly respect the thread limits set in `modules/config.py` (`ASR_THREADS`, `ASR_PREPROCESS_THREADS`, `FFMPEG_THREADS`). Language detection runs serially (single worker) to ensure thread limits are not exceeded.
 - **Media Standardization**: All audio ingested MUST be converted to **16kHz, Mono, 16-bit PCM**. Always use `utils.STANDARD_AUDIO_FLAGS` and `utils.STANDARD_NORMALIZATION_FILTERS` for FFmpeg commands to ensure pipeline consistency.
 - **Efficiency Optimization**: For non-ASR tasks (identification/status), ALWAYS favor segmented FFmpeg extraction (`-ss` / `-t`) from the source media over full-file normalization. Avoid using `soundfile` (`sf.read`) directly on non-WAV video containers as it causes expensive full-file probes.
 - **Resource Cleanup & Stability**: All temporary files and system resources (file descriptors, locks) MUST be managed using `try...finally` blocks to ensure absolute cleanup even on catastrophic failures. Use the project's unified `decrement_active_session()` helper to ensure synchronized resource reclamation and VRAM offloading.
+
+## Mandatory Concurrency Checklist
+- Any change touching scheduler/concurrency/model lifecycle paths must include a lock-order review.
+- Synchronization waits in priority/preemption critical paths are intentionally unbounded (waiting indefinitely with periodic logging every 30 seconds to survive heavy load); other blocking waits must have a documented timeout policy.
+- Any preemption or queueing behavior change must include liveness regression tests.
+- Any concurrency behavior change must update `docs/CONCURRENCY.md` and relevant agent skill docs in the same task.
+
+## Endpoint Treatment Contract
+- `/asr`, `/v1/audio/transcriptions`, and `/v1/audio/translations` are one **standard-priority ASR execution class**.
+- `/detect-language` and `/detectlang` are one **high-priority language-detection execution class**.
+- `/v1/audio/...` is a protocol compatibility surface, not a separate scheduler class.
 
 
 ## Documentation Index
@@ -84,14 +96,17 @@ docker run -d \
 > **NPU Compilation Cache**: Always map the `./model_cache` volume. This stores the binary blobs unique to your specific NPU hardware/driver version, reducing startup time from minutes to seconds on subsequent runs.
 
 ## Zero-Wait Detection & Priority Yielding
-The service implements a **Full-Pipeline Priority Yielding** system with sequentialized request management. When a `/detect-language` request arrives:
+The service implements a **Full-Pipeline Priority Yielding** system with unit-scoped preemption gates. When a `/detect-language` request arrives:
 1. **Pre-emption Detection**: Ongoing ASR tasks (including both heavy UVR/MDX-NET preprocessing and Whisper decoding stages) detect the pause request at the next available yield point.
-2. **Hardware Yielding**: The processing thread releases its claim on the hardware model lock (`_MODEL_LOCK`) and enters a wait state. This prevents deadlocks and ensures the high-priority task has immediate access to acceleration.
-3. **Sequential Queueing**: If multiple `/detect-language` calls arrive simultaneously, they are serialized using a re-entrant sequential lock. This manages hardware load while maintaining the ASR pause.
-4. **Resumption**: Once the entire priority queue is empty, the `_RESUME_EVENT` is triggered. The ASR thread re-acquires the model lock and resumes exactly where it left off.
+2. **Hardware Yielding**: The processing thread releases its claim on the hardware model lock (`_MODEL_LOCK`) and enters a bounded handoff wait/retry state.
+  - **Timeout policy**: preemption handoff waits must use a bounded timeout (or equivalent bounded retry budget) and periodic liveness checks.
+  - **Failure behavior**: if handoff does not complete within the configured bound, the task must transition to a concrete failure/escalation path (emit error telemetry/logs, release held resources, and avoid indefinite blocking).
+  This prevents deadlocks and ensures the high-priority task has immediate access to acceleration.
+3. **Per-Unit Pause Targeting**: If all units are busy, the scheduler targets a specific hardware unit and asserts pause on that unit's sync entry.
+4. **Resumption**: Once priority pressure for the targeted unit clears, that unit's resume event is triggered. The ASR thread re-acquires the model lock and resumes exactly where it left off.
 
 ## CI/CD and Verification
-The project features an optimized CI/CD pipeline that consolidates linting and testing for maximum efficiency.
+The project features an optimized CI/CD pipeline that consolidates linting and testing for maximum efficiency. Both Pylint and Ruff are enforced everywhere (including all production modules and the `tests/` directory) to guarantee a zero-regression, PEP 8-compliant code quality standard.
 
 ### Local Verification
 You can run the full test and lint suite locally using Docker to mirror the CI environment:
@@ -99,9 +114,21 @@ You can run the full test and lint suite locally using Docker to mirror the CI e
 # Build the test image (cached layers from production are used automatically)
 docker build -t whisper-npu-test -f Dockerfile.test .
 
-# Run the suite (Pylint + Pytest + Coverage)
+# Run the suite (Yamllint + Ruff check & format + Pylint everywhere + Pytest + Coverage)
 docker run --rm whisper-npu-test
 ```
+
+## Release Notes v1.1.4
+- **FEAT**: Integrated Ruff static analysis and formatting checks everywhere in the codebase (including all tests).
+- **FEAT**: Enforced Pylint checks on the `tests/` directory as well as all production modules and entry points, achieving a perfect **10.00/10** Pylint score codebase-wide.
+- **CI/CD**: Added Ruff checks and codebase-wide Pylint verification to the local test runner (`run_suite.sh`), the Docker test pipeline (`Dockerfile.test`), and the GitHub Actions CI workflow (`ci.yml`).
+- **FEAT**: Segmented telemetry tracking. Introduced daily and cumulative usage metrics segmented by endpoint category (`/asr`, `/detect-language`, `/v1/audio/...`), with automatic legacy database backfilling.
+- **FEAT**: Split monolithic dashboard into modular components. Refactored the analytics dashboard into modular HTML, CSS, and JS template assets.
+- **DEPS**: Upgraded FastAPI to `>=0.138.0` and Swagger UI to `v5.32.6` to support the latest web service and interactive API documentation features.
+- **FIX**: Upgraded DockerHub description action to `v5` in GitHub Actions CI to target Node.js 24 runtime, eliminating deprecation warnings.
+- **FIX**: Hardened scheduler liveness during long vocal-separation preprocessing by emitting cooperative yield checkpoints at UVR chunk boundaries and skipping unnecessary pause confirmation waits once the priority backlog clears.
+- **FIX**: Resolved `pytest` import error in unit tests and isolated the integration cleanup files test to prevent state pollution.
+- **TEST**: Passed all 542 unit and integration tests successfully with a perfect **10.00/10** score on all files under `pylint` and **94.99%** overall coverage.
 
 ## Release Notes v1.1.3
 - **FEAT**: Refactored the live transcription progress pipeline to append pre-formatted SubRip (SRT) blocks incrementally (reducing live update complexity to $O(1)$) instead of rebuilding the entire stream on every segment, preventing performance bottlenecks and memory bloat on large media files.
@@ -138,7 +165,7 @@ docker run --rm whisper-npu-test
 - **STAB**: Implemented graceful fallback to Host CPU execution if the hardware unit registry is empty on startup, preventing worker threads from blocking indefinitely.
 - **TEST**: Added exhaustive concurrency test suite covering 0, 1, 2, and 3 hardware unit configurations to prevent scheduling regressions.
 - **STAB**: Addressed code hygiene and python linters: resolved unused arguments, inconsistent return statements, and local imports, achieving a perfect 10/10 pylint score and keeping coverage above 90% for all files.
-- **OBS**: Registered queued priority tasks immediately upon arrival, exposing them on the telemetry dashboard with "Waiting for Priority Slot" status during resource contention.
+- **OBS**: Registered queued priority tasks immediately upon arrival, exposing them on the telemetry dashboard with "Paused for Priority Task" stage during resource contention.
 
 ## Release Notes v1.0.5
 - **FEAT**: Implemented request-local file tracking registry for 100% reclamation of temporary files (uploaded media, standardized WAVs, isolated stems, and HQ prep files) on error/success.

@@ -1,9 +1,10 @@
 """Integration tests for system-level routes."""
 
-import os
 import json
+import os
 from unittest import mock
-from modules import config
+
+from modules.core import config
 
 
 def _unpack_response(resp):
@@ -18,7 +19,7 @@ def _unpack_response(resp):
 
 def test_root_json(client):
     """Test health check JSON response."""
-    response = client.get('/', headers={'Accept': 'application/json'})
+    response = client.get("/", headers={"Accept": "application/json"})
     assert response.status_code == 200
     data = json.loads(response.data)
     assert "status" in data
@@ -28,7 +29,7 @@ def test_root_json(client):
 def test_root_html(client):
     """Test dashboard HTML response."""
     with mock.patch("modules.monitoring.dashboard.get_dashboard_html", return_value="<html></html>"):
-        response = client.get('/', headers={'Accept': 'text/html'})
+        response = client.get("/", headers={"Accept": "text/html"})
         assert response.status_code == 200
         assert b"<html>" in response.data
 
@@ -38,10 +39,10 @@ def test_status_endpoint(client):
     mock_data = {
         "telemetry": {"cpu": 10},
         "engines": {"whisper": {"status": "ready"}},
-        "system": {"ram_usage_pct": 50, "gpu_load_pct": 0}
+        "system": {"ram_usage_pct": 50, "gpu_load_pct": 0},
     }
     with mock.patch("modules.monitoring.dashboard.get_status_data", return_value=mock_data):
-        response = client.get('/status')
+        response = client.get("/status")
         assert response.status_code == 200
         data = json.loads(response.data)
         assert "telemetry" in data
@@ -50,7 +51,7 @@ def test_status_endpoint(client):
 
 def test_settings_get(client):
     """Test retrieving system settings."""
-    response = client.get('/system/settings')
+    response = client.get("/system/settings")
     assert response.status_code == 200
     data = json.loads(response.data)
     assert "ASR_MODEL" in data
@@ -59,13 +60,12 @@ def test_settings_get(client):
 def test_settings_update(client):
     """Test updating system settings."""
     # We need to mock config and model reloading
-    with mock.patch("modules.config.update_env") as mock_update, \
-            mock.patch("modules.inference.model_manager.load_model") as mock_load:
-
+    with (
+        mock.patch("modules.core.config.update_env") as mock_update,
+        mock.patch("modules.inference.model_manager.load_model") as mock_load,
+    ):
         payload = {"ASR_MODEL": "small"}
-        response = client.post('/system/settings',
-                               data=json.dumps(payload),
-                               content_type='application/json')
+        response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json")
 
         assert response.status_code == 200
         mock_update.assert_called_once()
@@ -76,7 +76,7 @@ def test_history_endpoint(client):
     """Test task history retrieval."""
     with mock.patch("modules.monitoring.history_manager.get_history") as mock_history:
         mock_history.return_value = [{"task_id": "test"}]
-        response = client.get('/system/history')
+        response = client.get("/system/history")
         assert response.status_code == 200
         data = json.loads(response.data)
         assert len(data) == 1
@@ -85,12 +85,9 @@ def test_history_endpoint(client):
 
 def test_stats_endpoint(client):
     """Test cumulative stats endpoint."""
-    mock_data = {
-        "telemetry": {"sessions": 5},
-        "system": {"ram_usage_pct": 50, "gpu_load_pct": 0}
-    }
+    mock_data = {"telemetry": {"sessions": 5}, "system": {"ram_usage_pct": 50, "gpu_load_pct": 0}}
     with mock.patch("modules.monitoring.dashboard.get_status_data", return_value=mock_data):
-        response = client.get('/system/stats')
+        response = client.get("/system/stats")
         assert response.status_code == 200
         data = json.loads(response.data)
         assert "telemetry" in data
@@ -105,7 +102,7 @@ def test_download_logs(client):
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("test log")
 
-    response = client.get('/logs/download')
+    response = client.get("/logs/download")
     assert response.status_code == 200
     assert b"test log" in response.data
 
@@ -113,15 +110,15 @@ def test_download_logs(client):
 def test_clear_history(client):
     """Test history clearing endpoint."""
     with mock.patch("modules.monitoring.history_manager.clear_history") as mock_clear:
-        response = client.post('/system/history/clear')
+        response = client.post("/system/history/clear")
         assert response.status_code == 200
         mock_clear.assert_called_once()
 
 
 def test_cleanup_trigger(client):
     """Test manual cleanup trigger."""
-    with mock.patch("modules.utils.purge_temporary_assets") as mock_cleanup:
-        response = client.post('/system/cleanup')
+    with mock.patch("modules.core.utils.purge_temporary_assets") as mock_cleanup:
+        response = client.post("/system/cleanup")
         assert response.status_code == 200
         mock_cleanup.assert_called_once()
 
@@ -130,7 +127,7 @@ def test_system_routes_telemetry_alias(client):
     """Cover the telemetry/system alias logic in /status."""
     mock_data = {"telemetry": {"cpu": 5}}
     with mock.patch("modules.monitoring.dashboard.get_status_data", return_value=mock_data):
-        response = client.get('/status')
+        response = client.get("/status")
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["system"]["cpu"] == 5
@@ -140,7 +137,7 @@ def test_system_routes_system_alias(client):
     """Cover the system/telemetry alias logic in /status when telemetry is missing."""
     mock_data = {"system": {"cpu": 7}}
     with mock.patch("modules.monitoring.dashboard.get_status_data", return_value=mock_data):
-        response = client.get('/status')
+        response = client.get("/status")
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["telemetry"]["cpu"] == 7
@@ -149,16 +146,18 @@ def test_system_routes_system_alias(client):
 def test_system_routes_render_dashboard(client):
     """Cover render_dashboard endpoint."""
     with mock.patch("modules.monitoring.dashboard.get_dashboard_html", return_value="<h1>Dashboard</h1>"):
-        response = client.get('/dashboard')
+        response = client.get("/dashboard")
         assert response.status_code == 200
         assert b"Dashboard" in response.data
 
 
 def test_system_routes_download_logs_error(client):
     """Cover exception in download_logs."""
-    with mock.patch("os.path.exists", return_value=True), \
-            mock.patch("modules.api.routes_system.send_from_directory", side_effect=OSError("Disk Error")):
-        response = client.get('/logs/download')
+    with (
+        mock.patch("os.path.exists", return_value=True),
+        mock.patch("builtins.open", side_effect=OSError("Disk Error")),
+    ):
+        response = client.get("/logs/download")
         assert response.status_code == 500
         data = json.loads(response.data)
         assert "Disk Error" in data["error"]
@@ -166,20 +165,18 @@ def test_system_routes_download_logs_error(client):
 
 def test_system_routes_update_settings_missing_data(client):
     """Cover missing data in update_settings."""
-    response = client.post('/system/settings', data=json.dumps({}), content_type='application/json')
+    response = client.post("/system/settings", data=json.dumps({}), content_type="application/json")
     assert response.status_code == 400
 
 
 def test_system_routes_update_settings_all_fields(client):
     """Cover all updateable fields in settings."""
-    payload = {
-        "ASR_DEVICE": "cuda",
-        "telemetry_retention_hours": 12,
-        "log_retention_days": 7
-    }
-    with mock.patch("modules.config.update_env") as mock_upd, \
-            mock.patch("modules.inference.model_manager.load_model"):
-        response = client.post('/system/settings', data=json.dumps(payload), content_type='application/json')
+    payload = {"ASR_DEVICE": "cuda", "telemetry_retention_hours": 12, "log_retention_days": 7}
+    with (
+        mock.patch("modules.core.config.update_env") as mock_upd,
+        mock.patch("modules.inference.model_manager.load_model"),
+    ):
+        response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json")
         assert response.status_code == 200
         assert mock_upd.call_count == 3
 
@@ -193,21 +190,19 @@ def test_analytics_json(client):
             "this_month": 50.0,
             "this_year": 100.0,
             "count_all_time": 5,
-            "count_today": 1
+            "count_today": 1,
         },
-        "daily": {
-            "2026-05-26": {"count": 1, "duration": 10.0}
-        }
+        "daily": {"2026-05-26": {"count": 1, "duration": 10.0}},
     }
     with mock.patch("modules.monitoring.history_manager.get_analytics_data", return_value=mock_analytics_data):
-        response = client.get('/analytics', headers={'Accept': 'application/json'})
+        response = client.get("/analytics", headers={"Accept": "application/json"})
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["cumulative"]["count_all_time"] == 5
         assert "2026-05-26" in data["daily"]
 
         # Also test with /system/analytics
-        response_sys = client.get('/system/analytics', headers={'Accept': 'application/json'})
+        response_sys = client.get("/system/analytics", headers={"Accept": "application/json"})
         assert response_sys.status_code == 200
         data_sys = json.loads(response_sys.data)
         assert data_sys["cumulative"]["count_all_time"] == 5
@@ -216,17 +211,17 @@ def test_analytics_json(client):
 def test_analytics_html(client):
     """Test /analytics endpoint HTML response."""
     with mock.patch("modules.monitoring.dashboard.get_analytics_html", return_value="<h1>Analytics</h1>"):
-        response = client.get('/analytics', headers={'Accept': 'text/html'})
+        response = client.get("/analytics", headers={"Accept": "text/html"})
         assert response.status_code == 200
         assert b"Analytics" in response.data
 
-        response_sys = client.get('/system/analytics', headers={'Accept': 'text/html'})
+        response_sys = client.get("/system/analytics", headers={"Accept": "text/html"})
         assert response_sys.status_code == 200
         assert b"Analytics" in response_sys.data
 
 
 def test_swagger_theme_static(client):
     """Test retrieving the custom swagger auto dark/light theme CSS."""
-    response = client.get('/static/swagger-theme.css')
+    response = client.get("/static/swagger-theme.css")
     assert response.status_code == 200
     assert b"prefers-color-scheme" in response.data

@@ -24,11 +24,19 @@ docker compose up -d --build
 First build exports model to INT8 (~5-10 min, ~4GB RAM).
 
 ## 3. Configuration & Device Selection
-The service utilizes **Autonomous Hardware Sensing**. It will prioritize accelerators in the following order:
+The service utilizes **Autonomous Hardware Sensing**. For `ASR_ENGINE=AUTO`, it resolves backend in the following order:
 1. **NVIDIA CUDA**
-2. **Intel NPU**
-3. **Intel GPU (Arc/iGPU)**
+2. **Intel GPU (Arc/iGPU)**
+3. **Intel NPU**
 4. **CPU (Fallback)**
+
+Engine mapping for `ASR_ENGINE=AUTO`:
+- CUDA -> `FASTER-WHISPER`
+- Intel GPU -> `INTEL-WHISPER`
+- Intel NPU -> `INTEL-WHISPER`
+- CPU -> `FASTER-WHISPER`
+
+If `ASR_ENGINE` is set explicitly to an unsupported value, startup fails fast with a clear validation error.
 
 **Preprocessing Toggles:**
 -   `ENABLE_VOCAL_SEPARATION=true`: isolates vocals using UVR/MDX-NET (recommended for accuracy).
@@ -70,6 +78,16 @@ If running on an SSD, consider adding a `tmpfs` mount to minimize write wear. Se
 docker compose logs -f
 # Look for: "Model loaded successfully!"
 ```
+
+## Concurrency Verification (Required for Scheduler Changes)
+
+When modifying scheduler, preemption, or model lifecycle code, run concurrency-focused tests before merge:
+
+```bash
+pytest -q tests/inference/test_scheduler.py tests/inference/test_concurrency_coverage_edges.py tests/inference/priority/*
+```
+
+Then run the complete suite in your normal CI/local workflow.
 
 ## Troubleshooting
 - **Model not loading on NPU**: Some NPU versions have memory limits for static shapes. If the model fails to load or the server crashes on startup, set `ASR_BEAM_SIZE=4` in `docker-compose.yml`.

@@ -1,19 +1,20 @@
 """Tests for modules/logging_setup.py"""
 
-import os
-import logging
 import importlib
+import logging
+import os
 from unittest import mock
-from modules.logging_setup import (
-    IgnoreSpecificWarnings,
-    log_banner,
-    _get_device_properties,
+
+from modules.core import config, logging_setup
+from modules.core.logging_setup import (
     LOGGERS_TO_FILTER,
+    IgnoreSpecificWarnings,
+    _banner_config_lines,
+    _get_device_properties,
     _get_real_model_name,
     _unique_device_props,
-    _banner_config_lines
+    log_banner,
 )
-from modules import logging_setup, config
 
 
 class TestIgnoreSpecificWarnings:
@@ -29,13 +30,7 @@ class TestIgnoreSpecificWarnings:
     def _create_record(self, message):
         """Helper to create a log record with a message."""
         record = logging.LogRecord(
-            name="test",
-            level=logging.WARNING,
-            pathname="test.py",
-            lineno=1,
-            msg=message,
-            args=(),
-            exc_info=None
+            name="test", level=logging.WARNING, pathname="test.py", lineno=1, msg=message, args=(), exc_info=None
         )
         return record
 
@@ -46,20 +41,17 @@ class TestIgnoreSpecificWarnings:
 
     def test_filter_blocks_default_values_modified(self):
         """Test filtering of 'default values have been modified' warning."""
-        record = self._create_record(
-            "generation_config default values have been modified")
+        record = self._create_record("generation_config default values have been modified")
         assert self.filter.filter(record) is False
 
     def test_filter_blocks_custom_logits_processor(self):
         """Test filtering of custom logits processor warning."""
-        record = self._create_record(
-            "A custom logits processor of type MyProcessor")
+        record = self._create_record("A custom logits processor of type MyProcessor")
         assert self.filter.filter(record) is False
 
     def test_filter_blocks_segment_length_experimental(self):
         """Test filtering of chunk_length_s experimental warning."""
-        record = self._create_record(
-            "Using chunk_length_s is very experimental feature")
+        record = self._create_record("Using chunk_length_s is very experimental feature")
         assert self.filter.filter(record) is False
 
     def test_filter_blocks_device_use_cpu(self):
@@ -74,8 +66,7 @@ class TestIgnoreSpecificWarnings:
 
     def test_filter_blocks_development_server(self):
         """Test filtering of Flask development server warning."""
-        record = self._create_record(
-            "This is a development server. Do not use in production.")
+        record = self._create_record("This is a development server. Do not use in production.")
         assert self.filter.filter(record) is False
 
     def test_filter_case_insensitive(self):
@@ -88,12 +79,32 @@ class TestIgnoreSpecificWarnings:
         assert repr(IgnoreSpecificWarnings()) == "IgnoreSpecificWarnings()"
 
 
+def test_contextual_filter_uses_system_when_filename_none():
+    """ContextualFilter should map None filename values to System context."""
+    filt = logging_setup.ContextualFilter()
+    record = logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname="test.py",
+        lineno=1,
+        msg="hello",
+        args=(),
+        exc_info=None,
+    )
+
+    logging_setup.utils.THREAD_CONTEXT.reset()
+    logging_setup.utils.THREAD_CONTEXT.filename = None
+
+    assert filt.filter(record) is True
+    assert getattr(record, "task_ctx", "") == ""
+
+
 class TestLogBanner:
     """Test suite for log_banner function."""
 
     def test_log_banner_logs_version(self):
         """Test that banner includes version name."""
-        with mock.patch("modules.logging_setup.logger") as mock_logger:
+        with mock.patch("modules.core.logging_setup.logger") as mock_logger:
             log_banner()
 
             # Collect all logged messages, handle lazy formatting
@@ -114,11 +125,11 @@ class TestLogBanner:
 
     def test_log_banner_model_locally_found(self):
         """Test banner shows 'Locally Found' when model exists."""
-        with mock.patch("modules.logging_setup.os.path.exists") as mock_exists:
+        with mock.patch("modules.core.logging_setup.os.path.exists") as mock_exists:
             mock_exists.return_value = True
-            with mock.patch("modules.logging_setup.os.listdir") as mock_listdir:
+            with mock.patch("modules.core.logging_setup.os.listdir") as mock_listdir:
                 mock_listdir.return_value = ["dummy_file"]
-                with mock.patch("modules.logging_setup.logger") as mock_logger:
+                with mock.patch("modules.core.logging_setup.logger") as mock_logger:
                     log_banner()
 
                     logged_messages = []
@@ -137,9 +148,9 @@ class TestLogBanner:
 
     def test_log_banner_model_hugging_face(self):
         """Test banner shows 'Hugging Face' when model not local."""
-        with mock.patch("modules.logging_setup.os.path.exists") as mock_exists:
+        with mock.patch("modules.core.logging_setup.os.path.exists") as mock_exists:
             mock_exists.return_value = False
-            with mock.patch("modules.logging_setup.logger") as mock_logger:
+            with mock.patch("modules.core.logging_setup.logger") as mock_logger:
                 log_banner()
 
                 logged_messages = []
@@ -158,7 +169,7 @@ class TestLogBanner:
 
     def test_log_banner_shows_configuration(self):
         """Test banner shows configuration section."""
-        with mock.patch("modules.logging_setup.logger") as mock_logger:
+        with mock.patch("modules.core.logging_setup.logger") as mock_logger:
             log_banner()
 
             logged_messages = []
@@ -184,7 +195,7 @@ class TestLogBanner:
 
     def test_log_banner_shows_thread_info(self):
         """Test banner shows thread configuration."""
-        with mock.patch("modules.logging_setup.config") as mock_conf:
+        with mock.patch("modules.core.logging_setup.config") as mock_conf:
             mock_conf.ASR_THREADS = 4
             mock_conf.PREPROCESS_THREADS = 8
             mock_conf.FFMPEG_THREADS = 2
@@ -200,7 +211,7 @@ class TestLogBanner:
             mock_conf.DEFAULT_BEAM_SIZE = 5
             mock_conf.ENABLE_VOCAL_SEPARATION = True
 
-            with mock.patch("modules.logging_setup.logger") as mock_logger:
+            with mock.patch("modules.core.logging_setup.logger") as mock_logger:
                 log_banner()
 
                 logged_messages = []
@@ -248,10 +259,8 @@ class TestGetDeviceProperties:
             device_name, info = _get_device_properties("NPU")
             assert device_name == "Intel(R) AI Boost"
             # Labels: Architecture, Driver Version, Uuid
-            assert any(
-                "Architecture" in line and "NPU3720" in line for line in info)
-            assert any(
-                "Driver Version" in line and "32.0.100.3104" in line for line in info)
+            assert any("Architecture" in line and "NPU3720" in line for line in info)
+            assert any("Driver Version" in line and "32.0.100.3104" in line for line in info)
             assert any("Uuid" in line and "abc-123" in line for line in info)
 
     def test_get_device_properties_substring_match(self):
@@ -283,10 +292,8 @@ class TestGetDeviceProperties:
         with mock.patch("importlib.import_module", return_value=mock_ov):
             _, info = _get_device_properties("NPU")
             # Labels: Range For Streams, Backend Is Ready
-            assert any(
-                "Range For Streams" in line and "1, 2, 4" in line for line in info)
-            assert any(
-                "Backend Is Ready" in line and "Yes" in line for line in info)
+            assert any("Range For Streams" in line and "1, 2, 4" in line for line in info)
+            assert any("Backend Is Ready" in line and "Yes" in line for line in info)
 
     def test_get_device_properties_property_exception(self):
         """Test _get_device_properties handles property exceptions gracefully."""
@@ -308,8 +315,15 @@ class TestGetDeviceProperties:
         mock_core.get_property.side_effect = lambda dev, prop: {
             "FULL_DEVICE_NAME": "Intel(R) AI Boost",
             "SUPPORTED_PROPERTIES": [
-                "SUPPORTED_PROPERTIES", "FULL_DEVICE_NAME", "DEVICE_ID",
-                "CACHING_PROPERTIES", "SUPPORTED_CONFIG_KEYS", "DEVICE_ARCH"
+                p.upper()
+                for p in [
+                    "supported_properties",
+                    "full_device_name",
+                    "device_id",
+                    "caching_properties",
+                    "supported_config_keys",
+                    "device_arch",
+                ]
             ],
             "DEVICE_ARCH": "NPU4000",
         }.get(prop, None)
@@ -349,8 +363,8 @@ class TestGetDeviceProperties:
 
     def test_log_banner_with_npu_info(self):
         """Test banner shows hardware info section."""
-        with mock.patch("modules.logging_setup.logger") as mock_logger:
-            with mock.patch("modules.logging_setup.config") as mock_conf:
+        with mock.patch("modules.core.logging_setup.logger") as mock_logger:
+            with mock.patch("modules.core.logging_setup.config") as mock_conf:
                 mock_conf.APP_NAME = "Whisper Pro ASR"
                 mock_conf.VERSION = "1.0.1"
                 mock_conf.MODEL_ID = "test-model"
@@ -415,14 +429,14 @@ class TestHardwareInfo:
 
     def test_get_real_model_name_intel_baked(self):
         """Cover lines 161-162."""
-        with mock.patch("modules.config.ASR_ENGINE", "INTEL-WHISPER"):
-            with mock.patch("modules.config.MODEL_ID", config.OV_MODEL_BAKED):
+        with mock.patch("modules.core.config.ASR_ENGINE", "INTEL-WHISPER"):
+            with mock.patch("modules.core.config.MODEL_ID", config.OV_MODEL_BAKED):
                 name = _get_real_model_name()
                 assert "OpenVINO" in name
 
     def test_get_real_model_name_faster_baked(self):
         """Cover line 166."""
-        with mock.patch("modules.config.MODEL_ID", config.SYS_WHISPER_PATH):
+        with mock.patch("modules.core.config.MODEL_ID", config.SYS_WHISPER_PATH):
             name = _get_real_model_name()
             assert "Systran" in name
 
@@ -434,8 +448,8 @@ class TestHardwareInfo:
 
     def test_banner_config_lines_intel(self):
         """Cover line 238, 267-269."""
-        with mock.patch("modules.config.ASR_ENGINE", "INTEL-WHISPER"):
-            with mock.patch("modules.config.DEVICE", "GPU"):
+        with mock.patch("modules.core.config.ASR_ENGINE", "INTEL-WHISPER"):
+            with mock.patch("modules.core.config.DEVICE", "GPU"):
                 cfg = {
                     "asr_display": "GPU.0",
                     "prep_display": "CPU",

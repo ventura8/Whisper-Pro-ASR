@@ -1,112 +1,49 @@
+# ruff: noqa: I001
 """
 Whisper Pro ASR - Enterprise Transcription Service
-Main entry point for the Whisper Pro ASR Flask application.
+Main entry point for the Whisper Pro ASR FastAPI application.
 """
+
 import importlib
 import logging
+import os
 import time
-import json
-from flask import Flask, request, jsonify
-from flasgger import Swagger
+from contextlib import asynccontextmanager
+
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 # CRITICAL: Bootstrap hardware path before ANY other first-party imports
-from modules import bootstrap
-from modules import config, logging_setup, utils
+from modules.core import bootstrap
+
+from modules.api import routes_asr, routes_detect, routes_system
+from modules.core import config, logging_setup, utils
 from modules.inference import model_manager
-from modules.api import routes_system, routes_asr, routes_detect
 
 # Initialize global logger
 logger = logging.getLogger(__name__)
 
 
-def _register_error_handlers(flask_app):
-    """Register system-level error handlers."""
-    @flask_app.errorhandler(404)
-    def not_found(_):
-        return jsonify({"error": "Endpoint not found"}), 404
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    """Manage application startup and shutdown lifecycle hooks."""
+    model_manager.init_pool()
 
-    @flask_app.errorhandler(500)
-    def server_error(err):
-        logger.error("[System] Unhandled Server Error: %s", err)
-        return jsonify({"error": "Internal server error"}), 500
+    # Dynamic import to break cyclic dependency
+    telemetry = importlib.import_module("modules.monitoring.telemetry")
+    if not getattr(fastapi_app.state, "testing", False):
+        telemetry.start_telemetry_loop()
 
-
-def _setup_request_lifecycle(flask_app):
-    """Inject telemetry and CORS into the request lifecycle."""
-    @flask_app.before_request
-    def start_timer():
-        request.start_time = time.time()
-        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-        body_log = f" | Body: {len(request.data)} bytes" if request.data else ""
-
-        log_func = logger.debug if request.path in ["/status", "/"] else logger.info
-        log_func(">>> %s %s [Source: %s]%s",
-                 request.method, request.path, client_ip, body_log)
-
-        # Log full request parameters for ASR and LD calls
-        if request.path in ("/asr", "/detect-language",
-                            "/v1/audio/transcriptions", "/v1/audio/translations"):
-            params = {**request.args.to_dict(), **request.form.to_dict()}
-            file_keys = list(request.files.keys())
-            if file_keys:
-                params["_files"] = file_keys
-            logger.info("    Request JSON: %s", json.dumps(params, ensure_ascii=False))
-
-    @flask_app.after_request
-    def log_request_done(response):
-        duration = time.time() - getattr(request, 'start_time', time.time())
-        log_func = logger.debug if request.path in ["/status", "/"] else logger.info
-        log_func("<<< %s %s [%d] | Latency: %s",
-                 request.method, request.path, response.status_code,
-                 utils.format_duration(duration))
-
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-        return response
-
-    @flask_app.teardown_request
-    def teardown_cleanup(exception=None):
-        """Final catch-all to ensure storage hygiene after every request."""
-        if exception:
-            logger.debug("[System] Request teardown with exception: %s", exception)
-        utils.cleanup_tracked_files()
+    yield
+    # Cleanup on shutdown if needed
 
 
-def _setup_swagger(flask_app):
-    """Configure Swagger Documentation."""
-    swagger_config = {
-        "headers": [],
-        "specs": [
-            {
-                "endpoint": 'apispec_1',
-                "route": '/apispec_1.json',
-                "rule_filter": lambda rule: True,
-                "model_filter": lambda tag: True,
-            }
-        ],
-        "static_url_path": "/flasgger_static",
-        "swagger_ui": True,
-        "specs_route": "/docs"
-    }
-    flask_app.config['SWAGGER'] = {
-        'title': 'Whisper Pro ASR API',
-        'uiversion': 3,
-        'openapi': '3.0.1',
-        'head_text': '<link rel="stylesheet" href="/static/swagger-theme.css">'
-    }
-    template = {
-        "info": {
-            "title": "Whisper Pro ASR API",
-            "description": "Enterprise-grade Whisper Automatic Speech Recognition web service",
-            "version": config.VERSION,
-        }
-    }
-    Swagger(flask_app, config=swagger_config, template=template)
-
-
-def create_app():
-    """Enterprise Flask Factory."""
+def create_app(testing=False):
+    """Enterprise FastAPI Factory."""
     logging_setup.setup_logging()
     logging_setup.log_banner()
     utils.cleanup_old_files(config.LOG_DIR, days=config.LOG_RETENTION_DAYS)
@@ -115,36 +52,115 @@ def create_app():
     if config.VERIFY_RUNTIME:
         verify_runtime_integrity()
 
-    flask_app = Flask(__name__)
-    _setup_swagger(flask_app)
+    fastapi_app = FastAPI(
+        title="Whisper Pro ASR API",
+        description="Enterprise-grade Whisper Automatic Speech Recognition web service",
+        version=config.VERSION,
+        lifespan=lifespan,
+        docs_url=None,  # Disabled native docs to override with customized Swagger
+        redoc_url=None,
+    )
 
-    flask_app.register_blueprint(routes_system.bp)
-    flask_app.register_blueprint(routes_asr.bp)
-    flask_app.register_blueprint(routes_detect.bp)
+    fastapi_app.state.testing = testing
 
-    _register_error_handlers(flask_app)
-    _setup_request_lifecycle(flask_app)
+    # Configure CORS
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-    model_manager.init_pool()
+    # Configure Request Lifecycle Logging & Storage Hygiene Middleware
+    @fastapi_app.middleware("http")
+    async def request_lifecycle_middleware(request: Request, call_next):
+        request.state.start_time = time.time()
+        client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+        content_length = request.headers.get("content-length", "0")
+        body_log = f" | Body: {content_length} bytes" if content_length != "0" else ""
 
-    # Dynamic import to break cyclic dependency
-    telemetry = importlib.import_module("modules.monitoring.telemetry")
-    if not flask_app.config.get('TESTING'):
-        telemetry.start_telemetry_loop()
+        log_func = logger.debug if request.url.path in ["/status", "/"] else logger.info
+        log_func(">>> %s %s [Source: %s]%s", request.method, request.url.path, client_ip, body_log)
 
-    return flask_app
+        # Scope tracked files per request using a contextvar and request.state
+        tracked_list = []
+        token = utils.REQUEST_TRACKED_FILES_VAR.set(tracked_list)
+        request.state.tracked_files = tracked_list
+
+        response = None
+        try:
+            response = await call_next(request)
+        finally:
+            utils.cleanup_tracked_files(request)
+            utils.REQUEST_TRACKED_FILES_VAR.reset(token)
+            duration = time.time() - request.state.start_time
+            status_code = response.status_code if response is not None else 500
+            log_func = logger.debug if request.url.path in ["/status", "/"] else logger.info
+            log_func(
+                "<<< %s %s [%d] | Latency: %s",
+                request.method,
+                request.url.path,
+                status_code,
+                utils.format_duration(duration),
+            )
+
+        return response
+
+    # Mount static assets
+    fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
+
+    # Custom Swagger Endpoint for themed documentation
+    @fastapi_app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui_html():
+        swagger_js = (
+            "/static/swagger-ui-bundle.js"
+            if os.path.exists("static/swagger-ui-bundle.js")
+            else "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"
+        )
+        swagger_css = (
+            "/static/swagger-ui.css"
+            if os.path.exists("static/swagger-ui.css")
+            else "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"
+        )
+        swagger_fav = (
+            "/static/favicon.png"
+            if os.path.exists("static/favicon.png")
+            else "https://fastapi.tiangolo.com/img/favicon.png"
+        )
+
+        res = get_swagger_ui_html(
+            openapi_url=fastapi_app.openapi_url,
+            title=fastapi_app.title + " - Swagger UI",
+            swagger_js_url=swagger_js,
+            swagger_css_url=swagger_css,
+            swagger_favicon_url=swagger_fav,
+        )
+        html = res.body.decode("utf-8")
+        if os.path.exists("static/swagger-theme.css"):
+            theme_link = '<link rel="stylesheet" type="text/css" href="/static/swagger-theme.css">'
+            html = html.replace("</head>", f"  {theme_link}\n</head>")
+        return HTMLResponse(content=html)
+
+    # Register API Routers
+    fastapi_app.include_router(routes_system.router)
+    fastapi_app.include_router(routes_asr.router)
+    fastapi_app.include_router(routes_detect.router)
+
+    return fastapi_app
 
 
 def verify_runtime_integrity():
     """Safety check for critical AI backends."""
     try:
         ort = importlib.import_module("onnxruntime")
-        logger.info("[System] Runtime: ONNX %s | Providers: %s",
-                    ort.__version__, ort.get_available_providers())
+        logger.info("[System] Runtime: ONNX %s | Providers: %s", ort.__version__, ort.get_available_providers())
     except (ImportError, AttributeError):
         logger.warning("[System] ONNX Runtime not detected - Check hardware path patching!")
 
 
-if __name__ == '__main__':
-    app = create_app()
-    app.run(host='0.0.0.0', port=9000, debug=config.DEBUG_MODE, use_reloader=False)
+app = create_app()
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=9000, log_config=None)

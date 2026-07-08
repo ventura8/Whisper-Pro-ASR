@@ -1,8 +1,10 @@
 """Tests for modules/inference/vad.py."""
 
 from unittest import mock
+
 import numpy as np
 import pytest
+
 from modules.inference import vad
 
 

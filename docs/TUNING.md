@@ -1,5 +1,17 @@
 # Performance Tuning
 
+## Concurrency Safety First
+
+Before throughput tuning, keep liveness and lock safety stable:
+
+- Do not increase parallelism at the expense of queue fairness and scheduler liveness.
+- Keep priority preemption behavior deterministic while allowing parallel execution across available hardware units.
+- Validate tuning changes with concurrency stress tests, not only single-request benchmarks.
+
+### Liveness-Related Runtime Guards
+
+The scheduler uses queued waiting and cooperative yielding under contention. Tune throughput carefully and always validate with matching stress-test coverage so queued work eventually progresses.
+
 ## Default "Golden Standard"
 | Setting | Value | Reason |
 |---------|-------|--------|
@@ -83,6 +95,22 @@ When set to a positive value (in seconds), models remain warm in memory after th
 > Set `MODEL_IDLE_TIMEOUT=300` (5 minutes) for a good balance between memory efficiency and response latency. The deferred timer has zero CPU overhead while waiting (compared to the previous polling approach).
 
 When `MODEL_IDLE_TIMEOUT > 0`, it takes precedence over `AGGRESSIVE_OFFLOAD`.
+
+## ⚙️ ASR Backend Engines (ASR_ENGINE)
+
+The service supports multiple ASR backend engines to run inference. You can configure this using the `ASR_ENGINE` environment variable. The following options are available:
+
+- **`AUTO`**: Automatically resolves the engine by available hardware in this order: `CUDA` -> `Intel GPU` -> `Intel NPU` -> `CPU`.
+  - `CUDA` resolves to `FASTER-WHISPER`
+  - `Intel GPU` resolves to `INTEL-WHISPER`
+  - `Intel NPU` resolves to `INTEL-WHISPER`
+  - `CPU` resolves to `FASTER-WHISPER`
+- **`FASTER-WHISPER`** (Default): Uses the CTranslate2 engine. This is the recommended choice for general CPU and NVIDIA CUDA environments, offering extremely fast processing and low memory footprint.
+- **`INTEL-WHISPER`**: Uses the OpenVINO-based Intel Whisper engine (`IntelWhisperEngine`). Highly optimized for Intel NPUs and Integrated/Arc GPUs. If Intel GPU/NPU is unavailable, runtime falls back to `FASTER-WHISPER` (not OpenVINO CPU).
+- **`OPENAI-WHISPER`**: Uses the reference OpenAI Whisper Python backend.
+- **`WHISPERX`**: Uses the WhisperX backend, supporting batch inference.
+
+Invalid explicit `ASR_ENGINE` values fail startup with a validation error listing supported values.
 
 ## 🗣 Transcription Tuning
 

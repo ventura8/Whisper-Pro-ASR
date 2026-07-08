@@ -8,18 +8,24 @@ This skill provides a structured workflow for running the Whisper Pro ASR CI/CD 
 
 ## Workflow Steps
 
-### 1. Execute Pipeline (Linux/macOS)
+### 1. Execute Pipeline (Local Python Environment)
 Run the test suite directly using pytest:
 ```bash
 python3 -m pytest tests/
 ```
 This will run all unit and integration tests, enforce >90% coverage, and output a coverage report.
 
-### 2. Execute Pipeline (Windows/Docker)
+### 2. Execute Pipeline (Containerized Docker)
 Run the main build and test script:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build-and-test.ps1
-```
+
+- **Linux/macOS**:
+  ```bash
+  ./build-and-test.sh
+  ```
+- **Windows**:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\build-and-test.ps1
+  ```
 
 ### 3. Resolve Test Failures & Coverage
 If tests fail:
@@ -38,7 +44,7 @@ Once the system is stable and covered by tests:
 After implementing changes, verify the following areas have test coverage:
 - **Speaker Diarization**: `tests/inference/test_diarization.py` — WhisperX orchestration, caching, fallbacks.
 - **ASR Improvements**: `tests/inference/test_improvements.py` — parameter forwarding, idle timeout, subtitle wrapping.
-- **Priority Concurrency**: `tests/inference/test_priority_concurrency.py` — hardware pool configurations, yielding.
+- **Priority Concurrency**: `tests/inference/priority/test_priority_concurrency.py` — hardware pool configurations, yielding.
 
 ## Test Suite Structure
 ```text
@@ -56,12 +62,18 @@ tests/
 ## Execution
 To run this skill, execute:
 
-**Linux/macOS:**
+**Linux/macOS (Direct pytest):**
 ```bash
 python3 -m pytest tests/
 ```
 
-**Windows (Docker):**
+**Linux/macOS (Containerized Docker):**
+```bash
+./build-and-test.sh
+```
+
+**Windows (Containerized Docker):**
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build-and-test.ps1
 ```
+

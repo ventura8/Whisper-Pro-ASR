@@ -1,4 +1,5 @@
 """Tests to increase coverage for modules/inference/intel_engine.py."""
+
 import importlib
 import types
 from unittest import mock
@@ -37,7 +38,7 @@ def test_sanitize_audio_converts_and_contiguity():
     arr = intel_engine.IntelWhisperEngine.sanitize_audio(intel_engine.IntelWhisperEngine, data)
     assert isinstance(arr, np.ndarray)
     assert arr.dtype == np.float32
-    assert arr.flags['C_CONTIGUOUS']
+    assert arr.flags["C_CONTIGUOUS"]
     data2 = [[1, 2], [3, 4]]
     arr2 = intel_engine.IntelWhisperEngine.sanitize_audio(intel_engine.IntelWhisperEngine, data2)
     assert arr2.shape == (4,)

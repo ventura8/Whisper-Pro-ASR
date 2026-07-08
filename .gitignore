@@ -44,7 +44,20 @@ coverage_output.txt
 pytest.xml
 report.xml
 htmlcov/
+test_results.log
 test_data/
 test_state/
 pylint_report.txt
 
+# Runtime local logs (keep local only)
+data/whisper_pro.log
+
+# Node / Frontend Quality Tooling
+node_modules/
+coverage-js/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# Package Locks
+uv.lock

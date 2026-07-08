@@ -100,16 +100,45 @@
                     </div>
                     <div class="chart-card">
                         <div class="section-title"><span class="material-icons-sharp">speed</span> CPU Utilization (App vs System)</div>
+                        <div class="chart-stats-row">
+                            <div class="stat-box stat-box-compact">
+                                <div class="stat-label">System CPU Current</div>
+                                <div class="stat-value" id="cpu-sys-current">0%</div>
+                            </div>
+                            <div class="stat-box stat-box-compact">
+                                <div class="stat-label">System CPU Highest</div>
+                                <div class="stat-value" id="cpu-sys-highest">0%</div>
+                            </div>
+                            <div class="stat-box stat-box-compact">
+                                <div class="stat-label">App CPU Current</div>
+                                <div class="stat-value" id="cpu-app-current">0%</div>
+                            </div>
+                            <div class="stat-box stat-box-compact">
+                                <div class="stat-label">App CPU Highest</div>
+                                <div class="stat-value" id="cpu-app-highest">0%</div>
+                            </div>
+                        </div>
                         <div class="chart-container" id="cpuChart"></div>
                     </div>
                     <div class="chart-card">
                         <div class="section-title"><span class="material-icons-sharp">memory</span> Memory Allocation (GB)</div>
+                        <div class="chart-stats-row">
+                            <div class="stat-box stat-box-compact">
+                                <div class="stat-label">Memory Current</div>
+                                <div class="stat-value" id="mem-current">0 GB</div>
+                            </div>
+                            <div class="stat-box stat-box-compact">
+                                <div class="stat-label">Memory Peak</div>
+                                <div class="stat-value" id="mem-peak">0 GB</div>
+                            </div>
+                        </div>
                         <div class="chart-container" id="memChart"></div>
                     </div>
-                    <div class="chart-header">
-                        <div class="card-title">Hardware Acceleration</div>
+                    <div class="chart-card">
+                        <div class="section-title"><span class="material-icons-sharp">memory</span> Hardware Acceleration</div>
+                        <div id="hw-stats" class="chart-stats-row"></div>
+                        <div id="hwChart" class="chart-container"></div>
                     </div>
-                    <div id="hwChart" class="chart-container"></div>
                 </div>
             </div>
 

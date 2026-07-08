@@ -1,18 +1,15 @@
 """
 Service Monitoring Dashboard Template
 """
-from modules.monitoring import telemetry
-from modules import utils
-from modules.monitoring import dashboard_ui
-from modules.monitoring import analytics_ui
+
+from modules.core import utils
+from modules.monitoring import analytics_ui, dashboard_ui, telemetry
 
 
 def get_status_data():
     """Collects system and service metrics."""
     stats = telemetry.get_service_stats()
-    stats.update({
-        "system": utils.get_system_telemetry()
-    })
+    stats.update({"system": utils.get_system_telemetry()})
     return stats
 
 

@@ -54,6 +54,40 @@ function renderCharts() {
         };
     });
 
+    // Extract CPU data for charts and stats
+    const cpuSysData = dataPoints.map(p => (p && p.system) ? p.system.cpu_percent : (p ? p.cpu_sys : null));
+    const cpuAppData = dataPoints.map(p => (p && p.system) ? p.system.app_cpu_percent : (p ? p.cpu_app : null));
+    const memData = dataPoints.map(p => (p && p.system) ? p.system.app_memory_gb : (p ? p.mem_app_gb : null));
+    
+    // Calculate current and highest for CPU
+    const cpuSysFiltered = cpuSysData.filter(v => v !== null && v !== undefined && !isNaN(v));
+    const cpuSysCurrent = cpuSysFiltered.length > 0 ? cpuSysFiltered[cpuSysFiltered.length - 1] : 0;
+    const cpuSysHighest = cpuSysFiltered.length > 0 ? Math.max(...cpuSysFiltered) : 0;
+    const cpuAppFiltered = cpuAppData.filter(v => v !== null && v !== undefined && !isNaN(v));
+    const cpuAppCurrent = cpuAppFiltered.length > 0 ? cpuAppFiltered[cpuAppFiltered.length - 1] : 0;
+    const cpuAppHighest = cpuAppFiltered.length > 0 ? Math.max(...cpuAppFiltered) : 0;
+    
+    // Calculate current and highest for memory
+    const memFiltered = memData.filter(v => v !== null && v !== undefined && !isNaN(v));
+    const memCurrent = memFiltered.length > 0 ? memFiltered[memFiltered.length - 1] : 0;
+    const memHighest = memFiltered.length > 0 ? Math.max(...memFiltered) : 0;
+    
+    // Update CPU stat displays
+    const cpuSysCurrentEl = document.getElementById('cpu-sys-current');
+    const cpuSysHighestEl = document.getElementById('cpu-sys-highest');
+    const cpuAppCurrentEl = document.getElementById('cpu-app-current');
+    const cpuAppHighestEl = document.getElementById('cpu-app-highest');
+    if (cpuSysCurrentEl) cpuSysCurrentEl.textContent = cpuSysCurrent.toFixed(1) + '%';
+    if (cpuSysHighestEl) cpuSysHighestEl.textContent = cpuSysHighest.toFixed(1) + '%';
+    if (cpuAppCurrentEl) cpuAppCurrentEl.textContent = cpuAppCurrent.toFixed(1) + '%';
+    if (cpuAppHighestEl) cpuAppHighestEl.textContent = cpuAppHighest.toFixed(1) + '%';
+    
+    // Update Memory stat displays
+    const memCurrentEl = document.getElementById('mem-current');
+    const memPeakEl = document.getElementById('mem-peak');
+    if (memCurrentEl) memCurrentEl.textContent = memCurrent.toFixed(2) + ' GB';
+    if (memPeakEl) memPeakEl.textContent = memHighest.toFixed(2) + ' GB';
+
     createOrUpdateLineChart('cpuChart', [
         { label: 'System CPU %', data: dataPoints.map(p => ({ x: p.timestampMs, y: p.system ? p.system.cpu_percent : p.cpu_sys })), color: COLORS[0] },
         { label: 'App CPU %', data: dataPoints.map(p => ({ x: p.timestampMs, y: p.system ? p.system.app_cpu_percent : p.cpu_app })), color: COLORS[3] }
@@ -93,11 +127,48 @@ function renderCharts() {
                 }
                 return { x: p.timestampMs, y: val };
             }),
-            color: color
+            color: color,
+            unitId: u.id,
+            unitName: u.name || u.type
         });
     });
     
+    // Update hardware stats
+    updateHardwareStats(hwDatasets);
+    
     createOrUpdateLineChart('hwChart', hwDatasets, true);
+}
+
+function updateHardwareStats(hwDatasets) {
+    const hwStatsEl = document.getElementById('hw-stats');
+    if (!hwStatsEl) return;
+
+    const escapeHtml = (value) => String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    
+    hwStatsEl.innerHTML = '';
+    hwDatasets.forEach(dataset => {
+        const values = dataset.data.map(d => d.y).filter(v => !isNaN(v));
+        const current = values[values.length - 1] || 0;
+        const highest = values.length > 0 ? Math.max(...values) : 0;
+        
+        const statsDiv = document.createElement('div');
+        statsDiv.className = 'stat-box stat-box-compact';
+        const safeUnitName = escapeHtml(dataset.unitName);
+        statsDiv.innerHTML = `
+            <div class="stat-label">${safeUnitName}</div>
+            <div class="stat-value">${current.toFixed(1)}%</div>
+            <div class="item-secondary">
+                <span>Current load</span>
+                <span class="meta-tag">Peak ${highest.toFixed(1)}%</span>
+            </div>
+        `;
+        hwStatsEl.appendChild(statsDiv);
+    });
 }
 
 function createOrUpdateLineChart(id, datasets, percent) {

@@ -5,22 +5,31 @@ This module handles hardware detection, environment variable parsing, and
 model path resolution for both Whisper and UVR/MDX-NET engines.
 """
 
-import os
+import importlib
 import logging
+import os
 import shutil
 import tempfile
-import importlib
-from modules.constants import HALLUCINATION_PHRASES
+
+from modules.core.config_helpers import (
+    calculate_cpu_parallel_limit,
+    detect_hardware,
+    get_unit_limit,
+    resolve_thread_limits,
+)
+from modules.core.constants import HALLUCINATION_PHRASES
+
+from . import engine_registry
+
 # Explicitly reference to satisfy unused import check for external consumption
 _ = HALLUCINATION_PHRASES
-
 
 # Set up early logger for configuration phase
 logger = logging.getLogger(__name__)
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.1.2"
+VERSION = "1.1.4"
 HARDWARE_UNITS = []  # Global registry for accelerator orchestration
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
@@ -28,36 +37,22 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 CPU_CORE_LIMIT = int(os.environ.get("CPU_CORE_LIMIT", 4))
 
 
-def _get_unit_limit(env_var, default=1):
-    """Helper to parse hardware unit limits (supports int, ALL, AUTO)."""
-    val = os.environ.get(env_var, str(default)).upper()
-    if val in ["ALL", "AUTO"]:
-        return 999  # Practically unlimited
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
-
-
-MAX_CUDA = _get_unit_limit("MAX_CUDA_UNITS", 1)
-MAX_GPU = _get_unit_limit("MAX_GPU_UNITS", 1)
-MAX_NPU = _get_unit_limit("MAX_NPU_UNITS", 1)
-MAX_CPU = _get_unit_limit("MAX_CPU_UNITS", 1)
+MAX_CUDA = get_unit_limit("MAX_CUDA_UNITS", 1, min_value=0)
+MAX_GPU = get_unit_limit("MAX_GPU_UNITS", 1, min_value=0)
+MAX_NPU = get_unit_limit("MAX_NPU_UNITS", 1, min_value=0)
+MAX_CPU = get_unit_limit("MAX_CPU_UNITS", 1, min_value=1)
 
 # Memory reclamation behavior (unloads models when idle if True)
 AGGRESSIVE_OFFLOAD = os.environ.get("AGGRESSIVE_OFFLOAD", "false").lower() == "true"
 MODEL_IDLE_TIMEOUT = int(os.environ.get("MODEL_IDLE_TIMEOUT", 300))
 
 # --- [HARDWARE DETECTION & DEVICE MAPPING] ---
-# ASR_ENGINE can be: AUTO (default), FASTER-WHISPER, INTEL-WHISPER
-ASR_ENGINE_ENV = os.environ.get("ASR_ENGINE", "AUTO").upper()
+# ASR_ENGINE can be: AUTO, FASTER-WHISPER (default), INTEL-WHISPER
+ASR_ENGINE_ENV = os.environ.get("ASR_ENGINE", "FASTER-WHISPER").upper()
 ASR_DEVICE_ENV = os.environ.get("ASR_DEVICE", "AUTO").upper()
 ASR_COMPUTE_ENV = os.environ.get("ASR_COMPUTE_TYPE", "AUTO").upper()
 
 _DETECTED_ENGINE = "FASTER-WHISPER"
-_DETECTED_DEVICE = "CPU"
-_DETECTED_PREP_DEVICE = "CPU"
-_DETECTED_COMPUTE = "int8"
 
 # Default to Faster-Whisper (CTranslate2) format
 DEFAULT_MODEL = "Systran/faster-whisper-large-v3"
@@ -65,88 +60,21 @@ DEFAULT_MODEL = "Systran/faster-whisper-large-v3"
 # Check for baked-in OpenVINO model (for Intel Whisper)
 OV_MODEL_BAKED = "/app/system_models/whisper-openvino"
 OV_MODEL_LEGACY = "/models/whisper-openvino"
-OV_MODEL_PATH = OV_MODEL_BAKED if os.path.exists(
-    OV_MODEL_BAKED) else OV_MODEL_LEGACY
+OV_MODEL_PATH = OV_MODEL_BAKED if os.path.exists(OV_MODEL_BAKED) else OV_MODEL_LEGACY
 
 # Resolution: Prefer baked-in system models if the default model is selected
 ASR_ENV = os.environ.get("ASR_MODEL", DEFAULT_MODEL)
 SYS_WHISPER_PATH = "/app/system_models/whisper"
 
-if (ASR_ENV == DEFAULT_MODEL and
-        os.path.exists(SYS_WHISPER_PATH) and
-        os.listdir(SYS_WHISPER_PATH)):
+if ASR_ENV == DEFAULT_MODEL and os.path.exists(SYS_WHISPER_PATH) and os.listdir(SYS_WHISPER_PATH):
     MODEL_ID = SYS_WHISPER_PATH
 else:
     MODEL_ID = ASR_ENV
 
+
 # --- [HARDWARE DETECTION] ---
 logger.debug("Performing hardware detection...")
-_DETECTED_DEVICE = "CPU"
-_DETECTED_PREP_DEVICE = "CPU"
-_DETECTED_COMPUTE = "int8"
-
-# 1. NVIDIA Acceleration Check
-CUDA_COUNT = 0
-try:
-    _ct2 = importlib.import_module("ctranslate2")
-    CUDA_COUNT = _ct2.get_cuda_device_count()
-    if CUDA_COUNT > 0:
-        logger.debug("Auto-detected %d NVIDIA GPU(s).", CUDA_COUNT)
-        _DETECTED_DEVICE = "CUDA"
-        _DETECTED_PREP_DEVICE = "CUDA"
-        _DETECTED_COMPUTE = "float16"
-        cuda_to_use = min(CUDA_COUNT, MAX_CUDA)
-        for i in range(cuda_to_use):
-            HARDWARE_UNITS.append({"type": "CUDA", "id": f"cuda:{i}", "name": f"NVIDIA GPU {i}"})
-except tuple([Exception]) as e:
-    logger.debug("CUDA detection skipped: %s", e)
-
-# 2. Intel Accelerator Check (OpenVINO)
-try:
-    _ov = importlib.import_module("openvino")
-    core = _ov.Core()
-    if core:
-        devices = core.available_devices
-        logger.debug("OpenVINO Available Devices: %s", devices)
-
-    GPU_DETECT_COUNT = 0
-    NPU_DETECT_COUNT = 0
-
-    for dev in devices:
-        if "GPU" in dev:
-            if GPU_DETECT_COUNT >= MAX_GPU:
-                continue
-            try:
-                DEV_NAME = core.get_property(dev, "FULL_DEVICE_NAME")
-            except tuple([Exception]):
-                DEV_NAME = f"Intel {dev}"
-            HARDWARE_UNITS.append({"type": "GPU", "id": dev, "name": DEV_NAME})
-            GPU_DETECT_COUNT += 1
-            # Prioritize Intel GPU for preprocessing if it's available,
-            # allowing NVIDIA to be dedicated to ASR.
-            if _DETECTED_PREP_DEVICE in ("CPU", "CUDA"):
-                _DETECTED_PREP_DEVICE = "GPU"
-        elif "NPU" in dev:
-            if NPU_DETECT_COUNT >= MAX_NPU:
-                continue
-            try:
-                DEV_NAME = core.get_property(dev, "FULL_DEVICE_NAME")
-            except tuple([Exception]):
-                DEV_NAME = f"Intel {dev}"
-            HARDWARE_UNITS.append({"type": "NPU", "id": dev, "name": DEV_NAME})
-            NPU_DETECT_COUNT += 1
-            # NPUs are even better for background preprocessing
-            _DETECTED_PREP_DEVICE = "NPU"
-
-except tuple([Exception]) as e:
-    logger.debug("Intel accelerator detection skipped: %s", e)
-
-# Finalize Hardware Units (Only use CPU as a slot if NO accelerators exist)
-if not HARDWARE_UNITS:
-    logger.info("No accelerators detected. Using Host CPU for all tasks.")
-    HARDWARE_UNITS.append({"type": "CPU", "id": "CPU", "name": "Host CPU"})
-else:
-    logger.info("Accelerators detected. CPU overflow disabled for Vocal Separation.")
+_DETECTED_DEVICE, _DETECTED_PREP_DEVICE, _DETECTED_COMPUTE = detect_hardware(MAX_CUDA, MAX_GPU, MAX_NPU, HARDWARE_UNITS)
 
 # --- [DEVICE ASSIGNMENT] ---
 if ASR_DEVICE_ENV == "AUTO":
@@ -154,21 +82,48 @@ if ASR_DEVICE_ENV == "AUTO":
 else:
     DEVICE = ASR_DEVICE_ENV
 
-ASR_PREPROCESS_DEVICE_ENV = os.environ.get(
-    "ASR_PREPROCESS_DEVICE", "AUTO").upper()
+ASR_PREPROCESS_DEVICE_ENV = os.environ.get("ASR_PREPROCESS_DEVICE", "AUTO").upper()
 if ASR_PREPROCESS_DEVICE_ENV == "AUTO":
     PREPROCESS_DEVICE = _DETECTED_PREP_DEVICE
 else:
     PREPROCESS_DEVICE = ASR_PREPROCESS_DEVICE_ENV
 
 # --- [ENGINE SELECTION] ---
-# ASR_ENGINE can be: AUTO (default), FASTER-WHISPER, INTEL-WHISPER
-ASR_ENGINE = os.environ.get("ASR_ENGINE", "AUTO").upper()
-if ASR_ENGINE == "AUTO":
-    ASR_ENGINE = "FASTER-WHISPER"
+# ASR_ENGINE can be: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
+_resolution_parts = []
+if ASR_ENGINE_ENV == "AUTO":
+    ASR_ENGINE_SOURCE = "auto"
+    ASR_ENGINE, auto_hardware_tier = engine_registry.resolve_auto_engine(HARDWARE_UNITS)
+    _resolution_parts.append(f"AUTO -> {ASR_ENGINE} ({auto_hardware_tier})")
+
+    if ASR_DEVICE_ENV == "AUTO":
+        DEVICE = engine_registry.resolve_auto_device(HARDWARE_UNITS)
+
+    logger.info(
+        "ASR_ENGINE=AUTO resolved to %s using hardware tier %s (order: CUDA > GPU > NPU > CPU)",
+        ASR_ENGINE,
+        auto_hardware_tier,
+    )
+else:
+    ASR_ENGINE_SOURCE = "explicit"
+    ASR_ENGINE = engine_registry.normalize_and_validate_engine(ASR_ENGINE_ENV)
+    _resolution_parts.append(f"explicit -> {ASR_ENGINE}")
+    if ASR_DEVICE_ENV == "AUTO" and ASR_ENGINE == engine_registry.ENGINE_INTEL_WHISPER:
+        DEVICE = engine_registry.resolve_auto_device(HARDWARE_UNITS)
+
+# INTEL-WHISPER requires Intel accelerator hardware for this deployment policy.
+# If no Intel GPU/NPU exists, use Faster-Whisper fallback instead of OpenVINO CPU.
+if ASR_ENGINE == engine_registry.ENGINE_INTEL_WHISPER:
+    has_intel_accelerator = any(unit.get("type") in ["GPU", "NPU"] for unit in HARDWARE_UNITS)
+    if not has_intel_accelerator:
+        logger.warning("INTEL-WHISPER requested but no Intel GPU/NPU available. Falling back to FASTER-WHISPER.")
+        ASR_ENGINE = engine_registry.ENGINE_FASTER_WHISPER
+        _resolution_parts.append(f"fallback -> {ASR_ENGINE} (no Intel GPU/NPU)")
+
+ASR_ENGINE_RESOLUTION = " | ".join(_resolution_parts)
 
 # Redirect MODEL_ID if using Intel engine and local OpenVINO model exists
-if ASR_ENGINE == "INTEL-WHISPER" and MODEL_ID == DEFAULT_MODEL:
+if ASR_ENGINE == "INTEL-WHISPER" and ASR_ENV == DEFAULT_MODEL:
     if os.path.exists(OV_MODEL_PATH):
         MODEL_ID = OV_MODEL_PATH
     else:
@@ -190,11 +145,10 @@ if ASR_DEVICE_ENV == "AUTO" and DEVICE in ["NPU", "GPU", "CPU"]:
         if matching_devs:
             dev_id = matching_devs[0]
             ASR_DEVICE_NAME = core_obj.get_property(dev_id, "FULL_DEVICE_NAME")
-    except tuple([Exception]):
+    except (ImportError, AttributeError, ValueError, TypeError, RuntimeError, OSError):
         pass
 
-if (os.environ.get("ASR_PREPROCESS_DEVICE", "AUTO").upper() == "AUTO" and
-        PREPROCESS_DEVICE in ["NPU", "GPU", "CPU"]):
+if os.environ.get("ASR_PREPROCESS_DEVICE", "AUTO").upper() == "AUTO" and PREPROCESS_DEVICE in ["NPU", "GPU", "CPU"]:
     try:
         _ov = importlib.import_module("openvino")
         core_obj = _ov.Core()
@@ -202,7 +156,7 @@ if (os.environ.get("ASR_PREPROCESS_DEVICE", "AUTO").upper() == "AUTO" and
         if matching_devs:
             dev_id = matching_devs[0]
             PREPROCESS_DEVICE_NAME = core_obj.get_property(dev_id, "FULL_DEVICE_NAME")
-    except tuple([Exception]):
+    except (ImportError, AttributeError, ValueError, TypeError, RuntimeError, OSError):
         pass
 
 # --- [COMPUTE TYPE RESOLUTION] ---
@@ -215,7 +169,10 @@ else:
     COMPUTE_TYPE = ASR_COMPUTE_ENV.lower()
 
 # Faster-Whisper requires explicitly setting 'cuda' or 'cpu'
-if DEVICE == "CUDA" or _DETECTED_DEVICE == "CUDA":
+# Respect explicit ASR_DEVICE override before falling back to auto-detection.
+if DEVICE == "CUDA":
+    ASR_ENGINE_DEVICE = "cuda"
+elif ASR_DEVICE_ENV == "AUTO" and _DETECTED_DEVICE == "CUDA":
     ASR_ENGINE_DEVICE = "cuda"
 else:
     ASR_ENGINE_DEVICE = "cpu"
@@ -245,7 +202,7 @@ def update_env(key, value):
     os.environ[key] = str(value)
     # Note: Full re-evaluation would require a reload of the module or a dedicated
     # refresh function. For now, we update the env so subsequent calls see it.
-    logger.info("[Config] Environment updated: %s=%s", key, value)
+    logger.info("[Config] Environment updated: %s", key)
 
 
 INITIAL_STEPS_RATIO = 2.8
@@ -258,16 +215,19 @@ OV_CACHE_DIR = os.environ.get("OV_CACHE_DIR", LOCAL_CACHE)
 TEMP_DIR = os.environ.get("WHISPER_TEMP_DIR", tempfile.gettempdir())
 try:
     os.makedirs(TEMP_DIR, exist_ok=True)
-except PermissionError:
+except (PermissionError, OSError):
     TEMP_DIR = tempfile.gettempdir()
 
 # Persistence Directory (Should be mounted to a physical volume for history/logs)
 PERSISTENT_DIR = os.environ.get("WHISPER_PERSISTENT_DIR", "/app/data")
 try:
     os.makedirs(PERSISTENT_DIR, exist_ok=True)
-except PermissionError:
+except (PermissionError, OSError):
     PERSISTENT_DIR = "./test_data"
-    os.makedirs(PERSISTENT_DIR, exist_ok=True)
+    try:
+        os.makedirs(PERSISTENT_DIR, exist_ok=True)
+    except OSError:
+        pass
 
 # State and Telemetry Directory (Persistent across restarts)
 STATE_DIR = os.environ.get("WHISPER_STATE_DIR", PERSISTENT_DIR)
@@ -275,14 +235,68 @@ LOG_DIR = os.environ.get("WHISPER_LOG_DIR", STATE_DIR)
 try:
     os.makedirs(STATE_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
-except PermissionError:
+except (PermissionError, OSError):
     STATE_DIR = "./test_state"
     LOG_DIR = "./test_state"
-    os.makedirs(STATE_DIR, exist_ok=True)
-    os.makedirs(LOG_DIR, exist_ok=True)
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        os.makedirs(LOG_DIR, exist_ok=True)
+    except OSError:
+        pass
 
-TEMP_DIR_MIN_FREE_BYTES = int(os.environ.get(
-    "WHISPER_TEMP_MIN_FREE_MB", 2048)) * 1024 * 1024
+
+def get_custom_mount_points():
+    """Discover custom mount points from /proc/mounts to automatically approve volumes."""
+    mounts = []
+    if not os.path.exists("/proc/mounts"):
+        return mounts
+    try:
+        # Ignore system directories and mounts
+        system_roots = {
+            "/",
+            "/proc",
+            "/sys",
+            "/dev",
+            "/run",
+            "/boot",
+            "/lib",
+            "/lib64",
+            "/bin",
+            "/sbin",
+            "/usr",
+            "/var",
+            "/etc",
+            "/root",
+            "/home",
+            "/tmp",
+            "/sys/firmware",
+        }
+        with open("/proc/mounts", "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mp = parts[1]
+                    # We want custom mount points that do not belong to system roots
+                    # Also skip mounts starting with system paths (like /proc/sys, /sys/fs, /dev/pts, etc.)
+                    if mp in system_roots:
+                        continue
+                    if any(mp.startswith(sr + "/") for sr in system_roots):
+                        continue
+                    # Skip common Docker internal file mounts
+                    if mp.endswith(("/hosts", "/hostname", "/resolv.conf")):
+                        continue
+                    mounts.append(mp)
+    except (FileNotFoundError, PermissionError, OSError, ValueError, IndexError):
+        pass
+    return mounts
+
+
+# Approved roots configuration
+APPROVED_ROOTS_ENV = os.environ.get("WHISPER_APPROVED_ROOTS", "")
+APPROVED_ROOTS = [p.strip() for p in APPROVED_ROOTS_ENV.split(",") if p.strip()]
+APPROVED_ROOTS.extend(get_custom_mount_points())
+
+TEMP_DIR_MIN_FREE_BYTES = int(os.environ.get("WHISPER_TEMP_MIN_FREE_MB", 2048)) * 1024 * 1024
 
 PERSISTENT_TEMP_DIR = os.path.join(OV_CACHE_DIR, "temp")
 try:
@@ -308,11 +322,12 @@ def get_temp_dir(required_bytes=0):
         free = shutil.disk_usage(TEMP_DIR).free
         if free < threshold:
             logger.debug(
-                "[Config] tmpfs free space (%d MB) below threshold (%d MB) "
-                "— falling back to persistent temp dir.",
-                free // (1024 * 1024), threshold // (1024 * 1024))
+                "[Config] tmpfs free space (%d MB) below threshold (%d MB) — falling back to persistent temp dir.",
+                free // (1024 * 1024),
+                threshold // (1024 * 1024),
+            )
             return PERSISTENT_TEMP_DIR
-    except tuple([Exception]):
+    except OSError:
         return PERSISTENT_TEMP_DIR
     return TEMP_DIR
 
@@ -321,8 +336,17 @@ def get_preprocessing_cache_dir():
     """Resolve the preprocessing cache directory dynamically."""
     base = get_temp_dir()
     path = os.path.join(base, "preprocessing")
-    os.makedirs(path, exist_ok=True)
-    return path
+    try:
+        os.makedirs(path, exist_ok=True)
+        return path
+    except (PermissionError, OSError):
+        fallback_base = tempfile.gettempdir()
+        path = os.path.join(fallback_base, "preprocessing")
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            pass
+        return path
 
 
 PREPROCESSING_CACHE_DIR = get_preprocessing_cache_dir()
@@ -356,22 +380,19 @@ UVR_CHUNK_DURATION = int(os.environ.get("UVR_CHUNK_DURATION", 600))
 INTEL_ASR_CHUNK_DURATION = int(os.environ.get("INTEL_ASR_CHUNK_DURATION", 300))
 
 # --- [LANGUAGE PROCESSING & VAD] ---
-VAD_MIN_SILENCE_DURATION_MS = int(
-    os.environ.get("VAD_MIN_SILENCE_DURATION_MS", 500))
+VAD_MIN_SILENCE_DURATION_MS = int(os.environ.get("VAD_MIN_SILENCE_DURATION_MS", 500))
 VAD_SPEECH_PAD_MS = int(os.environ.get("VAD_SPEECH_PAD_MS", 500))
 
 INITIAL_PROMPT = os.environ.get(
     "INITIAL_PROMPT",
     "This video contains speech in multiple languages including "
-    "Romanian, English, French, Italian, German, and Spanish."
+    "Romanian, English, French, Italian, German, and Spanish.",
 )
 
 # --- [PREPROCESSING CONFIGURATION] ---
-ENABLE_VOCAL_SEPARATION = os.environ.get(
-    "ENABLE_VOCAL_SEPARATION", "false").lower() == "true"
+ENABLE_VOCAL_SEPARATION = os.environ.get("ENABLE_VOCAL_SEPARATION", "false").lower() == "true"
 
-VOCAL_SEPARATION_SEGMENT_DURATION = int(
-    os.environ.get("VOCAL_SEPARATION_SEGMENT_DURATION", 600))
+VOCAL_SEPARATION_SEGMENT_DURATION = int(os.environ.get("VOCAL_SEPARATION_SEGMENT_DURATION", 600))
 
 logger.debug("Final Preprocessing Device: %s", PREPROCESS_DEVICE)
 
@@ -381,38 +402,8 @@ PREPROCESS_THREADS_ENV = int(os.environ.get("ASR_PREPROCESS_THREADS", 4))
 # --- [THREAD & PERFORMANCE TUNING] ---
 
 
-def _resolve_thread_limits(requested_asr, requested_prep):
-    """Resolve and enforce physical hardware thread limits with priority."""
-    # Use CPU_CORE_LIMIT as the effective "core count" for the application logic
-    cores = CPU_CORE_LIMIT
-
-    # 1. Handle AUTO scaling
-    if MAX_CPU >= 999:
-        # If AUTO, we use the requested threads (capped to total budget)
-        # The parallel limit will then scale the number of units to fill the remaining budget.
-        return min(requested_asr, cores), min(requested_prep, cores)
-
-    # 2. Scale threads per task based on allowed parallel units to fit the global limit
-    # Default behavior: If MAX_CPU_UNITS=1, asr_threads can be up to CPU_CORE_LIMIT.
-    # If MAX_CPU_UNITS=2, asr_threads is capped at CPU_CORE_LIMIT/2 per task.
-    effective_pool = max(1, CPU_CORE_LIMIT // MAX_CPU)
-
-    # Faster-Whisper CPU threads
-    asr_threads = min(requested_asr, effective_pool)
-
-    # Threads for ONNX Runtime / OpenVINO (Vocal Separation)
-    prep_threads = min(requested_prep, cores if DEVICE != "CPU" else effective_pool)
-
-    if asr_threads < requested_asr:
-        logger.info("[Config] Capping ASR_THREADS to %d (Global Limit: %d, Units: %d)",
-                    asr_threads, CPU_CORE_LIMIT, MAX_CPU)
-    if prep_threads < requested_prep and DEVICE != "CPU":
-        logger.info("[Config] Capping ASR_PREPROCESS_THREADS to %d (Hardware limit)", cores)
-    return asr_threads, prep_threads
-
-
-ASR_THREADS, PREPROCESS_THREADS = _resolve_thread_limits(
-    DEFAULT_WHISPER_THREADS, PREPROCESS_THREADS_ENV
+ASR_THREADS, PREPROCESS_THREADS = resolve_thread_limits(
+    DEFAULT_WHISPER_THREADS, PREPROCESS_THREADS_ENV, CPU_CORE_LIMIT, MAX_CPU, DEVICE
 )
 
 # Industry standard thread limits for shared libraries
@@ -434,16 +425,16 @@ def validate_thread_concurrency():
     """Enforce hardware-aware thread limits to maintain responsiveness."""
     try:
         eff_ffmpeg = FFMPEG_THREADS if FFMPEG_THREADS > 0 else 1
-        # Preprocessing threads are per-task. If we are at capacity,
-        # we only care about the threads used by the ACTIVE units.
-        # But for a simple check, we use the global limit.
         total_load = PREPROCESS_THREADS + eff_ffmpeg
 
         if total_load > (CPU_CORE_LIMIT + 2):  # Allow slight over-subscription for I/O
             logger.warning(
                 "[Config] OVER-PROVISIONING: PREPROCESS_THREADS (%d) + "
                 "FFMPEG_THREADS (%d) = %d, which exceeds logical cores (%d).",
-                PREPROCESS_THREADS, eff_ffmpeg, total_load, CPU_CORE_LIMIT
+                PREPROCESS_THREADS,
+                eff_ffmpeg,
+                total_load,
+                CPU_CORE_LIMIT,
             )
     except (ValueError, TypeError, AttributeError):
         pass
@@ -451,42 +442,20 @@ def validate_thread_concurrency():
 
 validate_thread_concurrency()
 
-
-def _calculate_cpu_parallel_limit():
-    """Calculate how many multi-threaded CPU tasks can run safely."""
-    if MAX_CPU < 999:
-        return MAX_CPU
-
-    cores = CPU_CORE_LIMIT
-    cores_per_task = max(ASR_THREADS, PREPROCESS_THREADS)
-    limit = max(1, cores // cores_per_task)
-    logger.info("[Resource] Calculated AUTO CPU parallel limit: %d "
-                "(Cores: %d, Threads/Task: %d)",
-                limit, cores, cores_per_task)
-    return limit
-
-
-CPU_PARALLEL_LIMIT = _calculate_cpu_parallel_limit()
+CPU_PARALLEL_LIMIT = calculate_cpu_parallel_limit(MAX_CPU, CPU_CORE_LIMIT, ASR_THREADS, PREPROCESS_THREADS)
 
 
 def get_parallel_limit(device):
     """Determine parallel task limit based on physical resource units."""
     if device in ["CUDA", "GPU", "NPU"]:
         try:
-            if device == "CUDA":
-                _ct2 = importlib.import_module("ctranslate2")
-                return max(1, _ct2.get_cuda_device_count())
-
-            if device in ["GPU", "NPU"]:
-                _ov = importlib.import_module("openvino")
-                core_local = _ov.Core()
-                # Count distinct physical hardware units of this type
-                units = [d for d in core_local.available_devices if device in d]
-                return max(1, len(units))
-        except tuple([Exception]):
+            units = [u for u in HARDWARE_UNITS if u.get("type") == device]
+            if units:
+                return len(units)
+        except (AttributeError, TypeError, ValueError):
             pass
 
-        return 1  # Safe default if detection fails
+        return 1  # Safe default if registry is unavailable or device is absent
 
     # CPU-bound tasks: Capped by hardware-optimized slot count
     return CPU_PARALLEL_LIMIT
@@ -494,11 +463,11 @@ def get_parallel_limit(device):
 
 # --- [LANGUAGE DETECTION] ---
 # Enable iterative scanning for quiet or long-intro files
-SMART_SAMPLING_SEARCH = os.environ.get(
-    "SMART_SAMPLING_SEARCH", "false").lower() == "true"
+SMART_SAMPLING_SEARCH = os.environ.get("SMART_SAMPLING_SEARCH", "false").lower() == "true"
 # Enable vocal isolation during language detection (improves identification accuracy)
-ENABLE_LD_PREPROCESSING = os.environ.get(
-    "ENABLE_LD_PREPROCESSING", "true").lower() == "true"
+ENABLE_LD_PREPROCESSING = os.environ.get("ENABLE_LD_PREPROCESSING", "true").lower() == "true"
+# Coalesce concurrent identical detect-language requests (same local path) into one leader execution.
+ENABLE_LD_REQUEST_COALESCING = os.environ.get("ENABLE_LD_REQUEST_COALESCING", "true").lower() == "true"
 # Aggressiveness of VAD during language detection (0.0 to 1.0)
 LD_VAD_THRESHOLD = float(os.environ.get("LD_VAD_THRESHOLD", 0.3))
 # Minimum confidence threshold to consider a segment's vote in language detection
@@ -509,3 +478,12 @@ LD_MIN_CONFIDENCE = float(os.environ.get("LD_MIN_CONFIDENCE", 0.5))
 # Known "silence" or "credit" hallucination phrases for removal during post-processing
 HALLUCINATION_SILENCE_THRESHOLD = float(os.environ.get("HALLUCINATION_SILENCE_THRESHOLD", 0.85))
 HALLUCINATION_REPETITION_THRESHOLD = int(os.environ.get("HALLUCINATION_REPETITION_THRESHOLD", 15))
+
+
+# --- [SUBTITLE PROMO CARD] ---
+SUBTITLE_PROMO_ENABLED = os.environ.get("SUBTITLE_PROMO_ENABLED", "true").lower() == "true"
+SUBTITLE_PROMO_TEXT = os.environ.get("SUBTITLE_PROMO_TEXT", "Made with Whisper Pro ASR")
+try:
+    SUBTITLE_PROMO_DURATION = float(os.environ.get("SUBTITLE_PROMO_DURATION", "3.0"))
+except (ValueError, TypeError):
+    SUBTITLE_PROMO_DURATION = 3.0

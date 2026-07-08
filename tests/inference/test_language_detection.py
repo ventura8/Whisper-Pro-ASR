@@ -1,8 +1,10 @@
 """Tests for modules/inference/language_detection.py."""
 
 from unittest import mock
+
 import numpy as np
 import pytest
+
 from modules.inference import language_detection
 
 
@@ -15,17 +17,10 @@ class TestDetectionPipeline:
             with mock.patch("modules.inference.language_detection._generate_sampling_tasks", return_value=[0, 30, 60]):
                 mock_mm = mock.MagicMock()
                 # Mock internal worker result
-                mock_res = {
-                    'detected_language': 'fr',
-                    'confidence': 1.0,
-                    'all_probabilities': {'fr': 1.0, 'en': 0.0}
-                }
-                mock_mm.model_lock_ctx.return_value.__enter__.return_value = (
-                    mock.MagicMock(), "CPU")
+                mock_res = {"detected_language": "fr", "confidence": 1.0, "all_probabilities": {"fr": 1.0, "en": 0.0}}
+                mock_mm.model_lock_ctx.return_value.__enter__.return_value = (mock.MagicMock(), "CPU")
                 mock_mm.run_vocal_isolation_direct.return_value = "isolated.wav"
-                mock_mm.run_batch_language_detection_direct.return_value = [
-                    mock_res, mock_res, mock_res
-                ]
+                mock_mm.run_batch_language_detection_direct.return_value = [mock_res, mock_res, mock_res]
                 with mock.patch("modules.inference.language_detection._prepare_montage", return_value="montage.wav"):
                     result = language_detection.run_voting_detection("dummy.wav", mock_mm)
                     assert result["detected_language"] == "fr"
@@ -36,15 +31,10 @@ class TestDetectionPipeline:
         with mock.patch("modules.inference.language_detection.utils.get_audio_duration", return_value=120):
             with mock.patch("modules.inference.language_detection._generate_sampling_tasks", return_value=[0, 30, 60]):
                 mock_mm = mock.MagicMock()
-                mock_mm.model_lock_ctx.return_value.__enter__.return_value = (
-                    mock.MagicMock(), "CPU")
+                mock_mm.model_lock_ctx.return_value.__enter__.return_value = (mock.MagicMock(), "CPU")
                 mock_mm.run_vocal_isolation_direct.return_value = "isolated.wav"
-                mock_mm.run_batch_language_detection_direct.return_value = [
-                    None, None, None
-                ]
-                mock_mm.run_language_detection.return_value = {
-                    "detected_language": "en", "confidence": 0.5
-                }
+                mock_mm.run_batch_language_detection_direct.return_value = [None, None, None]
+                mock_mm.run_language_detection.return_value = {"detected_language": "en", "confidence": 0.5}
                 with mock.patch("modules.inference.language_detection._prepare_montage", return_value="montage.wav"):
                     result = language_detection.run_voting_detection("dummy.wav", mock_mm)
                     assert result["detected_language"] == "en"
@@ -54,7 +44,9 @@ class TestDetectionPipeline:
         """Test absolute fallback when batch scan fails with exception."""
         mock_mm = mock.MagicMock()
         mock_mm.run_language_detection.return_value = {"detected_language": "en"}
-        with mock.patch("modules.inference.language_detection._prepare_montage", side_effect=Exception("forced failure")):
+        with mock.patch(
+            "modules.inference.language_detection._prepare_montage", side_effect=RuntimeError("forced failure")
+        ):
             result = language_detection.run_voting_detection("dummy.wav", mock_mm)
             assert result["detected_language"] == "en"
             mock_mm.run_language_detection.assert_called_once_with("dummy.wav")
@@ -84,8 +76,7 @@ class TestLanguageDetectionHelpers:
     def test_get_sampling_target(self):
         """Sampling target scales with duration."""
         assert language_detection._get_sampling_target(30) >= 1
-        assert language_detection._get_sampling_target(
-            300) > language_detection._get_sampling_target(30)
+        assert language_detection._get_sampling_target(300) > language_detection._get_sampling_target(30)
 
 
 class TestFindBestOffset:
@@ -126,15 +117,17 @@ def test_ld_aggregate_edge_cases():
 
 def test_ld_step_isolate_disabled():
     """Cover disabled preprocessing step."""
-    with mock.patch("modules.config.ENABLE_LD_PREPROCESSING", False):
+    with mock.patch("modules.core.config.ENABLE_LD_PREPROCESSING", False):
         res = language_detection._step_isolate_vocals("test.wav", None, "CPU", {})
         assert res == "test.wav"
 
 
 def test_ld_smart_sampling_logic():
     """Cover smart sampling search loop."""
-    with mock.patch("modules.config.SMART_SAMPLING_SEARCH", True), \
-            mock.patch("modules.inference.language_detection._find_best_offset_in_zone", return_value=10.0):
+    with (
+        mock.patch("modules.core.config.SMART_SAMPLING_SEARCH", True),
+        mock.patch("modules.inference.language_detection._find_best_offset_in_zone", return_value=10.0),
+    ):
         tasks = language_detection._generate_sampling_tasks("test.wav", 100, 2)
         assert tasks == [10.0, 10.0]
 
@@ -171,35 +164,21 @@ def test_ld_lazy_load_sf():
 
 def test_ld_low_confidence_filtering():
     """Test that language votes below LD_MIN_CONFIDENCE are skipped."""
-    with mock.patch("modules.config.LD_MIN_CONFIDENCE", 0.5):
+    with mock.patch("modules.core.config.LD_MIN_CONFIDENCE", 0.5):
         results = [
-            {
-                "detected_language": "fr",
-                "confidence": 0.8,
-                "all_probabilities": {"fr": 0.8, "en": 0.2}
-            },
-            {
-                "detected_language": "en",
-                "confidence": 0.3,
-                "all_probabilities": {"fr": 0.1, "en": 0.3}
-            }
+            {"detected_language": "fr", "confidence": 0.8, "all_probabilities": {"fr": 0.8, "en": 0.2}},
+            {"detected_language": "en", "confidence": 0.3, "all_probabilities": {"fr": 0.1, "en": 0.3}},
         ]
 
         mock_mm = mock.MagicMock()
         mock_mm.run_batch_language_detection_direct.return_value = results
 
-        perf = {
-            'dur_queue': 1.0,
-            'dur_montage': 1.0,
-            'dur_iso': 1.0,
-            'dur_inf': 1.0,
-            'start_inf': 0.0
-        }
+        perf = {"dur_queue": 1.0, "dur_montage": 1.0, "dur_iso": 1.0, "dur_inf": 1.0, "start_inf": 0.0}
 
-        with mock.patch("modules.inference.language_detection.aggregate_language_probs", return_value={"fr": 1.0}) as mock_agg:
-            language_detection._step_run_inference(
-                (mock.MagicMock(), mock_mm), "isolated.wav", 2, perf
-            )
+        with mock.patch(
+            "modules.inference.language_detection.aggregate_language_probs", return_value={"fr": 1.0}
+        ) as mock_agg:
+            language_detection._step_run_inference((mock.MagicMock(), mock_mm), "isolated.wav", 2, perf)
             mock_agg.assert_called_once_with([{"fr": 0.8, "en": 0.2, "_speech_duration": 30.0}])
 
 

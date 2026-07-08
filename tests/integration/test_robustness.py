@@ -1,63 +1,81 @@
 """System-wide robustness and edge-case validation for core modules."""
 
-import os
-import sys
-import shutil
-import tempfile
+import asyncio
 import importlib
+import os
+import shutil
+import sys
+import tempfile
 from collections import namedtuple
 from unittest import mock
-from flask import Flask
-from modules import utils, bootstrap, config
+
 from modules.api import routes_system
-from modules.inference import model_manager, scheduler, language_detection
-from modules.monitoring import metrics_discovery, dashboard_ui
+from modules.core import bootstrap, config, utils
+from modules.inference import language_detection, model_manager, scheduler
+from modules.monitoring import dashboard_ui, metrics_discovery
 
 
 def test_hardware_path_resolution():
     """Test bootstrap module hardware path resolution logic."""
+
+    class PathTracker(list):
+        """Minimal sys.path stand-in that records insert calls."""
+
+        def __init__(self):
+            super().__init__()
+            self.insert_calls = []
+
+        def insert(self, index, value):
+            self.insert_calls.append((index, value))
+            super().insert(index, value)
+
     # 1. Test NVIDIA path
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "CUDA"}):
         with mock.patch("os.path.exists", return_value=True):
-            fake_path = []
+            fake_path = PathTracker()
             with mock.patch.object(sys, "path", fake_path):
                 with mock.patch("importlib.reload"):
                     bootstrap.initialize_hardware_path()
-                    assert "/app/libs/nvidia" in fake_path
+                    assert (0, "/app/libs/nvidia") in fake_path.insert_calls
 
     # 2. Test Intel path
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "INTEL"}):
         with mock.patch("os.path.exists", return_value=True):
-            fake_path = []
+            fake_path = PathTracker()
             with mock.patch.object(sys, "path", fake_path):
                 with mock.patch("importlib.reload"):
                     bootstrap.initialize_hardware_path()
-                    assert "/app/libs/intel" in fake_path
+                    assert (0, "/app/libs/intel") in fake_path.insert_calls
 
-    # 3. Test Intel path auto-detection via /dev/accel
+    # 3. Test Intel path fallback when OpenVINO probe cannot be performed
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "auto"}):
+
         def mock_exists(path):
             return path in ["/dev/accel", "/app/libs/intel"]
+
         with mock.patch("os.path.exists", side_effect=mock_exists):
-            fake_path = []
+            fake_path = PathTracker()
             with mock.patch.object(sys, "path", fake_path):
-                with mock.patch("importlib.reload"):
-                    bootstrap.initialize_hardware_path()
-                    assert "/app/libs/intel" in fake_path
+                with mock.patch("openvino.Core", side_effect=RuntimeError("probe failed")):
+                    with mock.patch("importlib.reload"):
+                        bootstrap.initialize_hardware_path()
+                        assert (0, "/app/libs/intel") in fake_path.insert_calls
 
     # 4. Test Intel path auto-detection via OpenVINO fallback query
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "auto"}):
+
         def mock_exists_ov(path):
             return path == "/app/libs/intel"
+
         with mock.patch("os.path.exists", side_effect=mock_exists_ov):
             mock_core = mock.MagicMock()
             mock_core.available_devices = ["NPU"]
             with mock.patch("openvino.Core", return_value=mock_core):
-                fake_path = []
+                fake_path = PathTracker()
                 with mock.patch.object(sys, "path", fake_path):
                     with mock.patch("importlib.reload"):
                         bootstrap.initialize_hardware_path()
-                        assert "/app/libs/intel" in fake_path
+                        assert (0, "/app/libs/intel") in fake_path.insert_calls
 
     # 5. Test Unknown platform fallback
     with mock.patch("platform.system", return_value="Unknown"):
@@ -67,7 +85,7 @@ def test_hardware_path_resolution():
 def test_media_utilities_resilience():
     """Target gaps in media utilities and formatting logic."""
     # 1. clear_gpu_cache exception path
-    with mock.patch("modules.utils.torch") as mock_torch:
+    with mock.patch("modules.core.utils.torch") as mock_torch:
         mock_torch.cuda.is_available.return_value = True
         mock_torch.cuda.empty_cache.side_effect = Exception("CUDA Fail")
         utils.clear_gpu_cache()
@@ -81,8 +99,8 @@ def test_media_utilities_resilience():
     # 3. Subtitle generation fallbacks
     res_text = {"text": "hello"}
     assert "00:00:00,000" in utils.generate_srt(res_text)
-    assert "[No dialogue detected]" == utils.generate_srt({})
-    assert "[No dialogue detected]" == utils.generate_srt({"text": ""})
+    assert "[No dialogue detected]" in utils.generate_srt({})
+    assert "[No dialogue detected]" in utils.generate_srt({"text": ""})
 
     res_none = {"segments": [{"text": "hello", "start": None, "end": None}]}
     assert "00:00:00,000" in utils.generate_srt(res_none)
@@ -148,7 +166,7 @@ def test_engine_resource_management():
 
     # 2. Aggressive offload and reclamation failures
     model_mock = mock.MagicMock()
-    model_mock_2 = mock.MagicMock(spec=['pipeline'])
+    model_mock_2 = mock.MagicMock(spec=["pipeline"])
     pm_mock = mock.MagicMock()
     pm_mock.unload_model.side_effect = Exception("UVR Fail")
 
@@ -159,14 +177,14 @@ def test_engine_resource_management():
     mock_ct2 = mock.MagicMock()
     mock_ct2.clear_caches.side_effect = RuntimeError("CT2 Fail")
     with mock.patch.dict("modules.inference.model_manager._ENGINES", {"ctranslate2": mock_ct2}):
-        with mock.patch("modules.utils.get_system_telemetry", return_value={}):
+        with mock.patch("modules.core.utils.get_system_telemetry", return_value={}):
             model_manager.unload_models()
 
     assert len(model_manager.MODEL_POOL) == 0
 
     # 3. Libc/Platform specific reclamation failures
     with mock.patch("ctypes.CDLL", side_effect=OSError("No libc")):
-        with mock.patch("modules.utils.get_system_telemetry", return_value={}):
+        with mock.patch("modules.core.utils.get_system_telemetry", return_value={}):
             model_manager.unload_models()
 
     # 4. Scheduler metadata updates for untracked threads
@@ -201,7 +219,7 @@ def test_language_sampling_edge_cases():
 def test_system_config_validation():
     """Test temp directory resolution and environment parsing resilience."""
     # 1. Temp dir resolution when primary storage is full
-    Usage = namedtuple('Usage', ['free'])
+    Usage = namedtuple("Usage", ["free"])
     with mock.patch("shutil.disk_usage", return_value=Usage(free=0)):
         path = config.get_temp_dir(required_bytes=1000000)
         assert path == config.PERSISTENT_TEMP_DIR
@@ -213,42 +231,41 @@ def test_system_config_validation():
 
 
 def test_system_routes_logic_gaps():
-    """Directly test system routes logic using a mock request context."""
-    app = Flask(__name__)
-
+    """Directly test system routes logic using mock Request objects."""
     # 1. root with HTML
-    with app.test_request_context(headers={"Accept": "text/html"}):
-        with mock.patch("modules.monitoring.dashboard.get_dashboard_html", return_value="<html>"):
-            assert routes_system.root() == "<html>"
+    mock_request = mock.MagicMock()
+    mock_request.headers = {"accept": "text/html"}
+    with mock.patch("modules.monitoring.dashboard.get_dashboard_html", return_value="<html>"):
+        resp = routes_system.root(mock_request)
+        assert "<html>" in resp.body.decode()
 
     # 2. download_logs fail paths
-    with app.test_request_context():
-        with mock.patch("modules.api.routes_system.config") as mock_conf:
-            mock_conf.LOG_DIR = "/non/existent"
-            mock_conf.TEMP_DIR = "/non/existent/temp"
-            with mock.patch("os.path.exists", return_value=False):
-                resp, code = routes_system.download_logs()
-                assert code == 404
+    with mock.patch("modules.api.routes_system.config") as mock_conf:
+        mock_conf.LOG_DIR = "/non/existent"
+        mock_conf.TEMP_DIR = "/non/existent/temp"
+        with mock.patch("os.path.exists", return_value=False):
+            resp = routes_system.download_logs()
+            assert resp.status_code == 404
 
     # 3. update_settings POST paths
-    with app.test_request_context(method='POST', json={
+    mock_post_request = mock.AsyncMock()
+    mock_post_request.json.return_value = {
         "ASR_MODEL": "test_model",
         "ASR_DEVICE": "CPU",
         "telemetry_retention_hours": 12,
-        "log_retention_days": 5
-    }):
-        with mock.patch("modules.config.update_env"):
-            with mock.patch("modules.inference.model_manager.load_model"):
-                resp = routes_system.update_settings()
-                # Check status success if it's a JSON response
-                if hasattr(resp, 'json'):
-                    assert resp.json["status"] == "success"
+        "log_retention_days": 5,
+    }
+
+    with mock.patch("modules.core.config.update_env"):
+        with mock.patch("modules.inference.model_manager.load_model"):
+            resp = asyncio.run(routes_system.update_settings(mock_post_request))
+            assert resp["status"] == "success"
 
     # 4. help_endpoint
-    with app.test_request_context():
-        resp = routes_system.help_endpoint()
-        if hasattr(resp, 'json'):
-            assert "endpoints" in resp.json
+    mock_help_request = mock.MagicMock()
+    mock_help_request.base_url = "http://localhost/"
+    resp = routes_system.help_endpoint(mock_help_request)
+    assert "endpoints" in resp
 
 
 def test_dashboard_ui_coverage():

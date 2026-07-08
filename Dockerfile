@@ -1,5 +1,8 @@
+# Stage 0: Swagger UI Assets
+FROM swaggerapi/swagger-ui:v5.32.6 AS swagger-ui-source
+
 # Start with OpenVINO runtime which has verified Intel NPU/GPU drivers
-FROM openvino/ubuntu24_runtime:2026.1.0
+FROM openvino/ubuntu24_runtime:2026.2.1
 
 # Switch to root for installations
 USER root
@@ -24,7 +27,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   software-properties-common \
   intel-opencl-icd \
   intel-level-zero-gpu \
-  && rm -rf /var/lib/apt/lists/* \
   && wget https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz \
   && tar -xvf ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz \
   && mv ffmpeg-n8.1-latest-linux64-gpl-8.1/bin/ffmpeg /usr/local/bin/ \
@@ -34,31 +36,37 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # Install NVIDIA CUDA 12.8 explicitly (Ubuntu 24.04)
 # This adds CUDA support to the Intel-optimized base image
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt,sharing=locked \
+  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
   dpkg -i cuda-keyring_1.1-1_all.deb && \
   apt-get update && \
   apt-get install -y --no-install-recommends \
   cuda-libraries-12-8 \
   cuda-cudart-12-8 \
   libcudnn9-cuda-12 \
-  cuda-nvcc-12-8 \
-  && rm -rf /var/lib/apt/lists/*
+  cuda-nvcc-12-8 && \
+  rm -f cuda-keyring_1.1-1_all.deb
 
 
 # Copy pip configuration
+WORKDIR /app
 COPY pip.conf /etc/pip.conf
+COPY pyproject.toml poetry.lock* ./
 
 # Upgrade pip (safe in this environment)
-RUN python3 -m pip install --upgrade pip
+RUN --mount=type=cache,target=/root/.cache \
+  python3 -m pip install --upgrade pip
 
-# Install Python requirements
-COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-  python3 -m pip install -r requirements.txt "audio-separator~=0.41.1" --retries 3 && \
-  # Segregated Install: NVIDIA CUDA Support
+# Install Python dependencies via Poetry (no requirements.txt)
+ENV POETRY_VIRTUALENVS_CREATE=false
+RUN --mount=type=cache,target=/root/.cache \
+  pip install poetry && \
+  poetry install --without dev && \
+  # Segregated Install: NVIDIA CUDA Support\
   mkdir -p /app/libs/nvidia && \
   python3 -m pip install "onnxruntime-gpu~=1.25.0" --target /app/libs/nvidia --no-dependencies && \
-  # Segregated Install: Intel OpenVINO Support
+  # Segregated Install: Intel OpenVINO Support\
   mkdir -p /app/libs/intel && \
   python3 -m pip install "onnxruntime-openvino~=1.24.0" --target /app/libs/intel --no-dependencies
 
@@ -81,6 +89,10 @@ WORKDIR /app
 COPY modules/ ./modules/
 COPY scripts/ ./scripts/
 COPY static/ ./static/
+# Copy offline Swagger assets from the swagger-ui image
+COPY --from=swagger-ui-source /usr/share/nginx/html/swagger-ui.css ./static/swagger-ui.css
+COPY --from=swagger-ui-source /usr/share/nginx/html/swagger-ui-bundle.js ./static/swagger-ui-bundle.js
+COPY --from=swagger-ui-source /usr/share/nginx/html/favicon-32x32.png ./static/favicon.png
 COPY whisper_pro_asr.py .
 
 # Create persistent storage directory
