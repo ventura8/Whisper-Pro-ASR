@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Intel Core Ultra (Meteor Lake/Lunar Lake) with NPU, OR NVIDIA GPU (CUDA), OR generic CPU
+- Intel Core Ultra (Meteor Lake/Lunar Lake) with NPU, OR NVIDIA GPU (CUDA), OR AMD GPU (native Linux ROCm), OR generic CPU
 - Windows 11 (WSL2) or Linux (Ubuntu 22.04+)
 - Intel NPU drivers installed (for NPU acceleration)
 - Docker
@@ -47,7 +47,7 @@ Before starting, ensure local bind-mount directories exist:
 mkdir -p data model_cache
 ```
 
-If you cannot grant write access for the configured UID/GID, use a runtime identity that can write those paths.
+**Automatic permission fix**: The `init-permissions` service in `docker-compose.yml` runs once on every `docker compose up`, fixing bind-mount ownership so the runtime user can write task history and model cache. This ensures history persists across image updates and stack redeployments without any manual intervention.
 
 For local quality runs, `Dockerfile.test` uses BuildKit cache mounts for `apt`, `pip`, `poetry`, `npm`, and Playwright browser downloads to speed repeated builds. Keep Docker BuildKit enabled.
 
@@ -97,7 +97,7 @@ docker run -d \
   ventura8/whisper-pro-asr
 ```
 
-**Production persistence note**: The runtime writes history/telemetry to `/app/data` by default. Keep `./data:/app/data` mounted so tasks survive restarts.
+**Production persistence note**: The runtime writes history/telemetry to `/app/data` by default. Keep `./data:/app/data` mounted so tasks survive restarts and image updates. The `init-permissions` init container guarantees the directory is writable by the configured UID/GID on every deployment.
 
 **History compatibility note**: Default mapping remains `./data:/app/data`. If a prior setup wrote history into `./data`, runtime can import from legacy candidates automatically; you can also set `WHISPER_LEGACY_STATE_DIR` explicitly if needed.
 
@@ -118,6 +118,123 @@ INTEL_DEEP_OV_PROBE=true docker compose up -d --build --force-recreate
 ```
 
 If nodes are visible but `OpenVINO target probe` reports GPU/NPU unavailable, the blocker is usually host kernel driver exposure or container security policy rather than ONNX provider injection.
+
+## AMD GPU Acceleration (native Linux ROCm)
+
+### Supported Hardware Compatibility
+
+AMD ROCm GPU acceleration inside Docker containers is supported for **discrete AMD Radeon and Instinct GPUs** with pre-compiled HIP kernel architectures:
+
+| GPU Series | Models | Architecture | Status |
+| --- | --- | --- | --- |
+| **Radeon RX 7000 Series** | RX 7900 XTX, RX 7900 XT, RX 7900 GRE, RX 7800 XT, RX 7700 XT | `gfx1100`, `gfx1101` | ✅ **Full Hardware Acceleration** |
+| **Radeon RX 6000 Series** | RX 6950 XT, RX 6900 XT, RX 6800 XT, RX 6800, RX 6700 XT | `gfx1030`, `gfx1031` | ⚠️ **Unverified / Experimental** |
+| **Instinct Accelerators** | MI300X, MI300A, MI250X, MI250, MI210, MI100 | `gfx942`, `gfx90a` | ✅ **Full Hardware Acceleration** |
+| **Ryzen iGPUs (APUs)** | Ryzen AI 9 HX 370 / Strix Point integrated graphics | `gfx1150` | ✅ **Supported on Linux** *(via `HSA_OVERRIDE_GFX_VERSION=11.0.0`)*<br>ℹ️ **CPU Fallback on Windows WSL2** |
+
+---
+
+### Setup on Windows 11 (WSL2 Docker Containers)
+
+Linux Docker containers on Windows WSL2 **cannot accelerate UVR on the AMD GPU**. DirectML is a Windows-only ONNX provider, and `onnxruntime-rocm` requires `/dev/kfd`, which standard WSL2 does not expose. Mapping `/dev/dxg` only helps detect an AMD adapter; UVR falls back to CPU.
+
+1. **Host Driver Requirement**: Install **AMD Software: Adrenalin Edition** (v26.2.2 or newer) on your Windows host if you want AMD hardware to be detected.
+2. **`docker-compose.yml` Configuration** (detection only; UVR remains CPU):
+
+   ```yaml
+   services:
+     whisper-pro-asr:
+       image: whisper-pro-asr:latest
+       ports:
+         - "9000:9000"
+       devices:
+         - /dev/dxg:/dev/dxg # Windows 11 / WSL2 GPU bridge (detection only)
+       environment:
+         - HSA_ENABLE_DXG_DETECTION=1
+       volumes:
+         - /usr/lib/wsl:/usr/lib/wsl # WSL2 host driver library mount
+   ```
+
+3. **Equivalent `docker run` Command**:
+
+   ```bash
+   docker run -d \
+     --name whisper-pro-asr \
+     -p 9000:9000 \
+     --device /dev/dxg \
+     -v /usr/lib/wsl:/usr/lib/wsl \
+     -e HSA_ENABLE_DXG_DETECTION=1 \
+     whisper-pro-asr:latest
+   ```
+
+---
+
+### Setup on Linux (Bare-Metal Docker Containers)
+
+On native Linux hosts (Ubuntu 22.04+), Docker containers access the AMD GPU directly via native Linux ROCm kernel drivers (`/dev/kfd` and `/dev/dri`).
+
+1. **Host Driver Requirement**: Install `amdgpu-dkms` or standard AMD ROCm kernel drivers on the host Linux OS. Ensure the runtime user belongs to the device-owning groups.
+2. **Deriving Host GIDs**: On Linux, obtain the numeric GIDs for the render and video device nodes:
+
+   ```bash
+   RENDER_GID=$(stat -c '%g' /dev/dri/renderD* | head -n 1)
+   VIDEO_GID=$(stat -c '%g' /dev/kfd)
+   echo "HOST_AMD_RENDER_GID=$RENDER_GID"
+   echo "HOST_AMD_VIDEO_GID=$VIDEO_GID"
+   ```
+
+3. **`docker-compose.yml` Configuration**:
+
+   ```yaml
+   services:
+     whisper-pro-asr:
+       image: whisper-pro-asr:latest
+       ports:
+         - "9000:9000"
+       devices:
+         - /dev/kfd:/dev/kfd # AMD ROCm Kernel Fusion Driver (Bare-metal Linux only)
+         - /dev/dri:/dev/dri # Direct Rendering Manager render nodes
+       group_add:
+         - "${HOST_AMD_RENDER_GID:-990}" # Numeric GID for /dev/dri render node
+         - "${HOST_AMD_VIDEO_GID:-44}"   # Numeric GID for /dev/kfd device node
+   ```
+
+4. **Ryzen iGPUs (`gfx1150` on Strix Point / Ryzen AI APUs)**:
+   On Linux hosts, you can enable GPU acceleration for Ryzen iGPUs (`gfx1150`) by setting the ROCm architecture override flag in `environment`:
+
+   ```yaml
+       environment:
+         - HSA_OVERRIDE_GFX_VERSION=11.0.0
+   ```
+
+5. **Equivalent `docker run` Command**:
+
+   ```bash
+   docker run -d \
+     --name whisper-pro-asr \
+     -p 9000:9000 \
+     --security-opt seccomp=unconfined \
+     --device /dev/kfd \
+     --device /dev/dri \
+     --group-add $(stat -c '%g' /dev/dri/renderD* | head -n 1) \
+     --group-add $(stat -c '%g' /dev/kfd) \
+     whisper-pro-asr:latest
+   ```
+
+   *Optional for Ryzen APUs requiring GFX version override:*
+
+   ```bash
+   docker run -d \
+     --name whisper-pro-asr \
+     -p 9000:9000 \
+     --security-opt seccomp=unconfined \
+     --device /dev/kfd \
+     --device /dev/dri \
+     --group-add $(stat -c '%g' /dev/dri/renderD* | head -n 1) \
+     --group-add $(stat -c '%g' /dev/kfd) \
+     -e HSA_OVERRIDE_GFX_VERSION=11.0.0 \
+     whisper-pro-asr:latest
+   ```
 
 **Intel telemetry note**: Real Intel GPU/NPU utilization in dashboard hardware charts uses native Linux sysfs counters first, then Intel-native CLI probes (`intel_gpu_top` and `nputop`), then Windows performance counters, and only then compatibility inference values. Runtime resolves Intel sysfs metric nodes dynamically (instead of assuming `card0`/`accel0`) and accepts decimal/percent-style utilization payloads, reducing false `0%` GPU readings and `0/100` NPU oscillation. Synthetic fallback activity is stage-gated and only reports busy during actual UVR or inference/language-detection accelerator stages; initialization, standardization, uploads, and other non-accelerator stages stay at `0%`.
 
@@ -149,7 +266,9 @@ INTEL_TELEMETRY_DEBUG=true docker compose up -d --build --force-recreate
 
 This emits `[intel-telemetry]` log lines showing discovered sysfs paths, vendor filtering decisions, raw source values (`sysfs` / `intel_native_cli` / windows counters), and final selected source/value per GPU/NPU sample.
 
-**AMD telemetry readiness note**: Runtime execution-unit scheduling is currently limited to CUDA + Intel GPU/NPU + CPU fallback.
+**AMD GPU note**: When an AMD GPU is detected (via `/dev/kfd`, `/dev/dri` DRM vendor `0x1002`, or WSL driver visibility), the runtime loads `onnxruntime-rocm` from `/app/libs/amd` and registers an `amd:0` scheduler unit. UVR vocal isolation runs on the AMD GPU only on native Linux ROCm hosts with `/dev/kfd`. On Windows 11 / WSL2, `/dev/dxg` allows adapter detection for this Linux image, but UVR falls back to CPU because DirectML requires `sys.platform == "win32"` and ROCm GPU execution still requires `/dev/kfd`. Whisper ASR inference falls back to CPU on AMD units because CTranslate2 does not have a ROCm backend.
+
+For Linux AMD hosts, map `/dev/kfd` and `/dev/dri`. For Windows 11 / WSL2, map `/dev/dxg` only for detection and diagnostics. Set `MAX_AMD_UNITS=1` to enable the AMD unit (and cap AMD parallelism via `get_parallel_limit('AMD')`). When both NVIDIA and AMD GPUs are present, Whisper ASR runs on NVIDIA CUDA while UVR preprocessing uses AMD on native Linux ROCm hosts and falls back to CPU on WSL2.
 
 **UVR OpenVINO device note**: For vocal separation, generic preprocess targets like `ASR_PREPROCESS_DEVICE=NPU` are resolved against OpenVINO runtime-reported device IDs. GPU slot selection is passed directly in OpenVINO `device_type` (for example `GPU.0`, `GPU.1`). NPU slot selection uses OpenVINO `load_config` with `DEVICE_ID` while keeping provider `device_type=NPU`, because the ORT OpenVINO provider in this runtime rejects dotted NPU `device_type` values such as `NPU.0`. When `ASR_PREPROCESS_DEVICE=AUTO`, the runtime selects the next available Intel accelerator in OpenVINO discovery order and falls back to CPU if no Intel accelerator is available.
 
@@ -176,13 +295,15 @@ First build exports model to INT8 (~5-10 min, ~4GB RAM).
 The service utilizes **Autonomous Hardware Sensing**. For `ASR_ENGINE=AUTO`, it resolves backend in the following order:
 
 1. **NVIDIA CUDA**
-2. **Intel GPU (Arc/iGPU)**
-3. **Intel NPU**
-4. **CPU (Fallback)**
+2. **AMD GPU** (UVR on native Linux AMD ROCm; ASR on CPU, WSL2 `/dev/dxg` detection only)
+3. **Intel GPU (Arc/iGPU)**
+4. **Intel NPU**
+5. **CPU (Fallback)**
 
 Engine mapping for `ASR_ENGINE=AUTO`:
 
 - CUDA -> `FASTER-WHISPER`
+- AMD -> `FASTER-WHISPER` (CPU mode) with UVR on AMD GPU only on native Linux ROCm hosts; WSL2 `/dev/dxg` falls back to CPU UVR
 - Intel GPU -> `INTEL-WHISPER`
 - Intel NPU -> `INTEL-WHISPER`
 - CPU -> `FASTER-WHISPER`

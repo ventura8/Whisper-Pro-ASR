@@ -31,14 +31,7 @@ from modules.inference.runtime.model_lifecycle import (
 )
 from modules.inference.runtime.model_segment_processing import consume_transcription_segments
 
-_PUBLIC_API = (
-    run_language_detection_core,
-    run_language_detection,
-    run_batch_language_detection,
-    run_batch_language_detection_direct,
-    model_lock_ctx,
-    _check_preemption,
-)
+__all__ = ["run_language_detection_core", "run_language_detection", "run_batch_language_detection", "run_batch_language_detection_direct"]
 
 
 def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=None, is_priority=False):
@@ -54,6 +47,11 @@ def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=N
 def update_task_metadata(**kwargs):
     """Forward task metadata updates to the scheduler."""
     return scheduler.update_task_metadata(**kwargs)
+
+
+def record_task_failure(msg: str, code: int = 400, context: str = "Task") -> None:
+    """Forward failure recording to the scheduler."""
+    return scheduler.record_task_failure(msg, code, context)
 
 
 def update_task_progress(progress, stage=None):
@@ -141,7 +139,7 @@ _POOL_LOCK = threading.Lock()
 
 
 def _is_accelerated_preprocess_device() -> bool:
-    return config.PREPROCESS_DEVICE in {"CUDA", "GPU", "NPU", "OPENVINO"}
+    return config.PREPROCESS_DEVICE in {"CUDA", "GPU", "NPU", "OPENVINO", "AMD"}
 
 
 def _pool_preprocessor_by_type(preferred_type: str):
@@ -190,54 +188,18 @@ def _preferred_preprocessor() -> typing.Any:
 def _resolve_preprocessor_for_unit(unit_id: str):
     if _is_accelerated_preprocess_device():
         # Prefer the preprocessor bound to the currently assigned accelerator unit
-        # so concurrent tasks can use distinct hardware (e.g., GPU + NPU) in parallel.
+        # so concurrent tasks can use distinct hardware (e.g., CUDA + AMD) in parallel.
         unit_preprocessor = PREPROCESSOR_POOL.get(unit_id)
         if unit_preprocessor is not None:
             unit_type = str(getattr(unit_preprocessor, "device_type", "")).upper()
-            if unit_type in {"CUDA", "GPU", "NPU", "OPENVINO"}:
+            if unit_type in {"CUDA", "GPU", "NPU", "OPENVINO", "AMD"}:
                 return unit_preprocessor
         return _preferred_preprocessor()
     return PREPROCESSOR_POOL.get(unit_id)
 
 
-def _run_idle_cleanup():
-    """Timer callback to unload models when idle."""
-    logger.info("[Engine] Idle timeout reached. Purging models from memory...")
-    unload_models()
-    with _CLEANER_TIMER_LOCK:
-        CLEANER_STATE["timer"] = None
-
-
-def _schedule_idle_cleanup():
-    """Schedules model unloading after idle timeout."""
-    if config.MODEL_IDLE_TIMEOUT <= 0:
-        return
-    with _CLEANER_TIMER_LOCK:
-        if CLEANER_STATE["timer"] is not None:
-            CLEANER_STATE["timer"].cancel()
-        CLEANER_STATE["timer"] = threading.Timer(config.MODEL_IDLE_TIMEOUT, _run_idle_cleanup)
-        CLEANER_STATE["timer"].daemon = True
-        CLEANER_STATE["timer"].start()
-        logger.info("[Engine] Scheduled memory cleanup in %ds", config.MODEL_IDLE_TIMEOUT)
-
-
-def _cancel_idle_cleanup():
-    """Cancels any scheduled model unloading."""
-    with _CLEANER_TIMER_LOCK:
-        if CLEANER_STATE["timer"] is not None:
-            CLEANER_STATE["timer"].cancel()
-            CLEANER_STATE["timer"] = None
-            logger.info("[Engine] Cancelled scheduled memory cleanup because a new task arrived")
-
-
-# Stubs for test/code backward compatibility
-def _ensure_monitor_thread():
-    pass
-
-
 def load_model():
     """Initializes hardware resource mapping without eager RAM loading."""
-    _ensure_monitor_thread()
     for unit in config.HARDWARE_UNITS:
         # Initialize preprocessor managers (they are lazy and won't load models yet)
         PREPROCESSOR_POOL[unit["id"]] = preprocessing.PreprocessingManager(unit)
@@ -329,9 +291,9 @@ def _isolate_vocals_if_needed(audio_path, unit_id, perf):
     should_clean_audio = config.ENABLE_VOCAL_SEPARATION if clean_audio_override is None else bool(clean_audio_override)
     if should_clean_audio:
         perf["start_iso"] = time.time()
-        _check_preemption()
+        check_preemption()
         processed_path = run_vocal_isolation_direct(audio_path, unit_id)
-        _check_preemption()
+        check_preemption()
         perf["dur_iso"] = time.time() - perf["start_iso"]
     return processed_path
 
@@ -358,10 +320,10 @@ def _execute_transcription_pipeline(
     logger.info("[ASR] Starting %s on hardware unit %s", op_name, unit_id)
 
     perf["start_inf"] = time.time()
-    _check_preemption()
+    check_preemption()
     scheduler.update_task_metadata(start_inference=perf["start_inf"])
     scheduler.update_task_progress(None, "Inference")
-    _check_preemption()
+    check_preemption()
     trans_res = model.transcribe(
         processed_path,
         language=language,
@@ -383,7 +345,7 @@ def _execute_transcription_pipeline(
         hf_token=hf_token,
         unit_id=unit_id,
         processed_path=processed_path,
-        preemption_check=_check_preemption,
+        preemption_check=check_preemption,
     )
 
     perf["dur_inf"] = time.time() - perf["start_inf"]
@@ -404,7 +366,7 @@ def _execute_transcription_pipeline(
 
     res = post_processing.post_process_results(res)
     res["text"] = utils.generate_srt(res)
-    _check_preemption()
+    check_preemption()
     scheduler.update_task_metadata(result=res, status="completed", progress=100)
     return res
 
@@ -440,7 +402,7 @@ def run_vocal_isolation_direct(audio_path, unit_id, force=False):
     if not preprocessor:
         return audio_path
 
-    result_path = preprocessor.preprocess_audio(audio_path, force=force, yield_cb=_check_preemption)
+    result_path = preprocessor.preprocess_audio(audio_path, force=force, yield_cb=check_preemption)
     if preprocessor.separator:
         scheduler.STATE.uvr_loaded = True
 
@@ -451,6 +413,43 @@ def run_vocal_isolation_direct(audio_path, unit_id, force=False):
     return result_path
 
 
+def _run_idle_cleanup(timer_handle=None):
+    """Timer callback to unload models when idle."""
+    logger.info("[Engine] Idle timeout reached. Purging models from memory...")
+    unload_models()
+    with _CLEANER_TIMER_LOCK:
+        if timer_handle is None or CLEANER_STATE["timer"] is timer_handle:
+            CLEANER_STATE["timer"] = None
+
+
+def _schedule_idle_cleanup():
+    """Schedules model unloading after idle timeout."""
+    if config.MODEL_IDLE_TIMEOUT <= 0:
+        return
+    with _CLEANER_TIMER_LOCK:
+        if CLEANER_STATE["timer"] is not None:
+            CLEANER_STATE["timer"].cancel()
+        timer_handle = None
+
+        def _cleanup_callback():
+            _run_idle_cleanup(timer_handle)
+
+        timer_handle = threading.Timer(config.MODEL_IDLE_TIMEOUT, _cleanup_callback)
+        CLEANER_STATE["timer"] = timer_handle
+        timer_handle.daemon = True
+        timer_handle.start()
+        logger.info("[Engine] Scheduled memory cleanup in %ds", config.MODEL_IDLE_TIMEOUT)
+
+
+def _cancel_idle_cleanup():
+    """Cancels any scheduled model unloading."""
+    with _CLEANER_TIMER_LOCK:
+        if CLEANER_STATE["timer"] is not None:
+            CLEANER_STATE["timer"].cancel()
+            CLEANER_STATE["timer"] = None
+            logger.info("[Engine] Cancelled scheduled memory cleanup because a new task arrived")
+
+
 def unload_models():
     """Purge all models from RAM/VRAM with extreme prejudice."""
     with _POOL_LOCK:
@@ -459,17 +458,13 @@ def unload_models():
             "[Engine] Aggressive Offload: Purging models. Current memory: %s",
             _format_reclamation_memory(mem_before),
         )
-
         whisper_count = _clear_whisper_models(MODEL_POOL)
         uvr_count = _clear_uvr_models(PREPROCESSOR_POOL)
         _clear_whisperx_models(DIARIZE_POOL, ALIGN_POOL)
-
         _run_garbage_collection_and_reclamation(_ENGINES)
-
         scheduler.STATE.whisper_loaded = False
         scheduler.STATE.uvr_loaded = False
-
-        time.sleep(0.2)  # Give OS time to update page tables
+        time.sleep(0.2)
         mem_after = _read_reclamation_memory_snapshot()
         logger.info(
             "[Engine] Reclamation complete. Memory: %s -> %s (Delta: %s, Released: %d Whisper, %d UVR)",
@@ -485,7 +480,7 @@ def increment_active_session():
     """Tracks active session count."""
     _LIFECYCLE_STATE["last_activity"] = time.time()
     scheduler.increment_active_session()
-    _cancel_idle_cleanup()
+    cancel_idle_cleanup()
 
 
 def decrement_active_session():
@@ -494,7 +489,6 @@ def decrement_active_session():
     scheduler.decrement_active_session()
     current_active = scheduler.STATE.active_sessions
     logger.debug("[Engine] Session decrement. Active sessions remaining: %d", current_active)
-
     if current_active == 0:
         if config.MODEL_IDLE_TIMEOUT > 0:
             _schedule_idle_cleanup()
@@ -505,3 +499,13 @@ def decrement_active_session():
 def wait_for_priority():
     """Handles priority task synchronization."""
     scheduler.wait_for_priority()
+
+
+def check_preemption():
+    """Public wrapper for tests and preemption hooks."""
+    return _check_preemption()
+
+
+def cancel_idle_cleanup():
+    """Public wrapper for tests and lifecycle hooks."""
+    return _cancel_idle_cleanup()

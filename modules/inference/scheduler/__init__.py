@@ -323,8 +323,9 @@ def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=N
         _handle_queued_session_state(is_priority)
         try:
             yield
-        except Exception:
-            _mark_task_failed(task_id)
+        except Exception as exc:
+            if not scheduler_task_helpers.task_has_failure_metadata(STATE, task_id):
+                record_task_failure(str(exc), 500, context=task_type)
             raise
     finally:
         # Always release priority if this task entered priority flow.
@@ -336,13 +337,6 @@ def _handle_queued_session_state(is_priority: bool):
     if is_priority:
         increment_queued_session()
         decrement_queued_session()
-
-
-def _mark_task_failed(task_id: str):
-    with STATE.cond:
-        if task_id in STATE.task_registry:
-            STATE.task_registry[task_id]["status"] = "failed"
-        STATE.cond.notify_all()
 
 
 def _register_task_in_state(task_id, display_name, task_type, stage, is_priority):
@@ -399,6 +393,7 @@ def _archive_registry_task(task_id: str) -> Optional[dict]:
     task["status"] = "failed" if task.get("status") == "failed" else "completed"
     task["progress"] = 100
     _normalize_history_hardware_fields(task)
+    scheduler_task_helpers.ensure_failed_task_payload(task)
     res = task.copy()
     del STATE.task_registry[task_id]
     return res
@@ -482,6 +477,11 @@ def cleanup_failed_task():
 def update_task_metadata(**kwargs):
     """Updates metadata for the current thread's task."""
     scheduler_task_helpers.update_task_metadata(STATE, **kwargs)
+
+
+def record_task_failure(msg: str, code: int = 400, context: str = "Task") -> None:
+    """Persist failure details to task history and execution logs."""
+    scheduler_task_helpers.record_task_failure(STATE, msg, code, context)
 
 
 def update_task_progress(progress, stage=None):

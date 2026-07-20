@@ -1,0 +1,12 @@
+---
+# WSL2 Hardware Acceleration Override for Whisper Pro ASR
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.wsl.yml up -d
+
+services:
+  whisper-pro-asr:
+    devices:
+      - /dev/dxg:/dev/dxg     # WSL DirectX GPU bridge for compute passthrough
+    volumes:
+      # Windows 11 / WSL2 GPU host driver bridge (ROCm / CUDA / DirectX / librocdxg)
+      - /usr/lib/wsl:/usr/lib/wsl:ro

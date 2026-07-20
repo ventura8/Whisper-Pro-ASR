@@ -112,12 +112,12 @@ fi
 chmod 0755 assets "$REPORTS_DIR"
 find "$REPORTS_DIR" -type f -exec chmod 0644 {} +
 set +e
-cat <<'DOCKER_TEST_SCRIPT' | "${DOCKER_CMD[@]}" run --rm \
+cat <<'DOCKER_TEST_SCRIPT' | "${DOCKER_CMD[@]}" run --rm -i \
 	-e CI=true \
 	-v "${PROJECT_ROOT}/assets:/app/assets" \
 	-v "${REPORTS_DIR}:/reports" \
 	whisper-pro-asr-test /bin/bash -s
-tests/run_suite.sh
+bash tests/run_suite.sh
 TEST_EXIT_CODE=$?
 [ -f coverage.xml ] && cp coverage.xml /reports/coverage.xml || true
 [ -f coverage_output.txt ] && cp coverage_output.txt /reports/coverage_output.txt || true

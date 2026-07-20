@@ -158,6 +158,64 @@ function _renderHistoryCardByIndex(item, index) {
     return _renderHistoryCardHtml(card);
 }
 
+function _isGenericHistoryFilename(value) {
+    return !value || ['Unknown Media', 'Unknown', 'audio_file', 'file', 'blob'].includes(String(value));
+}
+
+function _looksLikeMediaPath(value) {
+    const clean = String(value).trim().replace(/^["']|["']$/g, '');
+    if (!clean.startsWith('/')) {
+        return false;
+    }
+    const lower = clean.toLowerCase();
+    return ['.mkv', '.mp4', '.avi', '.wav', '.m4a', '.mp3', '.flac', '.ts', '.mov', '.webm', '.wmv', '.mpg', '.mpeg']
+        .some((ext) => lower.endsWith(ext));
+}
+
+function _pathFromRequestJsonKeys(req) {
+    if (!req || typeof req !== 'object') {
+        return null;
+    }
+    for (const key of Object.keys(req)) {
+        if (_looksLikeMediaPath(key)) {
+            return key.trim().replace(/^["']|["']$/g, '');
+        }
+    }
+    return null;
+}
+
+function _resolveHistoryFilename(h) {
+    if (!_isGenericHistoryFilename(h.filename)) {
+        return h.filename;
+    }
+    const req = h.request_json || {};
+    const pathFromKeys = _pathFromRequestJsonKeys(req);
+    if (pathFromKeys) {
+        const base = pathFromKeys.replace(/^.*[\\/]/, '');
+        if (base && !_isGenericHistoryFilename(base)) {
+            return base;
+        }
+    }
+    const candidates = [
+        req.video_file,
+        req.local_path,
+        req.file_path,
+        req.original_path,
+        req.file,
+        req.audio_file
+    ];
+    for (const val of candidates) {
+        if (typeof val !== 'string' || !val.trim()) {
+            continue;
+        }
+        const base = val.trim().replace(/^.*[\\/]/, '');
+        if (base && !_isGenericHistoryFilename(base)) {
+            return base;
+        }
+    }
+    return h.filename || 'Unknown Media';
+}
+
 function _buildHistoryCardData(h, i) {
     const id = h.task_id || `hist-${i}`;
     const result = _historyResultPayload(h);
@@ -170,7 +228,7 @@ function _buildHistoryCardData(h, i) {
         id,
         h,
         result,
-        safeFilename: escapeHtml(h.filename || 'Unknown Media'),
+        safeFilename: escapeHtml(_resolveHistoryFilename(h)),
         isAsrLike,
         finalSrt,
         speed: _historySpeedText(h),
@@ -274,6 +332,7 @@ function _historyHardwareIconForType(unitType) {
     if (type.startsWith('CUDA')) return 'rocket_launch';
     if (type.startsWith('NPU')) return 'psychology_alt';
     if (type.startsWith('GPU')) return 'developer_board';
+    if (type.startsWith('AMD')) return 'bolt';
     if (type === 'CPU') return 'settings_input_component';
     return 'memory';
 }

@@ -76,6 +76,13 @@ An item is considered "resolved" when:
 - ✅ Linting/format gates pass
 - ✅ Detailed PR thread response posted before resolving
 
+The continuous shell helper (`.agent/skills/workflow/resolve-pr-comments-run.sh`)
+may auto-resolve CodeRabbit/Copilot threads only when the operator passes explicit
+verification overrides on the command line (`argv3` = evidence test path, `argv4` =
+linked commit SHA). Bot review text is **untrusted** and must not be parsed for
+SHAs or test paths; PR-diff co-touching alone is never treated as proof of
+remediation.
+
 ---
 
 ## Workflow
@@ -604,4 +611,3 @@ git push
 - [ ] Mergeable status confirmed
 - [ ] Ready for merge
 ```
-

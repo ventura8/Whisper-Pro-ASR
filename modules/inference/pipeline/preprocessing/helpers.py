@@ -60,7 +60,16 @@ def separate_with_fallback(sep, sep_factory, audio_path, yield_cb=None, hooks=No
     raise OSError(errno.ENOSPC, "No space left on any candidate output directory") from last_err
 
 
-def _try_separate_candidate(current_sep, sep_factory, audio_path, out_dir, *, idx: int, yield_cb=None, disk_usage_fn=None):
+def _try_separate_candidate(
+    current_sep,
+    sep_factory,
+    audio_path,
+    out_dir,
+    *,
+    idx: int,
+    yield_cb=None,
+    disk_usage_fn=None,
+):
     try:
         current_sep = _attempt_separation_in_output_dir(current_sep, sep_factory, audio_path, out_dir, idx=idx, yield_cb=yield_cb)
         return current_sep.separate(audio_path), current_sep, None
@@ -150,6 +159,8 @@ def _build_permanent_patched_separate_file():
         _update_chunk_progress_start(self)
         _run_thread_yield_cb()
         res = getattr(self, "_orig_separate_file")(audio_file_path, custom_output_names)
+        if not res:
+            raise RuntimeError(f"UVR separation failed on {audio_file_path}: separator produced no output stems")
         _update_chunk_progress_end(self)
         _run_thread_yield_cb()
         return res
@@ -212,7 +223,13 @@ def _resolve_chunk_progress_context():
     return chunk_paths_len, sched, chunk_idx
 
 
-def _compute_chunk_progress(start_phase: bool, chunk_idx: int, chunk_paths_len: int, chunk_dur: float, audio_dur_val: float):
+def _compute_chunk_progress(
+    start_phase: bool,
+    chunk_idx: int,
+    chunk_paths_len: int,
+    chunk_dur: float,
+    audio_dur_val: float,
+):
     if start_phase:
         processed_dur = min((chunk_idx - 1) * chunk_dur, audio_dur_val)
         pct = 5.0 + (float(chunk_idx - 1) / chunk_paths_len) * 5.0
@@ -234,7 +251,11 @@ def _log_no_space_fallback(out_dir: str, disk_usage_fn=None):
         free_mb = disk_usage_fn(out_dir).free // (1024 * 1024)
     except OSError:
         free_mb = 0
-    logger.error("[UVR] No space left on %s (%d MB free) — trying next fallback.", out_dir, free_mb)
+    logger.error(
+        "[UVR] No space left on %s (%d MB free) — trying next fallback.",
+        out_dir,
+        free_mb,
+    )
 
 
 def stem_resolution_candidates(effective_sep, source_audio_path, candidate_dirs_fn):
@@ -289,7 +310,14 @@ def apply_onnx_optimizations(module_obj=None):
         curr_ort = _ensure_onnxruntime_loaded(module_obj)
         _patch_onnx_inference_session(curr_ort)
         _patch_audio_separator_onnx_check()
-    except (ImportError, AttributeError, KeyError, TypeError, ValueError, OSError) as patch_err:
+    except (
+        ImportError,
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+    ) as patch_err:
         logger.warning("[System] Failed to apply ONNX optimizations: %s", patch_err)
 
 
@@ -307,7 +335,14 @@ def _patch_onnx_inference_session(curr_ort):
     logger.debug("Optimization: Deep-patching ONNX InferenceSession...")
     original_init = curr_ort.InferenceSession.__init__
 
-    def patched_init(self, model_path, sess_options=None, providers=None, provider_options=None, **kwargs):
+    def patched_init(
+        self,
+        model_path,
+        sess_options=None,
+        providers=None,
+        provider_options=None,
+        **kwargs,
+    ):
         ctx_options = getattr(utils.THREAD_CONTEXT, "ov_options", None)
         providers = openvino_resolver.force_openvino_provider_if_needed(providers, ctx_options)
         provider_options = openvino_resolver.merge_openvino_provider_options(providers, provider_options, ctx_options)
@@ -319,6 +354,41 @@ def _patch_onnx_inference_session(curr_ort):
     curr_ort.InferenceSession.is_patched = True
 
 
+_DEFAULT_UVR_HASH_METADATA = {
+    "compensate": 1.01,
+    "mdx_dim_f_set": 3072,
+    "mdx_dim_t_set": 8,
+    "mdx_n_fft_scale_set": 6144,
+    "primary_stem": "Instrumental",
+}
+
+
+def _invoke_original_hash_loader(orig_load_hash, *args, **kwargs):
+    if not orig_load_hash:
+        return None, None
+    try:
+        loaded = orig_load_hash(*args, **kwargs)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        return None, exc
+    return loaded or None, None
+
+
+def _is_default_uvr_hash_model(*args, **kwargs) -> bool:
+    haystack = " ".join(str(part) for part in args) + " " + " ".join(str(val) for val in kwargs.values())
+    return "UVR-MDX-NET-Inst_HQ_3" in haystack
+
+
+def _safe_load_model_data_using_hash(orig_load_hash, *args, **kwargs):
+    loaded, load_error = _invoke_original_hash_loader(orig_load_hash, *args, **kwargs)
+    if loaded:
+        return loaded
+    if orig_load_hash is None or _is_default_uvr_hash_model(*args, **kwargs):
+        return dict(_DEFAULT_UVR_HASH_METADATA)
+    if load_error is not None:
+        raise load_error
+    return None
+
+
 def _patch_audio_separator_onnx_check():
     try:
         audio_separator = importlib.import_module("audio_separator.separator")
@@ -326,6 +396,42 @@ def _patch_audio_separator_onnx_check():
         if getattr(separator_cls, "is_patched", False) is not True:
             logger.debug("Optimization: Patching Separator class detection logic...")
             separator_cls.check_onnxruntime = lambda self: None
+
+            # Offline fallback for download_model_files and model parameters to prevent GitHub 429
+            orig_download = getattr(separator_cls, "download_model_files", None)
+
+            def safe_download_model_files(self, model_filename):
+                model_path = os.path.join(self.model_file_dir, f"{model_filename}")
+                if os.path.exists(model_path) and model_filename == "UVR-MDX-NET-Inst_HQ_3.onnx":
+                    return (
+                        model_filename,
+                        "MDX",
+                        "UVR-MDX-NET-Inst_HQ_3",
+                        model_path,
+                        None,
+                    )
+                if orig_download:
+                    return orig_download(self, model_filename)
+                raise FileNotFoundError(f"Model file {model_filename} not found at {model_path}")
+
+            orig_load_hash = getattr(separator_cls, "load_model_data_using_hash", None)
+
+            def safe_load_model_data_using_hash(*args, **kwargs):
+                return _safe_load_model_data_using_hash(orig_load_hash, *args, **kwargs)
+
+            orig_separate = getattr(separator_cls, "separate", None)
+
+            def safe_separate(self, audio_file_path, custom_output_names=None):
+                if orig_separate:
+                    out = orig_separate(self, audio_file_path, custom_output_names)
+                    if not out:
+                        raise RuntimeError(f"audio-separator failed to process file {audio_file_path} (returned empty stems)")
+                    return out
+                raise RuntimeError("audio-separator separate() original implementation is missing; cannot perform vocal separation")
+
+            separator_cls.download_model_files = safe_download_model_files
+            separator_cls.load_model_data_using_hash = safe_load_model_data_using_hash
+            separator_cls.separate = safe_separate
             separator_cls.is_patched = True
     except ImportError:
         pass

@@ -15,7 +15,8 @@ function _resolveHwPrefixMatch(uid, unitId) {
     const mapping = [
         ['cuda', 'rocket_launch', 'NVIDIA GPU'],
         ['npu', 'psychology_alt', 'Intel NPU'],
-        ['gpu', 'developer_board', 'Intel GPU']
+        ['gpu', 'developer_board', 'Intel GPU'],
+        ['amd', 'bolt', 'AMD GPU']
     ];
     const match = mapping.find(([prefix]) => uid.startsWith(prefix));
     if (!match) {
@@ -60,7 +61,52 @@ function _normalizeHardwareFamily(unit) {
     if (source.startsWith('cuda')) return 'cuda';
     if (source.startsWith('npu')) return 'npu';
     if (source.startsWith('gpu')) return 'gpu';
+    if (source.startsWith('amd')) return 'amd';
     return source;
+}
+
+let dashboardApiKey = '';
+let dashboardAdminApiKey = '';
+
+function _readKeyFromInput(inputId) {
+    const input = document.getElementById(inputId);
+    return input ? String(input.value || '') : '';
+}
+
+function _getSessionApiKey() {
+    return _readKeyFromInput('api-key-input') || dashboardApiKey;
+}
+
+function _getSessionAdminApiKey() {
+    return _readKeyFromInput('admin-api-key-input') || dashboardAdminApiKey || _getSessionApiKey();
+}
+
+function persistDashboardApiKeys() {
+    dashboardApiKey = _readKeyFromInput('api-key-input');
+    dashboardAdminApiKey = _readKeyFromInput('admin-api-key-input');
+}
+
+function loadDashboardApiKeys() {
+    const apiInput = document.getElementById('api-key-input');
+    const adminInput = document.getElementById('admin-api-key-input');
+    if (apiInput && dashboardApiKey) {
+        apiInput.value = dashboardApiKey;
+    }
+    if (adminInput && dashboardAdminApiKey) {
+        adminInput.value = dashboardAdminApiKey;
+    }
+}
+
+function getAuthHeaders(contentType, admin) {
+    const headers = { 'X-Requested-With': 'XMLHttpRequest' };
+    if (contentType) {
+        headers['Content-Type'] = contentType;
+    }
+    const apiKey = admin ? _getSessionAdminApiKey() : _getSessionApiKey();
+    if (apiKey) {
+        headers['X-API-Key'] = apiKey;
+    }
+    return headers;
 }
 
 function escapeHtml(text) {

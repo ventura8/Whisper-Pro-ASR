@@ -143,6 +143,10 @@ npm run fix:md
 docker run --rm whisper-npu-test
 ```
 
+## Release Notes v1.2.0
+
+- **DOCS**: Updated application version to `v1.2.0` across project config, package metadata, test suites, release notes, and documentation.
+
 ## Release Notes v1.1.6
 
 - **FEAT**: Modularized dashboard and analytics frontend assets into manifest-driven feature bundles with deterministic load order.

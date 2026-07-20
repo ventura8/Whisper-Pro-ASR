@@ -3,7 +3,7 @@
 ## Global Rules
 
 - **Mandatory Pre-Task Agent Review**: Before starting any implementation, read `.agent/instructions.md`, `.agent/skills/SKILLS_CATALOG.md`, and every directly relevant skill/workflow file. Do not begin coding until this review is complete.
-- **Mandatory Markdown Sync**: Whenever behavior, contracts, architecture, pipeline flow, tests, or operations change, update all impacted markdown files in the same task (`README.md`, `docs/*.md`, and affected `.agent/*.md`).
+- **Mandatory Markdown Update (Every Task)**: Every time you work on this project, you MUST update all relevant markdown files in the same task. Never ship code-only changes. Before closing work, sync every impacted file among `README.md`, `docs/*.md`, and `.agent/*.md` so they describe the current implementation. A task is incomplete until relevant docs are updated.
 - **Concurrency Correctness Priority #1**: For scheduler/resource/lifecycle work, deadlock/livelock prevention and bounded progress are mandatory and take precedence over throughput optimizations.
 - **Preserve Helpful Comments**: Never delete comments that explain logic, especially around synchronization, error handling, or non-obvious code paths. Code clarity and maintainability take precedence over aggressive line count reduction.
 - **Strict File Size Limit**: Any `.py` file MUST NOT exceed **500 lines**.
@@ -78,8 +78,16 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 - `/detect-language` and `/detectlang` are one high-priority language-detection execution class.
 - `/v1/audio/...` calls are protocol compatibility surfaces and must not be treated as a separate scheduler priority class.
 
+## Security & Access Control
+
+- **CORS Allowlist Requirement**: Never enable wildcard CORS (`*`) by default. CORS origins must be configured explicitly via `CORS_ORIGINS` or explicitly opted into via `CORS_ALLOW_ALL=true`.
+- **Model Supply Chain Guarding**: Dynamic model loading via `/settings` must be validated against `is_valid_model_name()` to prevent arbitrary external downloads and path traversals (`..`).
+- **Administrative Endpoint Protection**: State-changing administrative endpoints (`/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`) must require `ADMIN_API_KEY` authentication when configured. If no key is configured, Origin/Referer validation is used only as anti-CSRF protection (not as the primary authorization mechanism).
+- **Audit Logging**: All administrative mutations and purges must be recorded with client IP and User-Agent using `security.audit_log_admin_action()`.
+
 ## Code Style
 
 - Follow PEP 8 and use type hints.
 - Maintain high test coverage (min 90%).
 - Enforce a maximum cyclomatic complexity score of A (Radon rank A, complexity <= 5) for all Python functions, methods, and blocks.
+- **No Inline Suppressions or Disables (Hard Rule)**: Do not use inline lint suppressions, excludes, ignores, or disables anywhere in code or tests (such as linter disable comments, type-ignore annotations, or warning bypasses). All code and tests must be written cleanly to pass quality gates without inline suppressions.

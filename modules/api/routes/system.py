@@ -11,6 +11,7 @@ import anyio
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from modules.api.support import security
 from modules.core import config, engine_registry, logging_setup, utils
 from modules.inference.runtime import model_manager
 from modules.monitoring import dashboard, history_manager, telemetry_manager
@@ -108,24 +109,34 @@ def get_history():
 
 
 @router.post("/system/history/clear")
-def clear_history():
+def clear_history(request: Request):
     """
     Purge all task history
     ---
     Clear all task records from the history manager.
     """
+    auth_err = security.verify_admin_request(request)
+    if auth_err:
+        return JSONResponse(content={"error": auth_err[0]}, status_code=auth_err[1])
+
+    security.audit_log_admin_action(request, "clear_history")
     history_manager.clear_history()
     return {"status": "success", "message": "History cleared"}
 
 
 @router.post("/system/telemetry/clear")
-def clear_telemetry() -> dict[str, str]:
+def clear_telemetry(request: Request):
     """
     Purge all telemetry history
     ---
     Clear all telemetry snapshots from the database.
     """
+    auth_err = security.verify_admin_request(request)
+    if auth_err:
+        return JSONResponse(content={"error": auth_err[0]}, status_code=auth_err[1])
+
     try:
+        security.audit_log_admin_action(request, "clear_telemetry")
         telemetry_manager.clear_telemetry_history()
         return {"status": "success", "message": "Telemetry cleared"}
     except OSError as e:
@@ -134,12 +145,17 @@ def clear_telemetry() -> dict[str, str]:
 
 
 @router.post("/system/cleanup")
-def trigger_cleanup():
+def trigger_cleanup(request: Request):
     """
     Manually trigger temporary asset cleanup
     ---
     Force removal of old temporary audio files.
     """
+    auth_err = security.verify_admin_request(request)
+    if auth_err:
+        return JSONResponse(content={"error": auth_err[0]}, status_code=auth_err[1])
+
+    security.audit_log_admin_action(request, "trigger_cleanup")
     utils.purge_temporary_assets()
     utils.cleanup_old_files(config.LOG_DIR, days=config.LOG_RETENTION_DAYS)
     return {"status": "success", "message": "Cleanup triggered"}
@@ -156,12 +172,16 @@ def render_dashboard():
 
 
 @router.get("/logs/download")
-def download_logs():
+def download_logs(request: Request):
     """
     System Log Export
     ---
     Download the system log file.
     """
+    auth_err = security.verify_admin_request(request)
+    if auth_err:
+        return JSONResponse(content={"error": auth_err[0]}, status_code=auth_err[1])
+
     log_name = "whisper_pro.log"
     log_path = _resolve_log_path(log_name)
 
@@ -171,6 +191,7 @@ def download_logs():
     _flush_log_handlers()
 
     try:
+        security.audit_log_admin_action(request, "download_logs")
         with open(log_path, "rb") as f:
             content = f.read()
         headers = {
@@ -206,8 +227,11 @@ def _flush_log_handlers():
 
 @router.get("/settings")
 @router.get("/system/settings")
-def get_settings():
-    """View current service settings."""
+def get_settings(request: Request):
+    """View current service settings (admin-protected)."""
+    auth_err = security.verify_admin_request(request)
+    if auth_err:
+        return JSONResponse(content={"error": auth_err[0]}, status_code=auth_err[1])
     return {
         "ASR_MODEL": config.ASR_MODEL,
         "ASR_DEVICE": config.ASR_DEVICE,
@@ -224,6 +248,10 @@ async def update_settings(request: Request):
     ---
     Update service settings at runtime.
     """
+    auth_err = security.verify_admin_request(request)
+    if auth_err:
+        return JSONResponse(content={"error": auth_err[0]}, status_code=auth_err[1])
+
     try:
         return await _update_settings_impl(request)
     except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as e:
@@ -234,6 +262,7 @@ async def _update_settings_impl(request: Request):
     data, early_err = await _parse_and_validate_settings_payload(request)
     if early_err:
         return early_err
+    security.audit_log_admin_action(request, "update_settings", f"keys={list(data.keys())}")
     model_changed = await anyio.to_thread.run_sync(_apply_settings_updates, data)
     if model_changed:
         await anyio.to_thread.run_sync(model_manager.load_model)
@@ -269,24 +298,44 @@ def _validate_non_empty_settings_payload(data: dict) -> Optional[JSONResponse]:
     return JSONResponse(content={"error": "No data provided"}, status_code=400)
 
 
-def _validate_settings_data(data: dict) -> Optional[JSONResponse]:
-    err = _validate_positive_int_setting(data, "telemetry_retention_hours")
-    if err:
-        return JSONResponse(content={"error": "telemetry_retention_hours must be a positive integer"}, status_code=400)
-
-    err = _validate_positive_int_setting(data, "log_retention_days")
-    if err:
-        return JSONResponse(content={"error": "log_retention_days must be a positive integer"}, status_code=400)
+def _validate_model_and_device(data: dict) -> Optional[JSONResponse]:
+    if "ASR_MODEL" in data and not security.is_valid_model_name(str(data["ASR_MODEL"])):
+        return JSONResponse(content={"error": "Invalid or disallowed ASR_MODEL"}, status_code=400)
+    if "ASR_DEVICE" in data and not security.is_valid_device(str(data["ASR_DEVICE"])):
+        return JSONResponse(content={"error": "Invalid ASR_DEVICE"}, status_code=400)
     return None
 
 
-def _validate_positive_int_setting(data: dict, key: str) -> bool:
+def _validate_retention_ranges(data: dict) -> Optional[JSONResponse]:
+    if _is_invalid_positive_int_setting(data, "telemetry_retention_hours", min_val=1, max_val=720):
+        return JSONResponse(
+            content={"error": "telemetry_retention_hours must be an integer between 1 and 720"},
+            status_code=400,
+        )
+    if _is_invalid_positive_int_setting(data, "log_retention_days", min_val=1, max_val=90):
+        return JSONResponse(
+            content={"error": "log_retention_days must be an integer between 1 and 90"},
+            status_code=400,
+        )
+    return None
+
+
+def _validate_settings_data(data: dict) -> Optional[JSONResponse]:
+    model_err = _validate_model_and_device(data)
+    if model_err:
+        return model_err
+    return _validate_retention_ranges(data)
+
+
+def _is_invalid_positive_int_setting(data: dict, key: str, min_val: int = 1, max_val: int = 1000) -> bool:
     if key not in data:
         return False
-    if isinstance(data[key], bool):
+    raw_value = data[key]
+    if isinstance(raw_value, (bool, float)):
         return True
     try:
-        return int(data[key]) < 1
+        val = int(raw_value)
+        return val < min_val or val > max_val
     except (ValueError, TypeError):
         return True
 
@@ -351,17 +400,6 @@ def help_endpoint(request: Request):
     return {
         "app": config.APP_NAME,
         "version": config.VERSION,
-        "endpoints": [
-            "/status",
-            "/asr",
-            "/v1/audio/transcriptions",
-            "/v1/audio/translations",
-            "/detect-language",
-            "/detectlang",
-            "/dashboard",
-            "/logs/download",
-            "/settings",
-            "/analytics",
-        ],
+        "endpoints": sorted(security.API_KEY_PROTECTED_PATHS | {"/dashboard", "/logs/download", "/settings"}),
         "docs": f"{request.base_url}docs",
     }

@@ -143,7 +143,7 @@ function lifecycleBasePayload(tasks, history) {
   const activeSessions = tasks.filter((t) => t.status === "active").length;
   const queuedSessions = tasks.filter((t) => t.status === "queued").length;
   return {
-    version: "1.1.6-test",
+    version: "1.2.0-test",
     active_sessions: activeSessions,
     queued_sessions: queuedSessions,
     uptime_sec: 3600,
@@ -551,6 +551,129 @@ function mixedLifecycleScenario(tick) {
   return phases[Math.min(tick, phases.length - 1)];
 }
 
+function concurrencyBurstScenario(tick) {
+  const phases = [
+    {
+      tasks: [
+        {
+          task_id: "conc-npu-asr-1",
+          filename: "npu-batch-1.mkv",
+          type: "/asr",
+          status: "active",
+          stage: "Inference",
+          progress: 35,
+          video_duration: 300,
+          start_time: BASE_NOW - 50,
+          start_active: BASE_NOW - 40,
+          unit_id: "NPU.0",
+          logs: ["ASR active on NPU.0"],
+          live_text: "live NPU segment 1",
+        },
+        {
+          task_id: "conc-gpu-v1-1",
+          filename: "gpu-v1-transcribe.mkv",
+          type: "/v1/audio/transcriptions",
+          status: "active",
+          stage: "Inference",
+          progress: 50,
+          video_duration: 180,
+          start_time: BASE_NOW - 45,
+          start_active: BASE_NOW - 35,
+          unit_id: "GPU.0",
+          logs: ["v1 active on GPU.0"],
+          live_text: "live GPU segment",
+        },
+        {
+          task_id: "conc-cuda-v1-2",
+          filename: "cuda-v1-translate.mkv",
+          type: "/v1/audio/translations",
+          status: "active",
+          stage: "Inference",
+          progress: 75,
+          video_duration: 240,
+          start_time: BASE_NOW - 40,
+          start_active: BASE_NOW - 30,
+          unit_id: "CUDA.0",
+          logs: ["v1 translate active on CUDA.0"],
+          live_text: "live CUDA translation segment",
+        },
+        {
+          task_id: "conc-prio-ld-1",
+          filename: "priority-detect.mkv",
+          type: "/detect-language",
+          status: "queued",
+          stage: "Paused for Priority Task",
+          progress: 0,
+          video_duration: 60,
+          start_time: BASE_NOW - 30,
+          is_priority: true,
+          unit_id: null,
+          logs: ["Queued for priority execution"],
+        },
+        {
+          task_id: "conc-queued-asr-2",
+          filename: "queued-asr-batch.mkv",
+          type: "/asr",
+          status: "queued",
+          stage: "Queued",
+          progress: 0,
+          video_duration: 200,
+          start_time: BASE_NOW - 25,
+          is_priority: false,
+          unit_id: null,
+          logs: ["Queued awaiting hardware"],
+        },
+      ],
+      history: [],
+      hardware_units: [
+        { id: "NPU.0", type: "NPU", name: "Intel NPU", uvr_status: "ready", whisper_status: "active" },
+        { id: "GPU.0", type: "GPU", name: "Intel GPU", uvr_status: "ready", whisper_status: "active" },
+        { id: "CUDA.0", type: "CUDA", name: "NVIDIA GPU", uvr_status: "ready", whisper_status: "active" },
+        { id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "idle" },
+      ],
+    },
+    {
+      tasks: [
+        {
+          task_id: "conc-prio-ld-1",
+          filename: "priority-detect.mkv",
+          type: "/detect-language",
+          status: "active",
+          stage: "Language Detection",
+          progress: 90,
+          video_duration: 60,
+          start_time: BASE_NOW - 30,
+          start_active: BASE_NOW - 10,
+          is_priority: true,
+          unit_id: "NPU.0",
+          logs: ["Active Language Detection on NPU.0"],
+        },
+        {
+          task_id: "conc-npu-asr-1",
+          filename: "npu-batch-1.mkv",
+          type: "/asr",
+          status: "queued",
+          stage: "Paused for Priority Task",
+          progress: 35,
+          video_duration: 300,
+          start_time: BASE_NOW - 50,
+          start_active: BASE_NOW - 40,
+          unit_id: "NPU.0",
+          logs: ["Paused for priority detect-language task"],
+        },
+      ],
+      history: [],
+      hardware_units: [
+        { id: "NPU.0", type: "NPU", name: "Intel NPU", uvr_status: "ready", whisper_status: "active" },
+        { id: "GPU.0", type: "GPU", name: "Intel GPU", uvr_status: "ready", whisper_status: "idle" },
+        { id: "CUDA.0", type: "CUDA", name: "NVIDIA GPU", uvr_status: "ready", whisper_status: "idle" },
+        { id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "idle" },
+      ],
+    },
+  ];
+  return phases[Math.min(tick, phases.length - 1)];
+}
+
 function lifecycleScenarioPayload() {
   const tick = eventState.lifecycleTick;
   const scenario = eventState.lifecycleScenario;
@@ -564,11 +687,17 @@ function lifecycleScenarioPayload() {
     phase = v1LifecycleScenario(tick);
   } else if (scenario === "lifecycle-mixed") {
     phase = mixedLifecycleScenario(tick);
+  } else if (scenario === "lifecycle-concurrency-burst") {
+    phase = concurrencyBurstScenario(tick);
   } else {
     return defaultStatusPayload();
   }
 
-  return lifecycleBasePayload(phase.tasks, phase.history);
+  const payload = lifecycleBasePayload(phase.tasks, phase.history);
+  if (phase.hardware_units) {
+    payload.hardware_units = phase.hardware_units;
+  }
+  return payload;
 }
 
 function read(fileName) {
@@ -794,7 +923,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/__lifecycle/scenario" && req.method === "POST") {
     readJsonBody(req).then((payload) => {
       const requested = String((payload && payload.name) || "default");
-      const allowed = new Set(["default", "lifecycle-detectlang", "lifecycle-asr", "lifecycle-v1", "lifecycle-mixed"]);
+      const allowed = new Set(["default", "lifecycle-detectlang", "lifecycle-asr", "lifecycle-v1", "lifecycle-mixed", "lifecycle-concurrency-burst"]);
       eventState.lifecycleScenario = allowed.has(requested) ? requested : "default";
       eventState.lifecycleTick = 0;
       respondJson(res, { ok: true, scenario: eventState.lifecycleScenario, tick: eventState.lifecycleTick });

@@ -69,6 +69,9 @@ Dashboard task list MUST always render in this **exact** order:
 - Utilization % calculated as: `(actual_active_count) / hardware_unit_count * 100`.
 - Queued tasks do NOT count toward utilization (they are not consuming hardware).
 - CUDA utilization is sourced from `nvidia-smi`.
+- AMD utilization counts UVR/preprocessor accelerator work only (ROCm/MIGraphX/DirectML). AMD ASR runs on CPU and must not light the AMD GPU chart.
+- AMD sysfs probes must map AMD-vendor DRM cards by unit index and must not glob every `card*` node.
+- Dashboard polls `/status` and `/history` with `X-API-Key` from localStorage (`whisper_api_key`); administrative POSTs use `whisper_admin_api_key` with API-key fallback.
 - Intel GPU and NPU utilization should prefer native Linux device counters, scan all matching paths for the active unit, preserve zero as a valid native reading, and then fall back to Windows performance counters and finally task/activity inference.
 - CUDA utilization should prefer `nvidia-smi`, and only then use synthetic task/activity fallback when direct polling is unavailable.
 - Dashboard rendering must continue to read `telemetry.hardware_util` keyed by unit id, with legacy singleton fields treated as compatibility-only fallback paths.
@@ -180,4 +183,3 @@ Any code change touching the following MUST be validated against these rules:
 - Telemetry and history tests pass: all 7 status values appear correctly in aggregations.
 - No broken status payload fields.
 - Frontend tests pass with ≥90% lines/statements coverage (branches/functions pragmatic).
-

@@ -418,6 +418,94 @@ def test_ensure_loaded_backfills_filenames(tmp_path):
         assert cache[2]["filename"] == "already_correct.mp3"
 
 
+def test_log_completed_task_backfills_generic_filename(tmp_path):
+    """History writes should recover Bazarr-style filenames from request_json.local_path."""
+    history_file = tmp_path / "task_history.json"
+    task_data = {
+        "task_id": "bazarr-1",
+        "filename": "",
+        "request_json": {
+            "local_path": "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv",
+            "audio_file": "",
+        },
+        "status": "completed",
+        "logs": ["19:00:01 sample log"],
+    }
+
+    with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
+        history_manager.HISTORY_CACHE = []
+        history_manager.log_completed_task(task_data)
+
+        assert history_manager.HISTORY_CACHE[0]["filename"] == "Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
+
+
+def test_get_history_backfills_filename_from_bazarr_json_path_key(tmp_path):
+    """Legacy history entries may store the media path as request_json object key."""
+    history_file = tmp_path / "task_history.json"
+    path = "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
+    history_file.write_text(
+        json.dumps(
+            [
+                {
+                    "task_id": "bazarr-key-1",
+                    "filename": "Unknown Media",
+                    "request_json": {path: ""},
+                    "status": "failed",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
+        history_manager.HISTORY_CACHE = []
+        history = history_manager.get_history()
+
+    assert history[0]["filename"] == "Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
+
+
+def test_get_history_backfills_request_json_from_bazarr_path_key(tmp_path):
+    """Serving history should normalize Bazarr path-as-key request payloads."""
+    history_file = tmp_path / "task_history.json"
+    path = "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
+    history_file.write_text(
+        json.dumps(
+            [
+                {
+                    "task_id": "bazarr-key-req-1",
+                    "filename": "Unknown Media",
+                    "request_json": {path: ""},
+                    "status": "failed",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
+        history_manager.HISTORY_CACHE = []
+        history = history_manager.get_history()
+
+    assert history[0]["request_json"] == {"local_path": path}
+
+
+def test_get_history_backfills_generic_filename_without_reload(tmp_path):
+    """Serving history should repair generic filenames already present in RAM cache."""
+    history_file = tmp_path / "task_history.json"
+    history_manager.HISTORY_CACHE = [
+        {
+            "task_id": "live-1",
+            "filename": "Unknown Media",
+            "request_json": {"local_path": "/media/show/episode.mkv"},
+        }
+    ]
+
+    with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
+        history = history_manager.get_history()
+
+    assert history[0]["filename"] == "episode.mkv"
+
+
 def test_ensure_loaded_imports_legacy_history_when_primary_missing(tmp_path):
     """Upgrade path should import history from legacy data location when new state file is absent."""
     new_history_file = tmp_path / "state" / "task_history.json"

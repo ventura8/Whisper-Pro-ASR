@@ -93,6 +93,25 @@ Transcribe audio to SRT/VTT/JSON with optional speaker diarization. All incoming
 | `hf_token` | string | config | Hugging Face token (required for diarization) |
 | `max_line_width` | int | - | Max characters per subtitle line |
 | `max_line_count` | int | - | Max lines per subtitle block |
+| `clean_audio` | bool | - | Enable/disable vocal isolation (WhisperX prep). Canonical parameter: overrides `vocal_separation` and `enable_vocal_separation`. If omitted, falls back to `ENABLE_VOCAL_SEPARATION`. |
+| `encode` | bool | `true` | When `false`, skip FFmpeg normalization and treat input as raw 16 kHz mono s16le PCM (Bazarr compatibility) |
+
+**Bazarr raw PCM (`encode=false`)**:
+
+- Bazarr may send pre-standardized PCM with `encode=false`.
+- The service skips FFmpeg conversion in that case and uses the mapped file path directly.
+- `encode=true` (default) runs the normal FFmpeg standardization path to 16 kHz mono WAV.
+
+**Vocal Isolation (`clean_audio`) precedence**:
+
+When using vocal isolation (UVR/WhisperX prep), the request parameter precedence is:
+
+1. `clean_audio` (canonical, when explicitly provided)
+2. `vocal_separation` (legacy alias)
+3. `enable_vocal_separation` (legacy alias)
+4. `ENABLE_VOCAL_SEPARATION` (runtime default when no request params are provided)
+
+This precedence only controls whether the vocal isolation/prep stage runs; it does not change the `encode` raw-PCM behavior.
 
 **Speaker Diarization**:
 When `diarize=true`, the service runs the WhisperX post-processing pipeline:
@@ -236,10 +255,11 @@ View or update service settings at runtime.
 
 ```bash
 # View settings
-curl http://localhost:9000/settings
+curl -H "X-API-Key: <ADMIN_KEY>" http://localhost:9000/settings
 
 # Update model
-curl -X POST -H "Content-Type: application/json" -d '{"ASR_MODEL": "Systran/faster-whisper-large-v3"}' http://localhost:9000/settings
+curl -X POST -H "Content-Type: application/json" -H "X-API-Key: <ADMIN_KEY>" \
+  -d '{"ASR_MODEL": "Systran/faster-whisper-large-v3"}' http://localhost:9000/settings
 ```
 
 ### `GET /history`
@@ -247,7 +267,7 @@ curl -X POST -H "Content-Type: application/json" -d '{"ASR_MODEL": "Systran/fast
 Retrieves the full list of completed and active tasks from persistent storage.
 
 ```bash
-curl http://localhost:9000/history
+curl -H "X-API-Key: <KEY>" http://localhost:9000/history
 ```
 
 ### `POST /system/history/clear`
@@ -255,7 +275,7 @@ curl http://localhost:9000/history
 Purges all task records from the history manager.
 
 ```bash
-curl -X POST http://localhost:9000/system/history/clear
+curl -X POST -H "X-API-Key: <ADMIN_KEY>" http://localhost:9000/system/history/clear
 ```
 
 ### `POST /system/cleanup`
@@ -263,7 +283,7 @@ curl -X POST http://localhost:9000/system/history/clear
 Manually triggers removal of old temporary audio files and transient assets.
 
 ```bash
-curl -X POST http://localhost:9000/system/cleanup
+curl -X POST -H "X-API-Key: <ADMIN_KEY>" http://localhost:9000/system/cleanup
 ```
 
 ### `GET /logs/download`
@@ -271,7 +291,7 @@ curl -X POST http://localhost:9000/system/cleanup
 Downloads the system log file (`whisper_pro.log`) with forced flush-to-disk and zero-caching headers for guaranteed freshness. The log is read atomically into memory before the response is sent, preventing `RuntimeError: Response content longer than Content-Length` failures that could occur when the log file is written to during an active streaming download.
 
 ```bash
-curl -O http://localhost:9000/logs/download
+curl -H "X-API-Key: <ADMIN_KEY>" -O http://localhost:9000/logs/download
 ```
 
 ### `GET /help`
@@ -284,11 +304,53 @@ curl http://localhost:9000/help
 
 ---
 
+## Security & Access Control
+
+### Authentication (`API_KEY` & `ADMIN_API_KEY`)
+
+When configured via environment variables, the service supports API key authentication:
+
+- **`API_KEY`**: Secures transcription, language detection, status, and history endpoints.
+- **`ADMIN_API_KEY`**: Secures administrative endpoints (`/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`). If `ADMIN_API_KEY` is not explicitly set, it defaults to the value of `API_KEY`.
+
+Pass the key using either standard header:
+
+```bash
+# Using X-API-Key header
+curl -H "X-API-Key: <KEY>" http://localhost:9000/status
+
+# Using Authorization Bearer header
+curl -H "Authorization: Bearer <KEY>" http://localhost:9000/status
+```
+
+### CORS Configuration (`CORS_ORIGINS` & `CORS_ALLOW_ALL`)
+
+- **`CORS_ORIGINS`**: Comma-separated list of allowed cross-origin URLs (e.g. `http://localhost:3000,https://app.example.com`).
+  - This controls what browsers are allowed to read (i.e. it affects CORS response headers such as `Access-Control-Allow-Origin` via CORSMiddleware).
+- **`CORS_ALLOW_ALL`**: Set to `true` to enable wildcard CORS (`*`). Defaults to `false` for defense-in-depth against cross-origin data exfiltration.
+  - Wildcard CORS does **not** disable administrative anti-CSRF protection.
+- **Unauthenticated administrative mutations**: If `ADMIN_API_KEY` is not configured, state-changing admin endpoints require an `Origin` or `Referer` header and validate it against the request host / trusted origins; missing both returns `403`.
+
+### Model Allowlist & Validation (`ALLOWED_MODELS`)
+
+To prevent arbitrary model downloads and model supply chain attacks, runtime model changes via `/settings` are restricted to:
+
+- Standard Faster-Whisper / OpenAI models (`tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`, `medium.en`, `large`, `large-v1`, `large-v2`, `large-v3`, `large-v3-turbo`, `turbo`, `distil-*`).
+- Official model repositories (`Systran/faster-whisper-*`, `openai/whisper-*`, `guillaumekln/faster-whisper-*`, `deepdml/faster-whisper-*`).
+- Local system models in `/app/system_models`, `/models`, `model_cache`.
+- Additional custom models specified in the `ALLOWED_MODELS` environment variable (comma-separated).
+
+---
+
 ## Bazarr Integration
 
 1. Settings → Providers → Whisper
 2. Endpoint: `http://<IP_OR_HOSTNAME>:9000`
 3. Read Timeout: `54000` (for long movies)
+
+When Bazarr sends `encode=false`, the service expects already-standardized 16 kHz mono PCM and bypasses FFmpeg normalization for faster mapped-path processing.
+
+Some Bazarr builds send the media path as a JSON object key (for example `{"/tv/show.mkv": ""}`) instead of a `local_path` field. The service recovers those paths for processing and dashboard history display, including failed tasks where history retains normalized request metadata, error payloads, and execution logs.
 
 ## Subtitle Edit Integration
 

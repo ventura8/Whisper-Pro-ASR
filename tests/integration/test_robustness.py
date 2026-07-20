@@ -33,7 +33,7 @@ def test_hardware_path_resolution():
 
     # 1. Test NVIDIA path
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "CUDA"}):
-        with mock.patch("os.path.exists", return_value=True):
+        with mock.patch("os.path.exists", side_effect=lambda p: p in ["/app/libs/nvidia", "/dev/nvidia0"]):
             fake_path = PathTracker()
             with mock.patch.object(sys, "path", fake_path):
                 with mock.patch("importlib.reload"):
@@ -42,7 +42,7 @@ def test_hardware_path_resolution():
 
     # 2. Test Intel path
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "INTEL"}):
-        with mock.patch("os.path.exists", return_value=True):
+        with mock.patch("os.path.exists", side_effect=lambda p: p in ["/app/libs/intel", "/dev/dri", "/dev/accel"]):
             fake_path = PathTracker()
             with mock.patch.object(sys, "path", fake_path):
                 with mock.patch("importlib.reload"):
@@ -314,32 +314,34 @@ def test_system_routes_logic_gaps():
     """Directly test system routes logic using mock Request objects."""
     # 1. root with HTML
     mock_request = mock.MagicMock()
-    mock_request.headers = {"accept": "text/html"}
+    mock_request.headers = {"accept": "text/html", "origin": "http://localhost:9000", "host": "localhost:9000"}
     with mock.patch("modules.monitoring.dashboard.get_dashboard_html", return_value="<html>"):
         resp = routes_system.root(mock_request)
         assert "<html>" in resp.body.decode()
 
-    # 2. download_logs fail paths
-    with mock.patch("modules.api.routes.system.config") as mock_conf:
-        mock_conf.LOG_DIR = "/non/existent"
-        mock_conf.TEMP_DIR = "/non/existent/temp"
-        with mock.patch("os.path.exists", return_value=False):
-            resp = routes_system.download_logs()
-            assert resp.status_code == 404
+    with mock.patch.dict(os.environ, {"API_KEY": "", "ADMIN_API_KEY": ""}, clear=False):
+        # 2. download_logs fail paths
+        with mock.patch("modules.api.routes.system.config") as mock_conf:
+            mock_conf.LOG_DIR = "/non/existent"
+            mock_conf.TEMP_DIR = "/non/existent/temp"
+            with mock.patch("os.path.exists", return_value=False):
+                resp = routes_system.download_logs(mock_request)
+                assert resp.status_code == 404
 
-    # 3. update_settings POST paths
-    mock_post_request = mock.AsyncMock()
-    mock_post_request.json.return_value = {
-        "ASR_MODEL": "test_model",
-        "ASR_DEVICE": "CPU",
-        "telemetry_retention_hours": 12,
-        "log_retention_days": 5,
-    }
+        # 3. update_settings POST paths
+        mock_post_request = mock.AsyncMock()
+        mock_post_request.headers = {"origin": "http://localhost:9000", "host": "localhost:9000"}
+        mock_post_request.json.return_value = {
+            "ASR_MODEL": "small",
+            "ASR_DEVICE": "CPU",
+            "telemetry_retention_hours": 12,
+            "log_retention_days": 5,
+        }
 
-    with mock.patch("modules.core.config.update_env"):
-        with mock.patch("modules.inference.runtime.model_manager.load_model"):
-            resp = asyncio.run(routes_system.update_settings(mock_post_request))
-            assert resp["status"] == "success"
+        with mock.patch("modules.core.config.update_env"):
+            with mock.patch("modules.inference.runtime.model_manager.load_model"):
+                resp = asyncio.run(routes_system.update_settings(mock_post_request))
+                assert resp["status"] == "success"
 
     # 4. help_endpoint
     mock_help_request = mock.MagicMock()

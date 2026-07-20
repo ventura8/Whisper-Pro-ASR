@@ -7,7 +7,7 @@
 
 **Whisper Pro ASR** is a high-performance, production-ready AI transcription service with **speaker diarization**. It is optimized for **Whisper Large V3** and designed for seamless integration with **Bazarr** and the *arr stack.
 
-It features native hardware acceleration for **Intel Core Ultra (NPU)**, **Intel iGPUS/Arc**, and **NVIDIA CUDA**, offloading heavy AI tasks from your CPU for industrial-grade speed.
+It features native hardware acceleration for **Intel Core Ultra (NPU)**, **Intel iGPUS/Arc**, **NVIDIA CUDA**, and **native Linux AMD ROCm**, offloading heavy AI tasks from your CPU for industrial-grade speed.
 
 Concurrency correctness is the top engineering priority: detect-language preemption is cooperative and unit-aware, critical priority waits remain indefinite under saturation (never failing immediately on simple scheduler timeout), and scheduler liveness is continuously validated by test gates.
 
@@ -57,6 +57,17 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
+    # 3. AMD GPU (native Linux ROCm via ONNX Runtime)
+    # Linux AMD hosts:
+    # devices:
+    #   - /dev/kfd:/dev/kfd # AMD KFD (ROCm GPU driver)
+    #   - /dev/dri:/dev/dri # DRM render nodes
+    # Windows 11 / WSL2 AMD hosts:
+    # devices:
+    #   - /dev/dxg:/dev/dxg # WSL GPU bridge (detection only in this Linux container; UVR falls back to CPU)
+    # volumes:
+    #   - /usr/lib/wsl:/usr/lib/wsl:ro # Optional: WSL2 host driver library mount
+
     tmpfs:
       - /tmp/whisper:size=2G
     volumes:
@@ -74,7 +85,7 @@ services:
 Deploy with: `docker compose up -d`
 
 > [!TIP]
-> **Autonomous Hardware Detection**: The engine automatically identifies your hardware (NVIDIA GPU, Intel NPU, or Intel iGPU) and self-optimizes.
+> **Autonomous Hardware Detection**: The engine automatically identifies your hardware (NVIDIA GPU, AMD GPU, Intel NPU, or Intel iGPU) and self-optimizes.
 
 ---
 
@@ -114,13 +125,13 @@ To use this service with **Bazarr**:
 
 ### 🧩 Hardware Compatibility Matrix
 
-| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
-| :--- | :---: | :---: | :---: | :---: |
-| **Media Standardization** | ✅ | ✅ | ✅ | ✅ |
-| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
-| **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
-| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
-| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
+| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | AMD (native Linux ROCm) | Intel iGPU / Arc | Intel NPU |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Media Standardization** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (native Linux ROCm via `/dev/kfd`); WSL2 `/dev/dxg` detects AMD but falls back to CPU | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 - **Re-entrant Hardware Orchestration**: Intelligent thread-local locking for nested AI sub-tasks.
 - **Hybrid "Split" Architecture**: Efficiently distribute workloads across multiple accelerators (e.g., Intel NPU for isolation and NVIDIA for transcription).
@@ -172,10 +183,17 @@ Mapping the following volumes is **strongly recommended**:
 - Install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
 - Ensure you have current NVIDIA drivers on the host.
 
+### AMD GPU (native Linux ROCm)
+
+- **Linux**: Map `/dev/kfd` and `/dev/dri` into the container.
+- **Windows 11 / WSL2**: Map `/dev/dxg` (WSL GPU bridge) only for AMD adapter detection in this Linux container.
+- Set `MAX_AMD_UNITS=1` in environment to enable the AMD scheduler unit.
+- UVR vocal isolation runs on the AMD GPU via `onnxruntime-rocm` only on native Linux ROCm hosts with `/dev/kfd`. On WSL2 `/dev/dxg`, UVR falls back to CPU. Whisper ASR falls back to CPU on AMD units since CTranslate2 does not have a ROCm backend.
+
 ### Intel NPU/GPU
 
 - Mapping `/dev/dri` and `/dev/accel` is recommended for native Linux access.
-- For Windows/WSL2, ensure `/dev/dxg` is mapped.
+- For Windows/WSL2, ensure `/dev/dxg` is mapped only when you want AMD detection/telemetry in this Linux image; it does not enable GPU UVR.
 
 ---
 

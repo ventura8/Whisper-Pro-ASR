@@ -202,6 +202,14 @@
                                 <span id="log-retention-label" style="font-family:'Roboto Mono'; font-weight:700; color:var(--md-sys-color-primary); width:40px;">7d</span>
                             </div>
                         </div>
+                        <div>
+                            <label for="api-key-input" style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">API Key</label>
+                            <input type="password" id="api-key-input" autocomplete="new-password" placeholder="Used for /status, /history, and transcription APIs during this session" style="width:100%; padding:8px;">
+                        </div>
+                        <div>
+                            <label for="admin-api-key-input" style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">Admin API Key</label>
+                            <input type="password" id="admin-api-key-input" autocomplete="new-password" placeholder="Optional; used during this session for settings and purge actions" style="width:100%; padding:8px;">
+                        </div>
                         <div style="display:flex; justify-content:flex-end;">
                             <button type="button" onclick="saveSettings()" class="btn-swagger" style="border:none; cursor:pointer; padding: 10px 40px; font-size:15px;">Save Configuration</button>
                         </div>

@@ -2,6 +2,10 @@
 
 This skill automates synchronization of repository documentation with the current codebase and release state.
 
+## Mandatory Rule
+
+Every time you work on this project, you MUST update all relevant markdown files in the same task. Never ship code-only changes. A task is incomplete until `README.md`, `docs/*.md`, and affected `.agent/*.md` files describe the current implementation.
+
 ## Objective
 
 Review the full current change set for documentation drift, then update `README.md`, affected files in `docs/`, and impacted Mermaid diagrams in `.md` files so they match implemented behavior.

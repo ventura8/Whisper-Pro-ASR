@@ -1,19 +1,11 @@
-"""
-Cross-Platform Media Utilities
-
-This module provides essential tools for audio standardization, time formatting,
-and subtitle generation. It abstracts FFmpeg complexity and ensures that all
-media ingested by the service conforms to a uniform 16kHz MONO specification.
-"""
+"""Cross-platform media utilities for standardized 16kHz mono audio."""
 
 import contextlib
 import contextvars
-import json
 import logging
 import os
 import tempfile
 import threading
-from shutil import which
 
 import psutil
 
@@ -23,6 +15,12 @@ except ImportError:
     torch = None
 
 from modules.core import config, process_exec, utils_helpers
+from modules.core.nvidia_vram_helpers import get_nvidia_vram_usage_mb
+from modules.core.pcm_helpers import (
+    calculate_pcm_fallback_duration,
+    format_duration,
+    pcm_bytes_per_second,
+)
 from modules.core.subtitles import (
     format_single_srt_block,
     format_timestamp,
@@ -43,10 +41,15 @@ from modules.core.utils_helpers import (
 
 _parse_ffmpeg_progress_impl = utils_helpers.parse_ffmpeg_progress
 
-# Reference to satisfy unused import check for public API consumption
-_unused_api = (secure_remove, get_pretty_model_name, validate_audio, cleanup_old_files, purge_temporary_assets)
+_unused_api = (
+    secure_remove,
+    get_pretty_model_name,
+    validate_audio,
+    cleanup_old_files,
+    purge_temporary_assets,
+    get_nvidia_vram_usage_mb,
+)
 
-# Re-export for public API and compatibility
 _reexports = (
     wrap_text,
     generate_srt,
@@ -55,9 +58,10 @@ _reexports = (
     generate_txt,
     generate_tsv,
     format_single_srt_block,
+    pcm_bytes_per_second,
+    calculate_pcm_fallback_duration,
 )
 
-# Global process object for telemetry consistency
 _PROCESS_OBJ = psutil.Process(os.getpid())
 
 
@@ -76,53 +80,6 @@ def get_system_telemetry():
         "memory_total_gb": round(mem.total / (1024**3), 2),
         "app_memory_gb": round(app_mem_rss / (1024**3), 2),
     }
-
-
-def get_nvidia_vram_usage_mb() -> int | None:
-    """Return total used NVIDIA VRAM in MB across visible GPUs, or None if unavailable."""
-    nvidia_smi = which("nvidia-smi")
-    if not nvidia_smi:
-        return None
-
-    lines = _query_nvidia_vram_lines(nvidia_smi)
-    if lines is None:
-        return None
-
-    return _parse_nvidia_vram_total(lines)
-
-
-def _query_nvidia_vram_lines(nvidia_smi: str) -> list[str] | None:
-    """Query nvidia-smi and return raw memory-used lines."""
-    try:
-        output = process_exec.check_output_text(
-            [nvidia_smi, "--query-gpu=memory.used", "--format=csv,nounits,noheader"],
-            timeout=5.0,
-        )
-    except (
-        process_exec.CommandExecutionError,
-        process_exec.CommandTimeoutError,
-        FileNotFoundError,
-        OSError,
-    ):
-        return None
-    return output.splitlines()
-
-
-def _parse_nvidia_vram_total(lines: list[str]) -> int | None:
-    """Parse raw nvidia-smi memory-used lines and sum valid MB values."""
-    values = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            values.append(int(stripped.split(",")[0].strip()))
-        except ValueError:
-            continue
-
-    if not values:
-        return None
-    return sum(values)
 
 
 NOT_SET = object()
@@ -288,7 +245,11 @@ def _resolve_request_scoped_tracked_files(request=None):
 
 
 def _cleanup_tracked_file_list(files: list, scope_label: str):
-    logger.debug("[System] Performing request-local storage hygiene on %d files (%s)", len(files), scope_label)
+    logger.debug(
+        "[System] Performing request-local storage hygiene on %d files (%s)",
+        len(files),
+        scope_label,
+    )
     for f_path in list(files):
         secure_remove(f_path)
     files.clear()
@@ -395,12 +356,24 @@ def _convert_base(source_path, flags, rate, channels, tag="Prep", *, yield_cb=No
         return None
 
     duration = get_audio_duration(source_path)
-    logger.info("[%s] Stream analysis: %s (%s)", tag, os.path.basename(source_path), format_duration(duration))
+    logger.info(
+        "[%s] Stream analysis: %s (%s)",
+        tag,
+        os.path.basename(source_path),
+        format_duration(duration),
+    )
     output_path = _allocate_temp_output_path(duration, rate, channels)
 
     try:
         _run_optional_yield(yield_cb)
-        _run_ffmpeg_standardization(source_path, output_path, duration, flags=flags, input_flags=input_flags, yield_cb=yield_cb)
+        _run_ffmpeg_standardization(
+            source_path,
+            output_path,
+            duration,
+            flags=flags,
+            input_flags=input_flags,
+            yield_cb=yield_cb,
+        )
         _run_optional_yield(yield_cb)
         logger.info("[%s] Normalization sequence completed successfully.", tag)
         return track_file(output_path)
@@ -467,60 +440,23 @@ def parse_ffmpeg_progress(process, duration, yield_cb=None):
     return _parse_ffmpeg_progress_impl(process, duration, format_duration, yield_cb=yield_cb)
 
 
-def get_audio_duration(file_path):
-    """Extract precise media duration via ffprobe stream headers."""
+def get_audio_duration(file_path: str, input_flags: list[str] | None = None) -> float:
+    """Extract precise media duration via ffprobe, with PCM-byte fallback."""
+    if input_flags is None:
+        input_flags = getattr(THREAD_CONTEXT, "input_flags", None)
     try:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            file_path,
-        ]
-        result = process_exec.check_output_text(cmd, timeout=10).strip()
-        return float(result)
+        cmd = ["ffprobe", "-v", "error"]
+        if input_flags:
+            cmd.extend(input_flags)
+        cmd.extend(
+            [
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                file_path,
+            ]
+        )
+        return float(process_exec.check_output_text(cmd, timeout=10).strip())
     except tuple([Exception]):
-        # Calculate duration based on file size if input is raw PCM
-        try:
-            input_flags = getattr(THREAD_CONTEXT, "input_flags", None)
-            if input_flags and os.path.exists(file_path):
-                # Standard raw PCM: 16000Hz mono s16le (2 bytes/sample) -> 32000 bytes/sec
-                f_size = os.path.getsize(file_path)
-                return float(f_size) / 32000.0
-        except tuple([Exception]):
-            pass
-        return 0.0
-
-
-def format_duration(seconds):
-    """Convert raw seconds into a human-readable HH:MM:SS format."""
-    hours, remainder = divmod(int(seconds), 3600)
-    minutes, secs = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
-
-# Static Language Mapping (ISO-639-1 -> Name)
-# Extracted from standard Whisper mappings to ensure /detect-language
-# returns full names without needing the full openai-whisper package.
-LANGUAGES = json.loads(
-    '{"en": "English", "zh": "Chinese", "de": "German", "es": "Spanish", "ru": "Russian", "ko": "Korean", '
-    '"fr": "French", "ja": "Japanese", "pt": "Portuguese", "tr": "Turkish", "pl": "Polish", "ca": "Catalan", '
-    '"nl": "Dutch", "ar": "Arabic", "sv": "Swedish", "it": "Italian", "id": "Indonesian", "hi": "Hindi", '
-    '"fi": "Finnish", "vi": "Vietnamese", "he": "Hebrew", "uk": "Ukrainian", "el": "Greek", "ms": "Malay", '
-    '"cs": "Czech", "ro": "Romanian", "da": "Danish", "hu": "Hungarian", "ta": "Tamil", "no": "Norwegian", '
-    '"th": "Thai", "ur": "Urdu", "hr": "Croatian", "bg": "Bulgarian", "lt": "Lithuanian", "la": "Latin", '
-    '"mi": "Maori", "ml": "Malayalam", "cy": "Welsh", "sk": "Slovak", "te": "Telugu", "fa": "Persian", '
-    '"lv": "Latvian", "bn": "Bengali", "sr": "Serbian", "az": "Azerbaijani", "sl": "Slovenian", "kn": "Kannada", '
-    '"et": "Estonian", "mk": "Macedonian", "br": "Breton", "eu": "Basque", "is": "Icelandic", "hy": "Armenian", '
-    '"ne": "Nepali", "mn": "Mongolian", "bs": "Bosnian", "kk": "Kazakh", "sq": "Albanian", "sw": "Swahili", '
-    '"gl": "Galician", "mr": "Marathi", "pa": "Punjabi", "si": "Sinhala", "km": "Khmer", "sn": "Shona", '
-    '"yo": "Yoruba", "so": "Somali", "af": "Afrikaans", "oc": "Occitan", "ka": "Georgian", "be": "Belarusian", '
-    '"tg": "Tajik", "sd": "Sindhi", "gu": "Gujarati", "am": "Amharic", "yi": "Yiddish", "lo": "Lao", '
-    '"uz": "Uzbek", "fo": "Faroese", "ht": "Haitian Creole", "ps": "Pashto", "tk": "Turkmen", "nn": "Nynorsk", '
-    '"mt": "Maltese", "sa": "Sanskrit", "lb": "Luxembourgish", "my": "Myanmar", "bo": "Tibetan", "tl": "Tagalog", '
-    '"mg": "Malagasy", "as": "Assamese", "tt": "Tatar", "haw": "Hawaiian", "ln": "Lingala", "ha": "Hausa", '
-    '"ba": "Bashkir", "jw": "Javanese", "su": "Sundanese"}'
-)
+        return calculate_pcm_fallback_duration(file_path, input_flags)

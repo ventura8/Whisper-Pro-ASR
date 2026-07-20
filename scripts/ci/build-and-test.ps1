@@ -210,7 +210,7 @@ $runArgs = @(
     "whisper-pro-asr-test",
     "/bin/bash",
     "-lc",
-    'tests/run_suite.sh; TEST_EXIT_CODE=$?; [ -f coverage.xml ] && cp coverage.xml /reports/coverage.xml || true; [ -f coverage_output.txt ] && cp coverage_output.txt /reports/coverage_output.txt || true; [ -f complexity_output.txt ] && cp complexity_output.txt /reports/complexity_output.txt || true; [ -f pytest.xml ] && cp pytest.xml /reports/pytest.xml || true; exit "$TEST_EXIT_CODE"'
+    'bash tests/run_suite.sh; TEST_EXIT_CODE=$?; [ -f coverage.xml ] && cp coverage.xml /reports/coverage.xml || true; [ -f coverage_output.txt ] && cp coverage_output.txt /reports/coverage_output.txt || true; [ -f complexity_output.txt ] && cp complexity_output.txt /reports/complexity_output.txt || true; [ -f pytest.xml ] && cp pytest.xml /reports/pytest.xml || true; exit "$TEST_EXIT_CODE"'
 )
 Invoke-Docker -Arguments $runArgs
 

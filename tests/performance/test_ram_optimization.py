@@ -31,21 +31,19 @@ class TestRAMOptimization:
                         assert res_path.startswith("/tmp/whisper")
                         assert "upload_" in res_path
 
-    def test_handle_upload_null_byte_verification(self):
-        """Test that handle_upload still detects corrupted files (null bytes) in streamed mode."""
+    def test_handle_upload_empty_stream_detection(self):
+        """Test that handle_upload detects empty streams in streamed mode."""
         mock_file = mock.MagicMock()
         mock_file.filename = "test.wav"
         mock_file.file = mock.MagicMock()
-        mock_file.file.read.side_effect = [b"\x00" * 2048, b""]
+        mock_file.file.read.side_effect = [b"", b""]
 
         with mock.patch("modules.api.support.request_utils.config") as cfg:
             cfg.get_temp_dir.return_value = "/tmp/whisper"
-            with mock.patch("os.path.getsize", return_value=2048):
-                # Mock reading back the header (all zeros)
-                with mock.patch("builtins.open", mock.mock_open(read_data=b"\x00" * 1024)):
+            with mock.patch("os.path.getsize", return_value=0):
+                with mock.patch("builtins.open", mock.mock_open(read_data=b"")):
                     with mock.patch("os.path.exists", return_value=True):
                         with mock.patch("os.remove") as mock_remove:
-                            with pytest.raises(ValueError, match="corrupted"):
+                            with pytest.raises(ValueError, match="empty"):
                                 routes.handle_upload(mock_file)
-                            # Verify cleanup happened
                             mock_remove.assert_called()

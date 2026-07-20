@@ -50,25 +50,26 @@ Ensures thread context registers and deletes all temporary audio WAV stems (stan
 - Confirm all new waits follow current policy (indefinite under saturation) and do not introduce timeout-based request failures in priority/preemption paths.
 - Confirm a regression test exists for each changed liveness pathway.
 
-### 1. Simulate Concurrency Races
+### 1. Simulate Concurrency Races & Full End-to-End Suite
 
-Run integration tests checking priority request preemption behavior:
+Run the comprehensive end-to-end concurrency & lifecycle test suite:
 
 ```bash
-python3 -m pytest tests/inference/scheduler/priority/test_priority_concurrency.py \
-                  tests/inference/scheduler/priority/test_priority_concurrency_core_tests.py \
-                  tests/inference/scheduler/priority/test_priority_concurrency_extended_tests.py \
-                  tests/inference/scheduler/priority/test_priority_fifo_ordering.py \
-                  tests/inference/scheduler/priority/test_priority_stage_preemption.py
+docker build -f Dockerfile.test --target test -t whisper-pro-asr-test .
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test python3 -m pytest tests/integration/concurrency/ -v
 ```
 
-### 2. Assert Priority Parallelism and Unit Resume
+### 2. Verify UI Correctness During Concurrency (Playwright E2E)
 
-- Verify that concurrent priority requests can register and run across different available/borrowed units.
-- Assert that paused tasks resume processing when their targeted unit is resumed.
+Run the Playwright E2E UI concurrency & preemption suite:
 
-### 3. Verify Temp Storage Cleanup
+```bash
+docker build -f Dockerfile.test --target test -t whisper-pro-asr-test .
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test npm run test:e2e
+```
 
-- Verify that mock tasks registering files via `tracked_files` successfully clear all listed paths upon execution exit.
-- Check test results in `tests/inference/scheduler/priority/test_priority_concurrency.py` and `tests/inference/scheduler/priority/test_priority_concurrency_extended_tests.py` targeting cleanup and targeted-preemption routines.
+### 3. Assert Priority Parallelism, Unit Resume, and Temp File Hygiene
 
+- Verify that concurrent priority requests register and execute across available/borrowed hardware units.
+- Assert that paused tasks resume processing without data loss when their targeted unit resumes.
+- Verify 100% temporary audio WAV file cleanup via `utils.get_tracked_files()` assertions across all concurrency tiers.

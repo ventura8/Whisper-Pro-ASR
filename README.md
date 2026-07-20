@@ -5,7 +5,7 @@
 ![Pylint](https://img.shields.io/badge/Pylint-10.00%2F10-brightgreen)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-**Whisper Pro ASR** is a high-performance transcription microservice with **speaker diarization**, optimized for the **Whisper Large V3** model. It delivers enterprise-grade performance with native hardware acceleration for **Intel Core Ultra NPUs**, **Integrated GPUs**, and **NVIDIA CUDA** environments.
+**Whisper Pro ASR** is a high-performance transcription microservice with **speaker diarization**, optimized for the **Whisper Large V3** model. It delivers enterprise-grade performance with native hardware acceleration for **Intel Core Ultra NPUs**, **Integrated GPUs**, **NVIDIA CUDA**, and **native Linux AMD ROCm** environments.
 
 Engineered for seamless integration with **Bazarr** and the broader media automation stack, it offloads computationally intensive AI tasks from your primary system resources, providing industrial-strength transcription with speaker identification and rapid hardware context switching.
 
@@ -57,6 +57,16 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [ gpu ]
+
+    # 3. AMD GPU (native Linux ROCm via ONNX Runtime)
+    # Linux AMD hosts:
+    # devices:
+    #   - /dev/kfd:/dev/kfd # AMD KFD (ROCm GPU driver)
+    #   - /dev/dri:/dev/dri # DRM render nodes
+    # Windows 11 / WSL2 AMD hosts:
+    # devices:
+    #   - /dev/dxg:/dev/dxg # WSL GPU bridge (detection only in this Linux container; UVR falls back to CPU)
+    # If using WSL2 AMD detection, also apply `docker-compose.wsl.yml` to mount `/usr/lib/wsl:/usr/lib/wsl:ro` (WSL driver libraries, read-only).
     
     environment:
       # --- [SSD WRITE PROTECTION] ---
@@ -81,7 +91,7 @@ services:
 2. Launch: `docker compose up -d`
 
 > [!TIP]
-> **Autonomous Hardware Resolution**: The engine automatically detects and adapts to your specific hardware (NVIDIA, Intel NPU, or Integrated GPU), optimizing the processing pipeline without requiring manual intervention.
+> **Autonomous Hardware Resolution**: The engine automatically detects and adapts to your specific hardware (NVIDIA CUDA, native Linux AMD ROCm, Intel NPU, or Integrated GPU), optimizing the processing pipeline without requiring manual intervention. On WSL2 `/dev/dxg`, AMD detection still works, but UVR falls back to CPU in this Linux container.
 
 ## Frontend Quality Gates
 
@@ -137,7 +147,7 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 
 ### Precision Architecture
 
-- **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA**, **Intel OpenVINO**, and **Generic CPU** runtimes.
+- **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA**, **native Linux AMD ROCm**, **Intel OpenVINO**, and **Generic CPU** runtimes. WSL2 `/dev/dxg` enables AMD adapter detection for this image, but UVR still runs on CPU there.
 - **Re-entrant Hardware Orchestration**: Utilizes a sophisticated thread-local locking system (`model_lock_ctx` in `scheduler.py`) that allows complex pipelines (UVR → ASR → Diarization) to share a single hardware claim without deadlocking.
 - **FFmpeg 8.1.0 Integration**: Features optimized hardware-accelerated decoding. All media (MKV, AVI, MP4, etc.) is automatically standardized to **16kHz Mono WAV** using the `utils.py` core before entering the AI pipeline for maximum accuracy.
 
@@ -176,7 +186,7 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 - **Interactive Documentation**: Full OpenAPI/Swagger interface available at `/docs` for testing and endpoint exploration.
 - **Live SRT Streaming**: Features a real-time, auto-scrolling SubRip (SRT) display during processing, providing immediate visual feedback identical to the final output.
 - **Persistent History Dashboard**: Maintains a durable log of all ASR and Language Detection tasks, including the hardware unit used for each completed task. Completed transcriptions are stored indefinitely and can be downloaded as `.srt` files directly from the dashboard.
-- **Industrial Telemetry**: Real-time progress monitoring, including completion percentages (%), segment counts (`Seg 11 | 01:20 / 05:00`), active processing stages (e.g., UVR Preprocessing, Transcribing), and detailed hardware state reporting. NVIDIA usage is sourced from `nvidia-smi`, while Intel GPU and NPU utilization prefer native device counters before falling back to Windows performance counters or task/activity inference when needed.
+- **Industrial Telemetry**: Real-time progress monitoring, including completion percentages (%), segment counts (`Seg 11 | 01:20 / 05:00`), active processing stages (e.g., UVR Preprocessing, Transcribing), and detailed hardware state reporting. NVIDIA usage is sourced from `nvidia-smi`; AMD GPU utilization is tracked by task and preprocessor activity inference (reporting `100%` when busy, `0%` when idle); Intel GPU and NPU utilization prefer native device counters before falling back to Windows performance counters or task/activity inference when needed.
 - **Granular Performance Auditing**: Every task provides a detailed breakdown of its execution phases, including exact time spent in **Queue**, **Vocal Isolation**, and **AI Inference**.
 - **Material Design Dashboard**: A comprehensive monitoring interface at `/dashboard` (or the root `/` when accessed via browser) featuring live task progress bars, system resource visualization, real-time auto-scrolling logs, and a **Live Refresh** toggle with fixed polling intervals (1s, 2s, 5s, 10s).
 - **Bazarr Optimized**: Purpose-built for high-volume subtitle automation with stable SRT, VTT, and verbose JSON output formats.
@@ -185,17 +195,17 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 
 ### 🧩 Hardware Compatibility Matrix
 
-| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
-| :--- | :---: | :---: | :---: | :---: |
-| **Media Standardization** | ✅ | ✅ | ✅ | ✅ |
-| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
-| **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
-| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
-| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
+| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | AMD (native Linux ROCm) | Intel iGPU / Arc | Intel NPU |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Media Standardization** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (native Linux ROCm via `/dev/kfd`); WSL2 `/dev/dxg` detects AMD but falls back to CPU | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### System Architecture
 
-The service utilizes a **Heterogeneous Model Pool** to orchestrate tasks across NVIDIA GPUs, Intel NPUs, and CPUs simultaneously, with integrated WhisperX diarization and configurable model lifecycle management. For a deep dive into the processing pipelines, resource locking, and hardware acceleration logic, see the [Technical Architecture](docs/ARCHITECTURE.md) documentation.
+The service utilizes a **Heterogeneous Model Pool** to orchestrate tasks across NVIDIA GPUs, AMD GPUs, Intel NPUs, and CPUs simultaneously, with integrated WhisperX diarization and configurable model lifecycle management. For a deep dive into the processing pipelines, resource locking, and hardware acceleration logic, see the [Technical Architecture](docs/ARCHITECTURE.md) documentation.
 
 > [!TIP]
 > View the [Concurrency & Resource Orchestration](docs/CONCURRENCY.md) guide for details on parallel preprocessing and pre-emption.
@@ -252,9 +262,15 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | `MAX_CUDA_UNITS` | `1` | Max NVIDIA GPUs to utilize (supports `ALL`, `AUTO`). |
 | `MAX_GPU_UNITS` | `1` | Max Intel GPUs to utilize (supports `ALL`, `AUTO`). |
 | `MAX_NPU_UNITS` | `1` | Max Intel NPUs to utilize (supports `ALL`, `AUTO`). |
-| `MAX_CPU_UNITS` | `1` | Max concurrent multi-core CPU tasks (VAD, FFmpeg, CPU-ASR). |
+| `MAX_CPU_UNITS` | `1` | Max concurrent CPU scheduler units (supports `ALL`, `AUTO`). Caps CPU fallbacks including AMD ASR/WSL UVR. |
 | `FFMPEG_HWACCEL` | `none` | FFmpeg hardware acceleration target (`cuda`, `vaapi`, `qsv`). |
 | `FFMPEG_FILTER` | `dynaudnorm` | Normalization filter: `dynaudnorm` (Standard) or `loudnorm` (Broadcast). |
+| **Security & Access Control** | | |
+| `API_KEY` / `WHISPER_API_KEY` | *(empty)* | Optional API key to authenticate transcription, language-ID, and telemetry API routes. |
+| `ADMIN_API_KEY` | *(empty)* | Admin API key for `/settings`, log downloads, and telemetry purge. Falls back to `API_KEY`. |
+| `CORS_ORIGINS` | *(empty)* | Comma-separated list of allowed CORS origins (e.g. `http://localhost:3000`). |
+| `CORS_ALLOW_ALL` | `false` | Enables wildcard CORS (`*`). Defaults to `false` for cross-origin security. |
+| `ALLOWED_MODELS` | *(empty)* | Comma-separated list of additional allowed Hugging Face models for dynamic runtime loading. |
 
 ### ⚙️ ASR Backend Engines (ASR_ENGINE)
 
@@ -435,82 +451,4 @@ To use this service with **Bazarr**:
 
 ## 🛠 Project Structure
 
-```text
-/
-├── whisper_pro_asr.py        # Master entry point
-├── modules/                 # Service Logic
-│   ├── bootstrap.py         # Hardware path patching & library redirection
-│   ├── api/                 # API Layer
-│   │   ├── routes/          # Endpoint modules
-│   │   │   ├── asr.py       # /asr, /v1/audio/transcriptions, /v1/audio/translations
-│   │   │   ├── detect.py    # /detect-language
-│   │   │   └── system.py    # /dashboard, /status, /settings, /analytics, /history
-│   │   └── support/         # Shared route helpers
-│   │       ├── request_utils.py
-│   │       ├── upload_extraction.py
-│   │       └── local_path.py
-│   ├── inference/           # ML Engine
-│   │   ├── runtime/         # Orchestration and lifecycle
-│   │   │   ├── model_manager.py
-│   │   │   ├── model_segment_processing.py
-│   │   │   └── concurrency.py
-│   │   ├── scheduler/       # Scheduling state and policies
-│   │   │   ├── __init__.py
-│   │   │   ├── state_helpers.py
-│   │   │   ├── task_helpers.py
-│   │   │   └── ordering.py
-│   │   ├── pipeline/        # Audio and transcript pipeline stages
-│   │   │   ├── preprocessing.py
-│   │   │   ├── vad.py
-│   │   │   ├── language_detection.py
-│   │   │   ├── language_detection_core.py
-│   │   │   ├── diarization.py
-│   │   │   └── post_processing.py
-│   │   └── engines/         # Backend-specific ASR engines
-│   │       ├── base.py
-│   │       ├── engine_factory.py
-│   │       ├── faster_whisper_engine.py
-│   │       ├── openai_whisper_engine.py
-│   │       ├── intel_engine.py
-│   │       └── whisperx_engine.py
-│   ├── monitoring/          # Dashboard, Telemetry & Metrics
-│   │   ├── dashboard.py     # Dashboard entry point
-│   │   ├── dashboard_ui.py  # Material Design dashboard renderer (loads from templates)
-│   │   ├── analytics_ui.py  # Dynamic loader for analytics UI (loads from templates)
-│   │   ├── templates/       # HTML, CSS, and JS dashboard/analytics templates
-│   │   │   ├── dashboard.html
-│   │   │   ├── dashboard.css
-│   │   │   ├── dashboard_js_files.txt
-│   │   │   ├── dashboard/
-│   │   │   │   ├── core/
-│   │   │   │   │   ├── state.js
-│   │   │   │   │   └── utils.js
-│   │   │   │   ├── main.js
-│   │   │   │   └── features/
-│   │   │   │       ├── charts.js
-│   │   │   │       ├── audit.js
-│   │   │   │       ├── task_filter_history.js
-│   │   │   │       ├── speed_status.js
-│   │   │   │       ├── runtime.js
-│   │   │   │       └── active_tasks.js
-│   │   │   ├── analytics.html
-│   │   │   ├── analytics.css
-│   │   │   ├── analytics_js_files.txt
-│   │   │   └── analytics/
-│   │   │       └── main.js
-│   │   ├── telemetry.py     # Real-time telemetry collection
-│   │   ├── telemetry_manager.py  # Persistent telemetry history
-│   │   ├── history_manager.py    # Task history (dual-tier storage)
-│   │   └── metrics_discovery.py  # Hardware metrics detection
-│   ├── config.py            # Global Settings (DIARIZATION_HF_TOKEN, MODEL_IDLE_TIMEOUT, etc.)
-│   ├── logging_setup.py     # Task-specific Logging
-│   └── utils.py             # System & Audio Utilities (subtitle wrapping, speaker labels)
-├── tests/                   # Performance & Unit Test Suites
-│   ├── inference/           # Diarization, Language Detection, Concurrency tests
-│   ├── integration/         # Route, Server, and Robustness tests
-│   ├── monitoring/          # Dashboard, History, Telemetry tests
-│   ├── performance/         # Coverage, RAM, SSD optimization tests
-│   └── unit/                # Config, Logging, Utils tests
-├── Dockerfile               # Packaging Definition
-└── docker-compose.yml       # Orchestration Template
-```
+See the full annotated source tree in [Technical Architecture](docs/ARCHITECTURE.md#-project-structure).

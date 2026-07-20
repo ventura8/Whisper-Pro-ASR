@@ -34,9 +34,64 @@ describe("utils.js", () => {
     expect(context.getHwIconAndLabel("CUDA:0").label).toContain("NVIDIA GPU");
     expect(context.getHwIconAndLabel("NPU.0").label).toContain("Intel NPU");
     expect(context.getHwIconAndLabel("GPU.0").label).toContain("Intel GPU");
+    expect(context.getHwIconAndLabel("AMD:0").label).toContain("AMD GPU");
     expect(context.getHwIconAndLabel("CPU").label).toContain("Host CPU");
     expect(context.getHwIconAndLabel("ASIC-1").label).toBe("ASIC-1");
     expect(context.getHwIconAndLabel(null).label).toBe("Queued");
+  });
+
+  it("keeps API keys in session state and prefers admin headers for admin requests", () => {
+    const store = {};
+    context.localStorage = {
+      getItem: (key) => store[key] || null,
+      setItem: (key, value) => {
+        store[key] = value;
+      },
+      removeItem: (key) => {
+        delete store[key];
+      },
+    };
+    context.document = {
+      getElementById: (id) => {
+        if (id === "api-key-input") {
+          return { value: "api-secret" };
+        }
+        if (id === "admin-api-key-input") {
+          return { value: "admin-secret" };
+        }
+        return null;
+      },
+    };
+
+    context.persistDashboardApiKeys();
+    expect(store.whisper_api_key).toBeUndefined();
+    expect(store.whisper_admin_api_key).toBeUndefined();
+    expect(context.getAuthHeaders()["X-API-Key"]).toBe("api-secret");
+    expect(context.getAuthHeaders(null, true)["X-API-Key"]).toBe("admin-secret");
+    expect(context.getAuthHeaders("application/json")["Content-Type"]).toBe("application/json");
+
+    const loaded = { "api-key-input": { value: "" }, "admin-api-key-input": { value: "" } };
+    context.document = {
+      getElementById: (id) => loaded[id] || null,
+    };
+    context.loadDashboardApiKeys();
+    expect(loaded["api-key-input"].value).toBe("api-secret");
+    expect(loaded["admin-api-key-input"].value).toBe("admin-secret");
+
+    context.document = {
+      getElementById: (id) => (id === "api-key-input" ? { value: "" } : { value: "" }),
+    };
+    context.persistDashboardApiKeys();
+    expect(store.whisper_api_key).toBeUndefined();
+    expect(store.whisper_admin_api_key).toBeUndefined();
+    expect(context.getAuthHeaders()["X-API-Key"]).toBeUndefined();
+    expect(context.getAuthHeaders(null, true)["X-API-Key"]).toBeUndefined();
+    expect(context.getAuthHeaders()["X-Requested-With"]).toBe("XMLHttpRequest");
+    context.persistDashboardApiKeys();
+
+    context.document = { getElementById: () => null };
+    context.persistDashboardApiKeys();
+    context.loadDashboardApiKeys();
   });
 
   it("escapes html and formats durations", () => {

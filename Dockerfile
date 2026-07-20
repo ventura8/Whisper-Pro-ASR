@@ -19,7 +19,9 @@ ARG FFMPEG_URL=https://ffmpeg.org/releases/${FFMPEG_TARBALL}
 ARG FFMPEG_SIG_URL=${FFMPEG_URL}.asc
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV INTEL_OPENVINO_DIR=/opt/intel/openvino
-ENV LD_LIBRARY_PATH=/opt/intel/openvino/runtime/lib/intel64:/opt/intel/openvino/runtime/3rdparty/tbb/lib:/opt/intel/openvino/runtime/3rdparty/omp/lib:${LD_LIBRARY_PATH}
+ENV PATH=/opt/rocm/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/lib/wsl/lib:/opt/rocm/lib:/opt/intel/openvino/runtime/lib/intel64:/opt/intel/openvino/runtime/3rdparty/tbb/lib:/opt/intel/openvino/runtime/3rdparty/omp/lib:${LD_LIBRARY_PATH}
+ENV HSA_ENABLE_DXG_DETECTION=1
 
 # Install system tools
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -40,6 +42,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   software-properties-common=* \
   intel-opencl-icd=* \
   intel-level-zero-gpu=* \
+  libhipblas0=* \
+  librocblas0=* \
   && wget --progress=dot:giga -O /tmp/ffmpeg.tar.xz "${FFMPEG_URL}" \
   && wget --progress=dot:giga -O /tmp/ffmpeg.tar.xz.asc "${FFMPEG_SIG_URL}" \
   && wget --progress=dot:giga -O /tmp/ffmpeg-devel.asc https://ffmpeg.org/ffmpeg-devel.asc \
@@ -73,6 +77,57 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   cuda-nvcc-13-2=* && \
   rm -f cuda-keyring_1.1-1_all.deb
 
+# Install AMD ROCm 6.2 libraries explicitly (Ubuntu 24.04)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt,sharing=locked \
+  wget -q -O /tmp/rocm.gpg.key https://repo.radeon.com/rocm/rocm.gpg.key && \
+  echo "2de99e2354646a90d9903e2a669fc4e36b02c1bbff7075c481e12d7edab2c88b  /tmp/rocm.gpg.key" | sha256sum -c - && \
+  gpg --dearmor -o /etc/apt/trusted.gpg.d/rocm.gpg /tmp/rocm.gpg.key && \
+  rm -f /tmp/rocm.gpg.key && \
+  echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/6.2 ubuntu main" > /etc/apt/sources.list.d/rocm.list && \
+  apt-get update && \
+  apt-get install -y --no-install-recommends \
+  miopen-hip=* \
+  hip-runtime-amd=* \
+  hipfft=* \
+  rocm-smi=* \
+  rocm-smi-lib=* \
+  migraphx=* \
+  libhipblas0=* \
+  librocblas0=* && \
+  if [ -f /usr/lib/x86_64-linux-gnu/libhipblas.so.0 ]; then \
+    ln -sf /usr/lib/x86_64-linux-gnu/libhipblas.so.0 /usr/lib/x86_64-linux-gnu/libhipblas.so.3; \
+  fi && \
+  if [ -f /usr/lib/x86_64-linux-gnu/librocblas.so.0 ]; then \
+    ln -sf /usr/lib/x86_64-linux-gnu/librocblas.so.0 /usr/lib/x86_64-linux-gnu/librocblas.so.3; \
+  fi && \
+  if [ -f /opt/rocm/lib/libamdhip64.so.6 ]; then \
+    ln -sf /opt/rocm/lib/libamdhip64.so.6 /opt/rocm/lib/libamdhip64.so.7; \
+  fi && \
+  if [ -f /opt/rocm/lib/librocm_smi64.so.7 ]; then \
+    ln -sf /opt/rocm/lib/librocm_smi64.so.7 /opt/rocm/lib/librocm_smi64.so.1; \
+  fi && \
+  if [ -d /usr/lib/x86_64-linux-gnu/rocblas ]; then \
+    for rocblas_dir in /usr/lib/x86_64-linux-gnu/rocblas/*; do \
+      if [ -d "$rocblas_dir" ]; then \
+        ln -sfn "$rocblas_dir" /usr/lib/x86_64-linux-gnu/rocblas/current; \
+        break; \
+      fi; \
+    done; \
+  fi && \
+  ldconfig
+
+# Install librocdxg for AMD WSL detection (`/opt/rocm/lib/librocdxg.so`).
+# This does not enable onnxruntime-rocm GPU compute in WSL2 Linux containers:
+# ROCm still requires /dev/kfd, and DirectML is unavailable inside Linux.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  wget -q -O /tmp/rocdxg-roct.deb \
+    "https://github.com/ROCm/librocdxg/releases/download/v1.2.1/rocdxg-roct_1.2.1_amd64.deb" && \
+  echo "7889eef45a1132ed2dde88d8ea1356bf791ec9c05802a18940bc81b970e850e0  /tmp/rocdxg-roct.deb" | sha256sum -c - && \
+  dpkg -i /tmp/rocdxg-roct.deb && \
+  rm -f /tmp/rocdxg-roct.deb && \
+  ldconfig
+
 
 # Copy pip configuration
 WORKDIR /app
@@ -98,7 +153,12 @@ RUN --mount=type=cache,target=/root/.cache \
   python3 -m pip install --no-cache-dir "onnxruntime-gpu~=1.25.0" --target /app/libs/nvidia --no-dependencies && \
   # Segregated Install: Intel OpenVINO Support\
   mkdir -p /app/libs/intel && \
-  python3 -m pip install --no-cache-dir "onnxruntime-openvino~=1.24.0" --target /app/libs/intel --no-dependencies
+  python3 -m pip install --no-cache-dir "onnxruntime-openvino~=1.24.0" --target /app/libs/intel --no-dependencies && \
+  # Segregated Install: AMD ROCm Support\
+  mkdir -p /app/libs/amd && \
+  python3 -m pip install --no-cache-dir "onnxruntime-rocm==1.22.2.post3" --target /app/libs/amd --no-dependencies
+
+ENV ROCBLAS_TENSILE_LIBPATH=/usr/lib/x86_64-linux-gnu/rocblas/current/library
 
 # Fix CTranslate2 executable stack issues
 RUN find /usr/local/lib/python3.*/ -name "*.so*" -exec patchelf --clear-execstack {} \;

@@ -187,7 +187,7 @@ class TestRunTranscription:
             with mock.patch("os.path.exists", return_value=True):
                 with mock.patch("os.remove") as mock_remove:
                     model_manager.run_transcription("original.wav", language="en", task="transcribe", batch_size=1)
-                    pm.preprocess_audio.assert_called_with("original.wav", force=False, yield_cb=model_manager._check_preemption)
+                    pm.preprocess_audio.assert_called_with("original.wav", force=False, yield_cb=model_manager.check_preemption)
                     mock_remove.assert_called_with("isolated.wav")
 
     def test_run_transcription_checks_preemption_on_stage_transitions(self):
@@ -206,7 +206,7 @@ class TestRunTranscription:
             mock.patch("modules.core.config.ENABLE_VOCAL_SEPARATION", True),
             mock.patch("os.path.exists", return_value=True),
             mock.patch("os.remove"),
-            mock.patch("modules.inference.runtime.model_manager._check_preemption") as mock_preempt,
+            mock.patch("modules.inference.runtime.model_manager.check_preemption") as mock_preempt,
         ):
             model_manager.run_transcription("original.wav", language="en", task="transcribe", batch_size=1)
 
@@ -373,14 +373,14 @@ class TestPreemptionAndPriority:
         assert utils.THREAD_CONTEXT.is_priority is True
 
     def test_run_vocal_isolation_direct_passes_preemption_callback(self):
-        """Test that run_vocal_isolation_direct passes _check_preemption callback to preprocess_audio."""
+        """Test that run_vocal_isolation_direct passes check_preemption callback to preprocess_audio."""
         pm = mock.MagicMock()
         model_manager.PREPROCESSOR_POOL["CPU"] = pm
 
         model_manager.run_vocal_isolation_direct("test.wav", "CPU")
 
-        # Verify preprocess_audio was called with yield_cb=_check_preemption
-        pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager._check_preemption)
+        # Verify preprocess_audio was called with yield_cb=check_preemption
+        pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager.check_preemption)
 
     def test_run_vocal_isolation_uses_preferred_preprocess_device(self):
         """When preprocess device is NPU, UVR should use NPU preprocessor even for CPU ASR units."""
@@ -395,7 +395,7 @@ class TestPreemptionAndPriority:
         with mock.patch("modules.core.config.PREPROCESS_DEVICE", "NPU"):
             model_manager.run_vocal_isolation_direct("test.wav", "CPU")
 
-        npu_pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager._check_preemption)
+        npu_pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager.check_preemption)
         cpu_pm.preprocess_audio.assert_not_called()
 
     def test_run_vocal_isolation_uses_assigned_accelerator_preprocessor_per_unit(self):
@@ -412,11 +412,11 @@ class TestPreemptionAndPriority:
             model_manager.run_vocal_isolation_direct("gpu-task.wav", "GPU")
             model_manager.run_vocal_isolation_direct("npu-task.wav", "NPU")
 
-        gpu_pm.preprocess_audio.assert_called_once_with("gpu-task.wav", force=False, yield_cb=model_manager._check_preemption)
-        npu_pm.preprocess_audio.assert_called_once_with("npu-task.wav", force=False, yield_cb=model_manager._check_preemption)
+        gpu_pm.preprocess_audio.assert_called_once_with("gpu-task.wav", force=False, yield_cb=model_manager.check_preemption)
+        npu_pm.preprocess_audio.assert_called_once_with("npu-task.wav", force=False, yield_cb=model_manager.check_preemption)
 
     def test_check_preemption_waits_if_paused(self):
-        """Test that _check_preemption waits for resume."""
+        """Test that check_preemption waits for resume."""
         u_sync = scheduler.STATE.unit_sync["CPU"]
         u_sync["pause_requested"].set()
         u_sync["resume_event"].clear()
@@ -440,7 +440,7 @@ class TestPreemptionAndPriority:
         threading.Thread(target=resume_soon).start()
 
         # This should block and then return
-        model_manager._check_preemption()
+        model_manager.check_preemption()
         assert u_sync["resume_event"].is_set()
 
 

@@ -1,6 +1,28 @@
 ---
 services:
+  init-permissions:
+    image: busybox:1.37
+    user: "0:0"
+    volumes:
+      - ./data:/app/data
+      - ./model_cache:/app/model_cache
+    environment:
+      U: ${USER_ID:-1000}
+      G: ${GROUP_ID:-1000}
+    # Exec-array form avoids Portainer/Compose UI failures on multiline shell quoting.
+    command:
+      - sh
+      - -c
+      - |
+        case "$$U" in (''|*[!0-9]*) exit 1;; esac
+        case "$$G" in (''|*[!0-9]*) exit 1;; esac
+        find /app/data /app/model_cache \( ! -user "$$U" -o ! -group "$$G" \) -exec chown "$$U:$$G" {} +
+    restart: "no"
+
   whisper-pro-asr:
+    depends_on:
+      init-permissions:
+        condition: service_completed_successfully
     build:
       context: .
       dockerfile: Dockerfile
@@ -11,74 +33,100 @@ services:
         - type=local,dest=.buildx-cache,mode=max
     container_name: whisper-pro-asr
     restart: unless-stopped
-    # Optional: run container as host user/group.
-    # Ensure bind mounts (./data, ./model_cache) are writable by USER_ID:GROUP_ID before startup.
     user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
     ports:
       - "9000:9000"
 
-    # --- [HARDWARE ACCELERATION] ---
-    # The application performs automated detection of both Intel and NVIDIA hardware.
-    # To enable hardware passthrough, uncomment the appropriate sections below.
+    # --- [HARDWARE ACCELERATION (OPTIONAL)] ---
+    # The application automatically detects and orchestrates available hardware (NVIDIA CUDA,
+    # Intel iGPU/Arc/NPU, AMD Radeon ROCm/DirectML, or CPU fallback).
+    #
+    # Default out-of-the-box configuration runs on CPU / default environment.
+    # Uncomment the section corresponding to your host hardware below:
 
-    deploy:
-      resources:
-        limits:
-          cpus: '4.0'
-
-    # 1. Intel NPU / iGPU / Arc
-    # Linux Intel hosts:
-    # group_add:
-    #   - "991"  # Intel render/accel group on Linux hosts
-    # devices:
-    #   - /dev/dri:/dev/dri  # Map all Intel GPU render nodes (multi-GPU safe)
-    #   - /dev/accel:/dev/accel  # Map all Intel NPU accel nodes (multi-NPU safe)
-    # Windows 11 / WSL2 Intel hosts:
-    # devices:
-    #   - /dev/dxg:/dev/dxg  # WSL GPU bridge required for Intel/NVIDIA GPU visibility
-    #   - /dev/dri:/dev/dri  # Optional when WSL exposes DRM render nodes
-    #   - /dev/accel:/dev/accel  # Optional when WSL exposes Intel NPU accel nodes
-
-    # 2. NVIDIA Silicon (CUDA)
-    # Note: Requires NVIDIA Container Toolkit on the HOST for driver passthrough.
+    # =========================================================================
+    # OPTION 1: NVIDIA Silicon (CUDA)
+    # Prerequisites: Install 'nvidia-container-toolkit' on the host system.
+    # =========================================================================
     # deploy:
     #   resources:
     #     reservations:
     #       devices:
     #         - driver: nvidia
-    #           count: 1
+    #           count: 1          # Set to 'all' or specific count
     #           capabilities: [gpu]
 
+    # =========================================================================
+    # OPTION 2: Intel Silicon (NPU / iGPU / Arc GPU)
+    # =========================================================================
+    # Linux Intel Hosts (Bare-metal):
+    # group_add:
+    #   - "991"                 # Host render/accel group (derive via: stat -c '%g' /dev/dri/renderD* /dev/accel/*)
+    # devices:
+    #   - /dev/dri:/dev/dri     # Maps all Intel GPU render nodes (multi-GPU safe)
+    #   - /dev/accel:/dev/accel # Maps all Intel NPU compute nodes (multi-NPU safe)
+    #
+    # Windows 11 / WSL2 Intel Hosts:
+    # devices:
+    #   - /dev/dxg:/dev/dxg     # WSL DirectX GPU bridge for Intel/NVIDIA compute
+    #   - /dev/dri:/dev/dri     # Optional: exposed DRM render nodes in WSL2
+    #   - /dev/accel:/dev/accel # Optional: exposed NPU accel nodes in WSL2
+
+    # =========================================================================
+    # OPTION 3: AMD Radeon Silicon (ROCm / DirectML)
+    # =========================================================================
+    # Linux AMD Hosts (Bare-metal ROCm):
+    # group_add:
+    #   - "${HOST_AMD_RENDER_GID:-990}"  # Host render group (derive via: stat -c '%g' /dev/dri/renderD*)
+    #   - "${HOST_AMD_VIDEO_GID:-44}"    # Host video group (derive via: stat -c '%g' /dev/kfd)
+    # devices:
+    #   - /dev/kfd:/dev/kfd     # AMD ROCm Kernel Fusion Driver node (Bare-metal Linux only)
+    #   - /dev/dri:/dev/dri     # AMD Direct Rendering Manager nodes
+    # security_opt:
+    #   - seccomp=unconfined   # Native Linux only (WSL2/DirectML does not use this)
+    #
+    # Windows 11 / WSL2 AMD Hosts (DirectML / WSL):
+    # For WSL2 deployments, merge the WSL override file:
+    #   docker compose -f docker-compose.yml -f docker-compose.wsl.yml up -d
+    # Note: On WSL2, /dev/dxg provides hardware detection; full GPU inference
+    # requires bare-metal Linux ROCm (/dev/kfd).
+
     environment:
-      # Optional: host timezone and identity mapping overrides (set in .env or shell environment).
       - TZ=${TZ:-UTC}
       - USER_ID=${USER_ID:-1000}
       - GROUP_ID=${GROUP_ID:-1000}
       - DEBUG=false
-      # NVIDIA runtime hints (safe on non-NVIDIA hosts; used when NVIDIA toolkit is present).
+
+      # --- [NVIDIA RUNTIME HINTS] ---
+      # Safe on non-NVIDIA hosts; utilized when NVIDIA Container Toolkit is active.
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
       - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
-      # Intel/OpenVINO runtime hints. Leave blank unless the host runtime needs explicit overrides.
+
+      # --- [INTEL / OPENVINO RUNTIME HINTS] ---
+      # Optional overrides. Leave blank for automated detection.
       - LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME:-}
       - ONEAPI_DEVICE_SELECTOR=${ONEAPI_DEVICE_SELECTOR:-}
       - ZE_AFFINITY_MASK=${ZE_AFFINITY_MASK:-}
       - OCL_ICD_VENDORS=${OCL_ICD_VENDORS:-}
-      # Speaker diarization token (Hugging Face).
+
+      # --- [AMD ROCM / WSL2 RUNTIME HINTS] ---
+      - HSA_ENABLE_DXG_DETECTION=1
+      # Optional: For AMD RDNA/ROCm APU systems, set override if required:
+      # - HSA_OVERRIDE_GFX_VERSION=10.3.0
+
+      # Speaker diarization token (Hugging Face). Required for PyAnnote speaker segmentation.
       - DIARIZATION_HF_TOKEN=${DIARIZATION_HF_TOKEN:-}
 
       # --- [ENGINE CONFIGURATION] ---
-      # Hardware Target: AUTO (Automated detection), CUDA (NVIDIA), CPU
+      # Hardware Target: AUTO (Resolves CUDA -> AMD -> Intel GPU -> Intel NPU -> CPU),
+      # or explicit: CPU, CUDA, GPU, NPU, AMD
       - ASR_DEVICE=AUTO
       # Computation Precision: AUTO, int8, float16 (default: AUTO)
       - ASR_COMPUTE_TYPE=AUTO
       # Model Weight Source (Faster-Whisper ID or local path)
       - ASR_MODEL=Systran/faster-whisper-large-v3
-      # ASR engine backend. Supported: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
-      # AUTO resolves by available hardware in this order:
-      # CUDA -> Intel GPU -> Intel NPU -> CPU
-      # INTEL-WHISPER requires Intel GPU/NPU; otherwise runtime falls back to FASTER-WHISPER.
-      # Invalid values fail startup with a clear error.
-      - ASR_ENGINE=FASTER-WHISPER
+      # ASR engine backend: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
+      - ASR_ENGINE=AUTO
       # Intel Whisper long-media stability tuning (only used by INTEL-WHISPER)
       - INTEL_ASR_CHUNK_DURATION=300
 
@@ -95,9 +143,7 @@ services:
       - ASR_BATCH_SIZE=1
 
       # --- [PREPROCESSING (UVR / MDX-NET)] ---
-      # NOTE: ASR_PREPROCESS_DEVICE controls UVR preprocessing only.
-      # It is independent from ASR_ENGINE selection for Whisper inference.
-      # Target Device: AUTO, CPU, CUDA (NVIDIA), GPU (Intel), NPU (Intel)
+      # Target Device: AUTO (recommended), CPU, CUDA (NVIDIA), AMD (ROCm), GPU (Intel), NPU (Intel)
       - ASR_PREPROCESS_DEVICE=AUTO
       # Isolation Model Filename
       - VOCAL_SEPARATION_MODEL=UVR-MDX-NET-Inst_HQ_3.onnx
@@ -105,7 +151,6 @@ services:
       - ENABLE_VOCAL_SEPARATION=true
       - ENABLE_LD_PREPROCESSING=true
       # Coalesce identical concurrent /detect-language requests (same local_path).
-      # Keep enabled for production stability; set false to disable coalescing for test scenarios.
       - ENABLE_LD_REQUEST_COALESCING=true
       - SMART_SAMPLING_SEARCH=false
 
@@ -125,10 +170,11 @@ services:
       # --- [ACCELERATOR ORCHESTRATION] ---
       # Control how many physical hardware units are utilized. 
       # Default: 1 (Safest for multi-service environments). Set to 'ALL' to use everything.
-      - MAX_CUDA_UNITS=1
-      - MAX_GPU_UNITS=1
-      - MAX_NPU_UNITS=1
-      - MAX_CPU_UNITS=1
+      # - MAX_CUDA_UNITS=1
+      # - MAX_GPU_UNITS=1
+      # - MAX_NPU_UNITS=1
+      # - MAX_AMD_UNITS=1
+      # - MAX_CPU_UNITS=1
 
       # --- [MEDIA PROCESSING] ---
       # Hardware Acceleration: none (CPU), cuda (NVIDIA), vaapi, qsv (Intel)
@@ -150,9 +196,9 @@ services:
       # — no ENOSPC crash will occur.
       # - WHISPER_TEMP_MIN_FREE_MB=2048
 
-    # RAM-backed temp storage for transient processing files (SSD protection).
-    # 2G is sufficient for most movies (≤4h).  Longer files automatically
-    # fall back to SSD-backed persistent storage when tmpfs runs low.
+      # RAM-backed temp storage for transient processing files (SSD protection).
+      # 2G is sufficient for most movies (≤4h).  Longer files automatically
+      # fall back to SSD-backed persistent storage when tmpfs runs low.
     tmpfs:
       - /tmp/whisper:size=2G
       - /tmp/numba-cache:size=128M

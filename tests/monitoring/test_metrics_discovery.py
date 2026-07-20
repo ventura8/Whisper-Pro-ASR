@@ -40,7 +40,7 @@ def test_get_nvidia_metrics_failure():
 def test_get_intel_gpu_load_windows_success():
     """Test Intel GPU load on Windows via PowerShell mock."""
     with mock.patch("platform.system", return_value="Windows"):
-        with mock.patch("modules.monitoring.metrics_discovery._resolve_windows_powershell", return_value="powershell"):
+        with mock.patch("modules.monitoring.windows_accelerator_counters._resolve_windows_powershell", return_value="powershell"):
             with mock.patch("modules.core.process_exec.check_output_text", return_value="45.5\n"):
                 with mock.patch("glob.glob", return_value=[]):
                     with mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value={"active_tasks": []}):
@@ -61,7 +61,7 @@ def test_get_intel_gpu_load_windows_success_with_active_gpu_task():
         ]
     }
     with mock.patch("platform.system", return_value="Windows"):
-        with mock.patch("modules.monitoring.metrics_discovery._resolve_windows_powershell", return_value="powershell"):
+        with mock.patch("modules.monitoring.windows_accelerator_counters._resolve_windows_powershell", return_value="powershell"):
             with mock.patch("modules.core.process_exec.check_output_text", return_value="45.5\n"):
                 with mock.patch("glob.glob", return_value=[]):
                     with mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value=mock_stats):
@@ -153,7 +153,7 @@ def test_fetch_npu_load_windows_success():
     """Test successful NPU load reading on Windows via PowerShell."""
     with mock.patch("platform.system", return_value="Windows"):
         with mock.patch("glob.glob", return_value=[]):
-            with mock.patch("modules.monitoring.metrics_discovery._resolve_windows_powershell", return_value="powershell"):
+            with mock.patch("modules.monitoring.windows_accelerator_counters._resolve_windows_powershell", return_value="powershell"):
                 with mock.patch("modules.core.process_exec.check_output_text", return_value="12.5\n"):
                     with mock.patch(
                         "modules.inference.scheduler.get_service_stats_minimal",
@@ -167,7 +167,7 @@ def test_fetch_single_intel_gpu_load_windows_nonzero_index():
     """Test Windows Intel GPU probing for a nonzero unit index."""
     with mock.patch("platform.system", return_value="Windows"):
         with mock.patch("glob.glob", return_value=[]):
-            with mock.patch("modules.monitoring.metrics_discovery._resolve_windows_powershell", return_value="powershell"):
+            with mock.patch("modules.monitoring.windows_accelerator_counters._resolve_windows_powershell", return_value="powershell"):
                 with mock.patch("modules.core.process_exec.check_output_text", return_value="34.9\n"):
                     with mock.patch(
                         "modules.inference.scheduler.get_service_stats_minimal",
@@ -181,7 +181,7 @@ def test_fetch_single_npu_load_windows_nonzero_index():
     """Test Windows NPU probing for a nonzero unit index."""
     with mock.patch("platform.system", return_value="Windows"):
         with mock.patch("glob.glob", return_value=[]):
-            with mock.patch("modules.monitoring.metrics_discovery._resolve_windows_powershell", return_value="powershell"):
+            with mock.patch("modules.monitoring.windows_accelerator_counters._resolve_windows_powershell", return_value="powershell"):
                 with mock.patch("modules.core.process_exec.check_output_text", return_value="18.2\n"):
                     with mock.patch(
                         "modules.inference.scheduler.get_service_stats_minimal",
@@ -397,6 +397,14 @@ def test_is_task_using_accelerator_cuda_stages():
     task_ld = {"stage": "Inference (Language Detection)"}
     assert _is_task_using_accelerator(task_asr, "CUDA") is True
     assert _is_task_using_accelerator(task_ld, "CUDA") is True
+
+
+def test_supports_asr_stage_on_unit_amd():
+    """AMD ASR runs on CPU, so transcription stages are not accelerator work."""
+    from modules.monitoring.metrics_discovery import _supports_asr_stage_on_unit
+
+    assert _supports_asr_stage_on_unit("AMD") is False
+    assert _supports_asr_stage_on_unit("CUDA") is True
 
 
 def test_is_task_using_accelerator_intel_engine():

@@ -5,12 +5,13 @@ Configuration Helper Utilities for Whisper Pro ASR
 import importlib
 import logging
 import os
+import sys
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def get_unit_limit(env_var: str, default: int = 1, min_value: int = 1) -> int:
+def get_unit_limit(env_var: str, default: int = 1, min_value: int = 0) -> int:
     """Helper to parse hardware unit limits (supports int, ALL, AUTO)."""
     val = os.environ.get(env_var, str(default)).upper()
     if val in ["ALL", "AUTO"]:
@@ -21,16 +22,182 @@ def get_unit_limit(env_var: str, default: int = 1, min_value: int = 1) -> int:
         return max(min_value, int(default))
 
 
-def detect_hardware(max_cuda: int, max_gpu: int, max_npu: int, hardware_units: list[dict[str, str]]) -> tuple[str, str, str]:
-    """Detect acceleration hardware and returns (detected_device, detected_prep_device, detected_compute)."""
-    # Runtime scheduler unit registration currently supports CUDA + Intel GPU/NPU + CPU fallback.
-    # AMD telemetry can be reported through monitoring probes,
-    # but AMD execution-unit scheduling is not yet wired here.
-    state = {"device": "CPU", "prep_device": "CPU", "compute": "int8"}
+def _is_explicit_amd_target(target: str) -> bool:
+    dev = target.upper()
+    return dev in ("ROCM", "DML", "DIRECTML") or dev.startswith("AMD")
+
+
+def _detect_explicit_amd_first(
+    max_cuda: int,
+    max_amd: int,
+    hardware_units: list[dict[str, str]],
+    state: dict[str, str],
+    *,
+    is_explicit_dev: bool,
+    is_explicit_prep: bool,
+) -> None:
+    _detect_amd_hardware(max_amd, hardware_units, state)
+    amd_dev = state["device"]
+    amd_prep = state["prep_device"]
     _detect_cuda_hardware(max_cuda, hardware_units, state)
-    _detect_intel_hardware(max_gpu, max_npu, hardware_units, state)
+    if amd_dev == "AMD" and is_explicit_dev:
+        state["device"] = "AMD"
+        state["compute"] = "float16"
+    if amd_prep == "AMD" and is_explicit_prep:
+        state["prep_device"] = "AMD"
+
+
+def detect_hardware(max_cuda: int, max_gpu: int, max_npu: int, max_amd: int, hardware_units: list[dict[str, str]]) -> tuple[str, str, str]:
+    """Detect acceleration hardware and returns (detected_device, detected_prep_device, detected_compute)."""
+    state = {"device": "CPU", "prep_device": "CPU", "compute": "int8"}
+    is_explicit_dev = _is_explicit_amd_target(os.environ.get("ASR_DEVICE", ""))
+    is_explicit_prep = _is_explicit_amd_target(os.environ.get("ASR_PREPROCESS_DEVICE", ""))
+
+    if is_explicit_dev or is_explicit_prep:
+        _detect_explicit_amd_first(
+            max_cuda,
+            max_amd,
+            hardware_units,
+            state,
+            is_explicit_dev=is_explicit_dev,
+            is_explicit_prep=is_explicit_prep,
+        )
+    else:
+        _detect_cuda_hardware(max_cuda, hardware_units, state)
+        _detect_amd_hardware(max_amd, hardware_units, state)
+
+    _detect_intel_hardware(max_gpu, max_npu, hardware_units, state, is_explicit_prep=is_explicit_prep)
     _ensure_cpu_fallback_unit(hardware_units)
     return state["device"], state["prep_device"], state["compute"]
+
+
+def _detect_amd_hardware(max_amd: int, hardware_units: list[dict[str, str]], state: dict[str, str]) -> None:
+    try:
+        if max_amd <= 0 or not _has_amd_hardware():
+            return
+        logger.debug("Auto-detected AMD GPU hardware.")
+        before = len(hardware_units)
+        _append_amd_units(max_amd, hardware_units)
+        if len(hardware_units) > before:
+            _update_amd_state(max_amd, state)
+    except (ImportError, AttributeError, ValueError, TypeError, RuntimeError, OSError) as e:
+        logger.debug("AMD GPU detection skipped: %s", e)
+
+
+def _check_amd_dml(available: list[str]) -> bool:
+    if sys.platform != "win32" or "DmlExecutionProvider" not in available:
+        return False
+    return _is_explicit_amd_target(os.environ.get("ASR_DEVICE", "")) or _is_explicit_amd_target(os.environ.get("ASR_PREPROCESS_DEVICE", ""))
+
+
+def _has_rocm_hardware(available: list[str]) -> bool:
+    return any(p in available for p in ("ROCMExecutionProvider", "MIGraphXExecutionProvider"))
+
+
+def _check_amd_ort_providers() -> bool:
+    try:
+        ort = importlib.import_module("onnxruntime")
+        available = ort.get_available_providers()
+        return _has_rocm_hardware(available) or _check_amd_dml(available)
+    except (ImportError, AttributeError, RuntimeError, OSError):
+        return False
+
+
+def _has_amdxc64(folder_path: str) -> bool:
+    return os.path.isfile(os.path.join(folder_path, "amdxc64.so"))
+
+
+def _has_nested_amdxc64(folder_path: str) -> bool:
+    try:
+        children = os.listdir(folder_path)
+    except OSError:
+        return False
+    return any(_has_amdxc64(os.path.join(folder_path, child)) for child in children)
+
+
+def _has_amd_wsl_driver_folder(folder_path: str) -> bool:
+    """Return True if amdxc64.so is in the folder or one nested Adrenalin subdirectory."""
+    if not os.path.isdir(folder_path):
+        return False
+    return _has_amdxc64(folder_path) or _has_nested_amdxc64(folder_path)
+
+
+def _is_amd_wsl_driver_present() -> bool:
+    """Return True if AMD Radeon WSL display driver (amdxc64.so) is mounted in /usr/lib/wsl/drivers."""
+    drivers_dir = "/usr/lib/wsl/drivers"
+    if not os.path.isdir(drivers_dir):
+        return False
+    try:
+        return any(_has_amd_wsl_driver_folder(os.path.join(drivers_dir, item)) for item in os.listdir(drivers_dir))
+    except OSError:
+        return False
+
+
+def _has_amd_wsl_hardware() -> bool:
+    return os.path.exists("/dev/dxg") and os.path.exists("/opt/rocm/lib/librocdxg.so") and _is_amd_wsl_driver_present()
+
+
+def has_amd_wsl_hardware() -> bool:
+    """Public wrapper for AMD WSL hardware detection."""
+    return _has_amd_wsl_hardware()
+
+
+def _has_amd_win32_hardware() -> bool:
+    return sys.platform == "win32" and _check_amd_ort_providers()
+
+
+def _has_amd_linux_hardware() -> bool:
+    return os.path.exists("/dev/dri") and _is_amd_drm_present()
+
+
+def _has_amd_hardware() -> bool:
+    """Return True if an AMD GPU card is available on Linux (/dev/kfd or DRM) or WSL2 (/dev/dxg) or DirectML on win32."""
+    if os.path.exists("/dev/kfd") or _has_amd_wsl_hardware():
+        return True
+    return _has_amd_win32_hardware() or _has_amd_linux_hardware()
+
+
+def _count_amd_drm_devices() -> int:
+    drm_root = "/sys/class/drm"
+    if not os.path.isdir(drm_root):
+        return 0
+    count = 0
+    for vendor_file in _iter_drm_vendor_files(drm_root):
+        if _read_vendor_id(vendor_file) == "0x1002":
+            count += 1
+    return count
+
+
+def _is_amd_drm_present() -> bool:
+    return _count_amd_drm_devices() > 0
+
+
+def _count_schedulable_amd_units() -> int:
+    """Count AMD GPUs that have a usable execution provider (not WSL dxg-only)."""
+    drm_count = _count_amd_drm_devices()
+    if drm_count > 0:
+        return drm_count
+    if os.path.exists("/dev/kfd") or _has_amd_win32_hardware():
+        return 1
+    return 0
+
+
+def _append_amd_units(max_amd: int, hardware_units: list[dict[str, str]]) -> None:
+    units_to_use = min(_count_schedulable_amd_units(), max_amd)
+    for i in range(units_to_use):
+        hardware_units.append({"type": "AMD", "id": f"amd:{i}", "name": f"AMD GPU {i}"})
+
+
+def _update_amd_state(max_amd: int, state: dict[str, str]) -> None:
+    if max_amd <= 0:
+        return
+    # Only take the ASR device slot if nothing faster claimed it yet
+    if state["device"] == "CPU":
+        state["device"] = "AMD"
+        state["compute"] = "float16"
+    # Only take the prep_device slot if nothing else (CUDA/GPU/NPU) claimed it
+    if state["prep_device"] == "CPU":
+        state["prep_device"] = "AMD"
 
 
 def _detect_cuda_hardware(max_cuda: int, hardware_units: list[dict[str, str]], state: dict[str, str]) -> None:
@@ -54,34 +221,67 @@ def _append_cuda_units(cuda_to_use: int, hardware_units: list[dict[str, str]]) -
         hardware_units.append({"type": "CUDA", "id": f"cuda:{i}", "name": f"NVIDIA GPU {i}"})
 
 
-def _detect_intel_hardware(max_gpu: int, max_npu: int, hardware_units: list[dict[str, str]], state: dict[str, str]) -> None:
+def _detect_intel_hardware(
+    max_gpu: int,
+    max_npu: int,
+    hardware_units: list[dict[str, str]],
+    state: dict[str, str],
+    *,
+    is_explicit_prep: bool = False,
+) -> None:
     try:
         ov = importlib.import_module("openvino")
         core = ov.Core()
         devices = core.available_devices
         logger.debug("OpenVINO Available Devices: %s", devices)
-        gpu_count, npu_count = _append_intel_units(core, devices, max_gpu, max_npu, hardware_units, state=state)
+        gpu_count, npu_count = _append_intel_units(
+            core,
+            devices,
+            max_gpu,
+            max_npu,
+            hardware_units,
+            state=state,
+            is_explicit_prep=is_explicit_prep,
+        )
         if gpu_count <= 0 and npu_count <= 0:
             logger.debug("OpenVINO did not report usable Intel GPU/NPU units; trying Linux device-node fallbacks")
-            _append_intel_node_fallbacks(max_gpu, max_npu, hardware_units, state=state)
+            _append_intel_node_fallbacks(max_gpu, max_npu, hardware_units, state=state, is_explicit_prep=is_explicit_prep)
     except (ImportError, AttributeError, ValueError, TypeError, RuntimeError, OSError) as e:
         logger.debug("Intel accelerator detection skipped: %s", e)
-        _append_intel_node_fallbacks(max_gpu, max_npu, hardware_units, state=state)
+        _append_intel_node_fallbacks(max_gpu, max_npu, hardware_units, state=state, is_explicit_prep=is_explicit_prep)
 
 
-def _append_intel_node_fallbacks(max_gpu: int, max_npu: int, hardware_units: list[dict[str, str]], *, state: dict[str, str]) -> None:
+def _append_intel_node_fallbacks(
+    max_gpu: int,
+    max_npu: int,
+    hardware_units: list[dict[str, str]],
+    *,
+    state: dict[str, str],
+    is_explicit_prep: bool = False,
+) -> None:
     """Fallback to Linux device-node detection when OpenVINO enumeration fails."""
-    _append_npu_node_fallback(max_npu, hardware_units, state=state)
+    _append_npu_node_fallback(max_npu, hardware_units, state=state, is_explicit_prep=is_explicit_prep)
     _append_gpu_node_fallback(max_gpu, hardware_units, state=state)
 
 
-def _append_npu_node_fallback(max_npu: int, hardware_units: list[dict[str, str]], *, state: dict[str, str]) -> None:
+def _update_npu_state(state: dict[str, str], is_explicit_prep: bool) -> None:
+    if state["device"] == "CPU":
+        state["device"] = "NPU"
+    if not (is_explicit_prep and state.get("prep_device") == "AMD"):
+        state["prep_device"] = "NPU"
+
+
+def _append_npu_node_fallback(
+    max_npu: int,
+    hardware_units: list[dict[str, str]],
+    *,
+    state: dict[str, str],
+    is_explicit_prep: bool = False,
+) -> None:
     if max_npu <= 0 or not os.path.exists("/dev/accel/accel0"):
         return
     hardware_units.append({"type": "NPU", "id": "NPU", "name": "Intel NPU"})
-    if state["device"] == "CPU":
-        state["device"] = "NPU"
-    state["prep_device"] = "NPU"
+    _update_npu_state(state, is_explicit_prep)
     logger.info("Detected Intel NPU via /dev/accel fallback")
 
 
@@ -102,6 +302,7 @@ def _can_use_gpu_node_fallback(max_gpu: int) -> bool:
         return False
     if not os.path.exists("/dev/dri"):
         return False
+    # If DRM vendor files are present, check that an Intel vendor is present or at least no non-Intel GPU claimed all slots
     return _is_intel_drm_present()
 
 
@@ -124,14 +325,17 @@ def _read_vendor_id(vendor_file: str) -> str | None:
 
 
 def _is_intel_drm_present() -> bool:
-    """Return True when a DRM render node reports Intel vendor id 0x8086."""
+    """Return True only when a DRM render node reports Intel vendor id 0x8086."""
     drm_root = "/sys/class/drm"
     if not os.path.isdir(drm_root):
-        return os.path.exists("/dev/dri")
-    for vendor_file in _iter_drm_vendor_files(drm_root):
+        return False
+    vendor_files = _iter_drm_vendor_files(drm_root)
+    if not vendor_files:
+        return False
+    for vendor_file in vendor_files:
         if _read_vendor_id(vendor_file) == "0x8086":
             return True
-    return os.path.exists("/dev/dri")
+    return False
 
 
 def _append_intel_units(
@@ -142,15 +346,30 @@ def _append_intel_units(
     hardware_units: list[dict[str, str]],
     *,
     state: dict[str, str],
+    is_explicit_prep: bool = False,
 ) -> tuple[int, int]:
     gpu_detect_count = 0
     npu_detect_count = 0
     for dev in devices:
         if "GPU" in dev:
-            gpu_detect_count = _append_intel_gpu(core, dev, gpu_detect_count, max_gpu, hardware_units, state=state)
-            continue
-        if "NPU" in dev:
-            npu_detect_count = _append_intel_npu(core, dev, npu_detect_count, max_npu, hardware_units, state=state)
+            gpu_detect_count = _append_intel_gpu(
+                core,
+                dev,
+                gpu_detect_count,
+                max_gpu,
+                hardware_units,
+                state=state,
+            )
+        elif "NPU" in dev:
+            npu_detect_count = _append_intel_npu(
+                core,
+                dev,
+                npu_detect_count,
+                max_npu,
+                hardware_units,
+                state=state,
+                is_explicit_prep=is_explicit_prep,
+            )
     return gpu_detect_count, npu_detect_count
 
 
@@ -181,13 +400,15 @@ def _append_intel_npu(
     hardware_units: list[dict[str, str]],
     *,
     state: dict[str, str],
+    is_explicit_prep: bool = False,
 ) -> int:
     if npu_detect_count >= max_npu:
         return npu_detect_count
     hardware_units.append({"type": "NPU", "id": dev, "name": _get_ov_device_name(core, dev)})
     if state["device"] == "CPU":
         state["device"] = "NPU"
-    state["prep_device"] = "NPU"
+    if not (is_explicit_prep and state.get("prep_device") == "AMD"):
+        state["prep_device"] = "NPU"
     return npu_detect_count + 1
 
 

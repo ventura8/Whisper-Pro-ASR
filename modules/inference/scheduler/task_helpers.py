@@ -63,6 +63,64 @@ def _log_missing_metadata_target(task_id: str | None, thread_id: int, kwargs: di
     )
 
 
+def record_task_failure(state: Any, msg: str, code: int = 400, context: str = "Task") -> None:
+    """Persist failure details to task history and execution logs."""
+    error_payload = {"error": msg, "status_code": code}
+    update_task_metadata(
+        state,
+        status="failed",
+        stage="Failed",
+        result=error_payload,
+        response_json=error_payload,
+    )
+    logger.error("[%s] %s", context, msg)
+
+
+def ensure_failed_task_payload(task: dict[str, Any]) -> None:
+    """Guarantee failed archived tasks expose error payloads for dashboard history."""
+    if task.get("status") != "failed":
+        return
+    result = task.get("result")
+    response_json = task.get("response_json")
+    if _has_error_payload(result) or _has_error_payload(response_json):
+        _mirror_failed_payloads(task, result, response_json)
+        return
+    msg = _derive_failure_message(task)
+    error_payload = {"error": msg, "status_code": 500}
+    task["result"] = error_payload
+    task["response_json"] = error_payload
+
+
+def _has_error_payload(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value.get("error"))
+
+
+def task_has_failure_metadata(state: Any, task_id: str) -> bool:
+    """Return True when the registered task already persisted failure details."""
+    with state.task_registry_lock:
+        task = state.task_registry.get(task_id)
+        if not task or task.get("status") != "failed":
+            return False
+        return _has_error_payload(task.get("result")) or _has_error_payload(task.get("response_json"))
+
+
+def _mirror_failed_payloads(task: dict[str, Any], result: Any, response_json: Any) -> None:
+    if _has_error_payload(result) and not _has_error_payload(response_json):
+        task["response_json"] = result
+    elif _has_error_payload(response_json) and not _has_error_payload(result):
+        task["result"] = response_json
+
+
+def _derive_failure_message(task: dict[str, Any]) -> str:
+    logs = task.get("logs") or []
+    if logs:
+        return str(logs[-1])
+    stage = task.get("stage")
+    if stage and stage not in {"Failed", "Waiting for Priority Slot"}:
+        return f"Task failed during {stage}"
+    return "Task failed"
+
+
 def update_task_progress(state: Any, progress: int | float | None, stage: str | None = None) -> None:
     """Update progress and optional stage for the current task."""
     task_id = getattr(utils.THREAD_CONTEXT, "task_id", None)

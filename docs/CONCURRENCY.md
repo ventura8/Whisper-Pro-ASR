@@ -196,4 +196,37 @@ When `diarize=true` is passed to `/asr`, the diarization pipeline runs **within 
 - **No additional hardware claims**: Alignment and diarization share the unit already claimed for transcription.
 - **Cache isolation**: Each hardware unit maintains its own `_ALIGN_POOL` and `_DIARIZE_POOL` entries, preventing cross-unit cache collisions.
 - **Preemption safety**: Diarization stages respect the same `_check_preemption()` cooperative yielding checks as transcription.
-- **Graceful fallback**: If diarization fails (missing `DIARIZATION_HF_TOKEN`, model download failure, etc.), the system returns non-diarized transcription results without raising an error to the client.
+- **Diarization fallback contract**: If diarization fails or `DIARIZATION_HF_TOKEN` is missing, the request still completes using standard transcription (no speaker labels). The diarization stage must not abort the overall `/asr` response.
+
+---
+
+## 🧪 End-to-End Concurrency & Lifecycle Test Suite
+
+Whisper Pro ASR includes a comprehensive end-to-end concurrency test suite located in `tests/integration/concurrency/`:
+
+| Module | Purpose & Coverage Scope |
+| :--- | :--- |
+| `concurrency_fixtures.py` | Shared hardware topology builders, realistic streaming pipeline mocks, and `ThreadPoolExecutor` request dispatchers. |
+| `test_e2e_hw_matrix.py` | Hardware topologies (0 HW / CPU fallback, 1 HW, 2 HW dual, 3 HW triple, 4 HW quad) under concurrent traffic. |
+| `test_e2e_traffic_volume.py` | Pure volume tiers (1, 5, 10 LD, ASR, v1 calls) and 25-request heavy mixed endpoint bursts. |
+| `test_e2e_preemption_yielding_stages.py` | Pause & resume checkpoints across all pipeline stages (early init, FFmpeg, pre-UVR, mid-UVR multi-chunk, pre-inference, mid-inference generator, successive preemptions, cascading backlog hold). |
+| `test_e2e_idle_timeout_reclamation.py` | Resource release after idle timeout (`MODEL_IDLE_TIMEOUT`), timer cancellation under traffic, full model pool purging, and thread-safe lazy reloading. |
+| `test_e2e_advanced_edge_cases.py` | Idle unit stealing without preemption, priority task crash recovery, duplicate request coalescing, and 100% temporary file tracking hygiene. |
+| `test_e2e_telemetry_ordering.py` | Real-time status polling, canonical enum validation, deterministic task ordering, live dashboard UI HTML template rendering (`/`), and absence of sentinel placeholder strings. |
+| `tests/e2e/dashboard-concurrency-ui.spec.cjs` | Playwright E2E UI concurrency spec: quad hardware cluster badges, active sessions counter, preemption hint banners (`Paused for priority detect-language tasks`), and DOM zero-placeholder validation. |
+
+### Validation Commands
+
+```bash
+# Run end-to-end concurrency suite in Docker
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test python3 -m pytest tests/integration/concurrency/ -v
+
+# Run Playwright E2E UI tests in Docker
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test npm run test:e2e
+
+# Verify Radon Rank-A cyclomatic complexity (complexity <= 5)
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test bash -c 'VIOLATIONS=$(find tests/integration/concurrency -type f -name "*.py" -print0 | xargs -0 -r python3 -m radon cc -n B); if [ -n "$VIOLATIONS" ]; then echo "$VIOLATIONS"; exit 1; fi'
+
+# Run full CI quality pipeline
+scripts/ci/build-and-test.sh
+```

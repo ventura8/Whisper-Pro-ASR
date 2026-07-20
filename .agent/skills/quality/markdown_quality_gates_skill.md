@@ -2,6 +2,10 @@
 
 Use this skill whenever repository Markdown files are added or changed.
 
+## Mandatory Rule
+
+Every time you work on this project, you MUST update all relevant markdown files in the same task. Never ship code-only changes. After those doc updates, run this skill's lint/fix flow.
+
 ## Objective
 
 Keep Markdown documentation lint-clean and auto-fixable in the same Docker-backed quality flow used by the rest of the repository.

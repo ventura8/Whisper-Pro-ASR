@@ -11,6 +11,15 @@ from fastapi.responses import JSONResponse
 from modules.api.routes import detect as routes_detect
 
 
+def _sample_worker_context() -> dict:
+    return {
+        "caller_info": {"ip": "127.0.0.1", "user_agent": "test"},
+        "request_json": {"local_path": "/tmp/a.mp3"},
+        "endpoint": "/detect-language",
+        "input_flags": None,
+    }
+
+
 def test_await_shared_result_handles_wrap_future_exception():
     """Shared-result await should normalize exceptions from asyncio.wrap_future."""
     shared_future = concurrent.futures.Future()
@@ -63,7 +72,7 @@ def test_await_shared_result_with_dashboard_sync_handles_future_exception():
         mock.patch("modules.api.routes.detect.model_manager.early_task_registration", return_value=contextlib.nullcontext()),
         mock.patch("modules.api.routes.detect.routes_utils.handle_error", return_value=("Error", 500)),
     ):
-        response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3")
+        response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3", worker_context=_sample_worker_context())
 
     assert response.status_code == 500
     body = json.loads(response.body)
@@ -77,7 +86,7 @@ def test_await_shared_result_with_dashboard_sync_handles_error_tuple():
     _sync_wait = routes_detect.__dict__["_await_shared_result_with_dashboard_task_sync"]
 
     with mock.patch("modules.api.routes.detect.model_manager.early_task_registration", return_value=contextlib.nullcontext()):
-        response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3")
+        response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3", worker_context=_sample_worker_context())
 
     assert response.status_code == 500
     body = json.loads(response.body)
@@ -85,19 +94,19 @@ def test_await_shared_result_with_dashboard_sync_handles_error_tuple():
 
 
 def test_await_shared_result_with_dashboard_sync_marks_failed_for_json_error():
-    """Coalesced follower worker path should flag failed metadata for JSON error responses."""
+    """Coalesced follower worker path should record failure metadata for JSON error responses."""
     shared_future = concurrent.futures.Future()
     shared_future.set_result((JSONResponse(content={"error": "bad"}, status_code=500), None))
     _sync_wait = routes_detect.__dict__["_await_shared_result_with_dashboard_task_sync"]
 
     with (
         mock.patch("modules.api.routes.detect.model_manager.early_task_registration", return_value=contextlib.nullcontext()),
-        mock.patch("modules.api.routes.detect.model_manager.update_task_metadata") as mock_update,
+        mock.patch("modules.api.routes.detect.model_manager.record_task_failure") as mock_record,
     ):
-        response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3")
+        response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3", worker_context=_sample_worker_context())
 
     assert response.status_code == 500
-    mock_update.assert_any_call(status="failed")
+    mock_record.assert_called_once_with("bad", 500, context="LD")
 
 
 def test_log_detection_result_handles_invalid_candidate_list():
