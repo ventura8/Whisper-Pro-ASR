@@ -23,7 +23,10 @@ def create_separator(lazy_import_separator, output_dir: str):
 
 def enable_separator_acceleration_flag(separator, target_providers, unit_name: str):
     """Enable audio-separator hardware acceleration when provider set is accelerated."""
-    is_accelerated = any(provider in ["CUDAExecutionProvider", "OpenVINOExecutionProvider"] for provider in target_providers)
+    is_accelerated = any(
+        provider in ["CUDAExecutionProvider", "OpenVINOExecutionProvider", "DmlExecutionProvider", "ROCMExecutionProvider"]
+        for provider in target_providers
+    )
     if is_accelerated:
         logger.debug("[System] Forcing hardware_acceleration_enabled for %s", unit_name)
         separator.hardware_acceleration_enabled = True

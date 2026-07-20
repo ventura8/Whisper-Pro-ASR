@@ -33,7 +33,7 @@ def test_hardware_path_resolution():
 
     # 1. Test NVIDIA path
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "CUDA"}):
-        with mock.patch("os.path.exists", return_value=True):
+        with mock.patch("os.path.exists", side_effect=lambda p: p in ["/app/libs/nvidia", "/dev/nvidia0"]):
             fake_path = PathTracker()
             with mock.patch.object(sys, "path", fake_path):
                 with mock.patch("importlib.reload"):
@@ -42,7 +42,7 @@ def test_hardware_path_resolution():
 
     # 2. Test Intel path
     with mock.patch.dict(os.environ, {"ASR_DEVICE": "INTEL"}):
-        with mock.patch("os.path.exists", return_value=True):
+        with mock.patch("os.path.exists", side_effect=lambda p: p in ["/app/libs/intel", "/dev/dri", "/dev/accel"]):
             fake_path = PathTracker()
             with mock.patch.object(sys, "path", fake_path):
                 with mock.patch("importlib.reload"):

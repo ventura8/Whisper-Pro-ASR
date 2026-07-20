@@ -100,4 +100,3 @@ powershell -ExecutionPolicy Bypass -File .\scripts\ci\build-and-test.ps1
 ```
 
 Direct host-side `pytest` is unsupported for parity verification and may be used only for local diagnostics outside release-quality gate decisions.
-

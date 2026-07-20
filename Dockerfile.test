@@ -14,6 +14,7 @@ ENV PYTHONUNBUFFERED=1
 
 ARG POETRY_VERSION=2.3.4
 ARG PIP_VERSION=26.1.2
+ARG SETUPTOOLS_VERSION=83.0.0
 ARG FFMPEG_VERSION=8.1.2
 ARG FFMPEG_TARBALL=ffmpeg-${FFMPEG_VERSION}.tar.xz
 ARG FFMPEG_URL=https://ffmpeg.org/releases/${FFMPEG_TARBALL}
@@ -70,14 +71,11 @@ COPY --from=powershell-bin /opt/microsoft/powershell/7 /opt/microsoft/powershell
 
 RUN ln -sf /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh
 
-# Keep pip resolver behavior aligned with production image.
-RUN python -m pip install --no-cache-dir "pip==${PIP_VERSION}"
-
-# Install Poetry and project dependencies (using cache mount for pip/poetry caches)
+# Keep pip resolver behavior aligned with production image and install Poetry + dependencies
 RUN --mount=type=cache,id=whisper-pro-asr-poetry,target=/root/.cache/pypoetry,sharing=locked \
-    python -m pip install --no-cache-dir "poetry==${POETRY_VERSION}" "setuptools==83.0.0" && \
+    python -m pip install --no-cache-dir "pip==${PIP_VERSION}" "poetry==${POETRY_VERSION}" "setuptools==${SETUPTOOLS_VERSION}" && \
     poetry config virtualenvs.create false && \
-    poetry config installer.max-workers 1 && \
+    poetry config installer.max-workers 4 && \
     poetry config cache-dir /root/.cache/pypoetry && \
     poetry install --no-root
 

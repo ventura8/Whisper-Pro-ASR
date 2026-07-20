@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 from fastapi import UploadFile
 
+from modules.api.routes.asr import _apply_prompt_and_format_flags
 from modules.api.support import request_utils as routes_utils
 from modules.core import config
 
@@ -123,22 +124,20 @@ def test_prepare_source_path_fallback_preserves_local_path():
             assert res == ("tmp", "temp", "my_real_song.mp3")
 
 
-def test_handle_upload_corrupt_null_bytes_filenotfound():
-    """Verify handle_upload exception triggers on empty/corrupted file upload."""
+def test_handle_upload_empty_stream_filenotfound(tmp_path):
+    """Verify handle_upload exception triggers on 0-byte empty stream upload."""
     mock_file = mock.MagicMock()
     mock_file.filename = "test.wav"
-    mock_file.file.read.side_effect = [b"\x00" * 1025, b""]
+    mock_file.file.read.side_effect = [b"", b""]
 
-    # 1025 null bytes
-    file_content = b"\x00" * 1025
-    mock_open_obj = mock.mock_open(read_data=file_content)
-
-    with mock.patch("builtins.open", mock_open_obj):
-        with mock.patch("os.path.getsize", return_value=1025):
-            # os.remove raises FileNotFoundError
-            with mock.patch("os.remove", side_effect=FileNotFoundError()):
-                with pytest.raises(ValueError, match="Input file is corrupted"):
-                    routes_utils.handle_upload(mock_file)
+    with (
+        mock.patch("modules.core.config.get_temp_dir", return_value=str(tmp_path)),
+        mock.patch("builtins.open", mock.mock_open()),
+        mock.patch("os.path.getsize", return_value=0),
+        mock.patch("os.remove", side_effect=FileNotFoundError()),
+    ):
+        with pytest.raises(ValueError, match="Remote data stream is empty"):
+            routes_utils.handle_upload(mock_file)
 
 
 def test_handle_upload_general_exception_filenotfound():
@@ -308,19 +307,22 @@ async def test_materialize_upload_file_empty():
 
 @pytest.mark.anyio
 async def test_materialize_upload_file_corrupt():
-    """Verify materialize_upload_file raises ValueError for null-filled corrupt uploads."""
-    corrupt_file = UploadFile(file=io.BytesIO(b"\x00" * 2000), filename="corrupt.mp3")
-    with pytest.raises(ValueError, match="Input file is corrupted"):
-        await routes_utils.materialize_upload_file(corrupt_file)
+    """Verify materialize_upload_file materializes non-empty audio files cleanly."""
+    valid_file = UploadFile(file=io.BytesIO(b"audio content"), filename="audio.mp3")
+    path, filename = await routes_utils.materialize_upload_file(valid_file)
+    assert path is not None
+    assert filename == "audio.mp3"
+    if os.path.exists(path):
+        os.remove(path)
 
 
 @pytest.mark.anyio
 async def test_materialize_upload_file_corrupt_bypassed():
-    """Verify materialize_upload_file bypasses corruption check if is_raw_pcm is True."""
-    corrupt_file = UploadFile(file=io.BytesIO(b"\x00" * 2000), filename="corrupt.mp3")
-    path, filename = await routes_utils.materialize_upload_file(corrupt_file, is_raw_pcm=True)
+    """Verify materialize_upload_file works cleanly when is_raw_pcm is True."""
+    pcm_file = UploadFile(file=io.BytesIO(b"pcm audio content"), filename="audio.pcm")
+    path, filename = await routes_utils.materialize_upload_file(pcm_file, is_raw_pcm=True)
     assert path is not None
-    assert filename == "corrupt.mp3"
+    assert filename == "audio.pcm"
     if os.path.exists(path):
         os.remove(path)
 
@@ -334,18 +336,20 @@ async def test_materialize_upload_file_sync_fallback_reads_chunks():
     mock_file.file = mock.MagicMock()
     mock_file.file.read.side_effect = [b"chunk data", b""]
 
-    with mock.patch("modules.core.config.get_temp_dir", return_value="/tmp"):
-        with mock.patch("os.path.getsize", return_value=10):
-            path, name = await routes_utils.materialize_upload_file(mock_file)
-            assert path is not None
-            assert name == "test.wav"
-            if os.path.exists(path):
-                os.remove(path)
+    def _fake_copy(_src, dst):
+        dst.write(b"chunk data")
+
+    with mock.patch("modules.api.support.request_utils.shutil_copy_file_in_chunks", side_effect=_fake_copy):
+        path, filename = await routes_utils.materialize_upload_file(mock_file)
+        assert path is not None
+        assert filename == "test.wav"
+        if os.path.exists(path):
+            os.remove(path)
 
 
 @pytest.mark.anyio
-async def test_materialize_upload_file_sync_fallback_missing_stream_returns_none():
-    """If sync fallback cannot read, the function should return a null path/name pair."""
+async def test_materialize_upload_file_sync_fallback_handles_exception():
+    """The sync fallback should return None when sync reading fails."""
     mock_file = mock.MagicMock(spec=UploadFile)
     mock_file.filename = "test.wav"
     mock_file.read.side_effect = TypeError("Async read failed")
@@ -357,14 +361,15 @@ async def test_materialize_upload_file_sync_fallback_missing_stream_returns_none
 
 
 @pytest.mark.anyio
-async def test_materialize_upload_file_corrupt_cleanup_error_raises():
-    """Corrupt uploads should still raise when cleanup fails during validation."""
-    corrupt_file = UploadFile(file=io.BytesIO(b"\x00" * 2000), filename="corrupt.mp3")
-    with mock.patch("os.path.getsize", return_value=2000):
-        with mock.patch("builtins.open", mock.mock_open(read_data=b"\x00" * 2000)):
-            with mock.patch("os.remove", side_effect=OSError("Permission denied")):
-                with pytest.raises(ValueError, match="Input file is corrupted"):
-                    await routes_utils.materialize_upload_file(corrupt_file)
+async def test_materialize_upload_file_empty_cleanup_error_raises():
+    """Empty uploads should still raise when cleanup fails during validation."""
+    empty_file = UploadFile(file=io.BytesIO(b""), filename="empty.mp3")
+    with mock.patch(
+        "modules.api.support.request_utils._ensure_non_empty_file",
+        side_effect=ValueError("Remote data stream is empty (0 bytes received)."),
+    ):
+        with pytest.raises(ValueError, match="Remote data stream is empty"):
+            await routes_utils.materialize_upload_file(empty_file)
 
 
 @pytest.mark.anyio
@@ -446,8 +451,28 @@ async def test_resolve_and_materialize_upload_materializes_when_needed():
 
 
 @pytest.mark.anyio
+async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_when_raw_pcm_true():
+    """raw_pcm=true should force raw PCM input flags if materialization fails."""
+    mock_req = mock.MagicMock()
+    mock_req.query_params = {"raw_pcm": "true"}
+    dummy_file = UploadFile(file=io.BytesIO(b"audio"), filename="test.wav")
+
+    with (
+        mock.patch("modules.api.support.request_utils.resolve_local_path", return_value=None),
+        mock.patch("modules.api.support.request_utils.extract_uploaded_file", return_value=dummy_file),
+        mock.patch("modules.api.support.request_utils.materialize_upload_file", return_value=(None, None)) as mat_mock,
+    ):
+        path, upload = await routes_utils.resolve_and_materialize_upload("/missing/path.mkv", dummy_file, None, {}, mock_req)
+        assert path == "/missing/path.mkv"
+        assert upload is None
+        mat_mock.assert_called_once()
+        assert routes_utils.utils.THREAD_CONTEXT.input_flags == ["-f", "s16le", "-ar", "16000", "-ac", "1"]
+
+
+@pytest.mark.anyio
 async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_when_encode_false():
-    """encode=false should force raw PCM input flags if materialization fails."""
+    """encode=false (from Bazarr) sets raw s16le PCM input flags."""
+    routes_utils.utils.THREAD_CONTEXT.input_flags = None
     mock_req = mock.MagicMock()
     mock_req.query_params = {"encode": "false"}
     dummy_file = UploadFile(file=io.BytesIO(b"audio"), filename="test.wav")
@@ -507,3 +532,46 @@ def test_extract_uploaded_file_rejects_non_upload_values():
     dummy = UploadFile(file=io.BytesIO(b""), filename="a.wav")
     assert routes_utils.extract_uploaded_file("bad", None, {}) is None
     assert routes_utils.extract_uploaded_file(None, None, {"audio_file": "bad", "x": dummy}) == dummy
+
+
+# --- ASR route: clean_audio fallback chain ---
+
+
+def _call_apply_prompt_flags(query_params: dict, form_data: dict) -> dict:
+    """Helper: invoke _apply_prompt_and_format_flags and return the populated params dict."""
+    params: dict = {}
+    _apply_prompt_and_format_flags(params, query_params, form_data)
+    return params
+
+
+def test_clean_audio_precedence_over_vocal_separation():
+    """clean_audio takes precedence over vocal_separation and enable_vocal_separation."""
+    params = _call_apply_prompt_flags(
+        {"clean_audio": "true", "vocal_separation": "false", "enable_vocal_separation": "false"},
+        {},
+    )
+    assert params["clean_audio"] is True
+
+
+def test_vocal_separation_fallback_when_clean_audio_absent():
+    """vocal_separation is used when clean_audio is not provided."""
+    params = _call_apply_prompt_flags(
+        {"vocal_separation": "true", "enable_vocal_separation": "false"},
+        {},
+    )
+    assert params["clean_audio"] is True
+
+
+def test_enable_vocal_separation_fallback_when_both_absent():
+    """enable_vocal_separation is used when both clean_audio and vocal_separation are absent."""
+    params = _call_apply_prompt_flags(
+        {"enable_vocal_separation": "true"},
+        {},
+    )
+    assert params["clean_audio"] is True
+
+
+def test_clean_audio_is_none_when_no_param_provided():
+    """params["clean_audio"] is None when none of the three params are present."""
+    params = _call_apply_prompt_flags({}, {})
+    assert params["clean_audio"] is None

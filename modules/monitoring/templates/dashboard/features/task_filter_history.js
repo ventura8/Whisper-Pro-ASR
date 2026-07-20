@@ -274,6 +274,7 @@ function _historyHardwareIconForType(unitType) {
     if (type.startsWith('CUDA')) return 'rocket_launch';
     if (type.startsWith('NPU')) return 'psychology_alt';
     if (type.startsWith('GPU')) return 'developer_board';
+    if (type.startsWith('AMD')) return 'bolt';
     if (type === 'CPU') return 'settings_input_component';
     return 'memory';
 }

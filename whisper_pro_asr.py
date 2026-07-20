@@ -9,6 +9,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Awaitable, Callable
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
@@ -41,6 +42,19 @@ async def lifespan(fastapi_app: FastAPI) -> AsyncGenerator[FastAPI, None]:
 
     yield
     # Cleanup on shutdown if needed
+
+
+def sanitize_query_params(query_params) -> str:
+    """Sanitize query parameters for safe logging."""
+    if not query_params:
+        return ""
+
+    safe_fields = {"beam_size", "task", "language", "initial_prompt", "vad_filter", "word_timestamps", "clean_audio"}
+    items = []
+    for k, v in query_params.multi_items():
+        if k.lower() in safe_fields:
+            items.append(f"{quote(k)}={quote(v)}")
+    return "&".join(items)
 
 
 def create_app(testing: bool = False) -> FastAPI:
@@ -80,9 +94,13 @@ def create_app(testing: bool = False) -> FastAPI:
         client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
         content_length = request.headers.get("content-length", "0")
         body_log = f" | Body: {content_length} bytes" if content_length != "0" else ""
+        query_str = sanitize_query_params(request.query_params)
+        params_log = f" | Params: {query_str}" if query_str else ""
+        content_type = request.headers.get("content-type", "")
+        ct_log = f" | Content-Type: {content_type}" if content_type else ""
 
         log_func = logger.debug if request.url.path in ["/status", "/"] else logger.info
-        log_func(">>> %s %s [Source: %s]%s", request.method, request.url.path, client_ip, body_log)
+        log_func(">>> %s %s [Source: %s]%s%s%s", request.method, request.url.path, client_ip, body_log, params_log, ct_log)
 
         # Scope tracked files per request using a contextvar and request.state
         tracked_list = []

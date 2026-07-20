@@ -3,6 +3,7 @@
 **Purpose**: Generate a ready‑to‑copy GitHub release description for the current version.
 
 When invoked, this skill will:
+
 1. Detect the current Git branch name.
 2. Extract the version number from a branch named like `feature/v1.1.6` (preferred), with compatibility for `release/v1.1.6`, `feature/1.1.6`, or `release/1.1.6`.
 3. Generate a markdown release description that includes:
@@ -12,13 +13,16 @@ When invoked, this skill will:
 4. Print the description to stdout so the user can copy‑paste it into `gh release create` manually.
 
 **Usage**:
-```
+
+```bash
 # In the terminal
 antigravity run_skill release_skill
 ```
+
 The skill does **not** execute `gh release create`; it only prepares the description.
 
 **Implementation Details**:
+
 - Uses `git rev-parse --abbrev-ref HEAD` to get the branch.
 - Parses the version using a regular expression `\d+\.\d+\.\d+`.
 - Reads the corresponding section from `CHANGELOG.md` (lines between `## [<version>]` and the next header).

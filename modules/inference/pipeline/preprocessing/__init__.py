@@ -295,7 +295,13 @@ class PreprocessingManager:
         logger.debug("Active ORT Version: %s | Providers: %s", ort.__version__, available_providers)
         target_providers, target_options = self._resolve_providers(available_providers)
         unit_name = self._unit["name"] if self._unit else self._device_id
-        logger.info("[System] Initializing UVR (%s) on %s...", config.VOCAL_SEPARATION_MODEL, unit_name)
+        actual_provider = target_providers[0] if target_providers else "CPUExecutionProvider"
+        logger.info(
+            "[System] Initializing UVR (%s) on %s... [ONNX provider: %s]",
+            config.VOCAL_SEPARATION_MODEL,
+            unit_name,
+            actual_provider,
+        )
         separator = preprocessing_execution.create_separator(_lazy_import_separator, str(CACHE_DIR))
         separator.onnx_execution_provider = target_providers
         openvino_resolver.set_openvino_context_options(target_options)
@@ -306,6 +312,18 @@ class PreprocessingManager:
         try:
             separator.load_model(config.VOCAL_SEPARATION_MODEL)
         except (RuntimeError, ValueError, ImportError, OSError, TypeError, AttributeError, KeyError) as e:
+            if getattr(separator, "onnx_execution_provider", None) != ["CPUExecutionProvider"]:
+                logger.warning(
+                    "[UVR] Accelerator '%s' (providers: %s) failed to load model: %s (type: %s); falling back to CPU mode",
+                    self._device_id,
+                    getattr(separator, "onnx_execution_provider", None),
+                    e,
+                    type(e).__name__,
+                    exc_info=True,
+                )
+                separator.onnx_execution_provider = ["CPUExecutionProvider"]
+                separator.load_model(config.VOCAL_SEPARATION_MODEL)
+                return
             logger.error("[System] Failed to load UVR model: %s", e)
             self.separator = None
             raise
@@ -481,7 +499,12 @@ class PreprocessingManager:
     def _run_isolation_pipeline(self, sep, audio_path, yield_cb=None):
         audio_dur = utils.get_audio_duration(audio_path)
         unit_name = self._unit["name"] if self._unit else self._device_id
-        logger.info("[UVR] Starting vocal isolation on %s...", unit_name)
+        actual_provider = getattr(sep, "onnx_execution_provider", ["CPUExecutionProvider"])
+        logger.info(
+            "[UVR] Starting vocal isolation on %s [ONNX: %s]...",
+            unit_name,
+            actual_provider[0] if actual_provider else "CPUExecutionProvider",
+        )
         p_start = time.time()
         _, target_options = self._resolve_providers(ort.get_available_providers())
         active_yield_cb = self._build_active_yield_cb(yield_cb)

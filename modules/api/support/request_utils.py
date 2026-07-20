@@ -19,7 +19,7 @@ from modules.inference.runtime import model_manager
 logger = logging.getLogger(__name__)
 
 
-async def materialize_upload_file(upload_file, is_raw_pcm=False):
+async def materialize_upload_file(upload_file, is_raw_pcm=False, local_path=None):
     """Save an UploadFile to disk in the async context to avoid cross-thread SpooledTemporaryFile issues.
 
     Returns the disk path and the original filename, or (None, None) if no file.
@@ -27,8 +27,8 @@ async def materialize_upload_file(upload_file, is_raw_pcm=False):
     if not _is_valid_upload_file(upload_file):
         return None, None
 
-    original_filename = _resolve_original_filename(upload_file)
-    tmp_path = _build_upload_tmp_path(original_filename)
+    original_filename = _resolve_original_filename(upload_file, local_path)
+    tmp_path = _build_upload_tmp_path(original_filename, local_path)
 
     write_result = await _write_upload_to_disk(upload_file, tmp_path)
     if not write_result["success"]:
@@ -49,8 +49,13 @@ def _validate_or_discard_materialized_file(tmp_path: str, is_raw_pcm: bool, used
         raise
 
 
-def _resolve_original_filename(upload_file) -> str:
-    return getattr(upload_file, "filename", "uploaded_file") or "uploaded_file"
+def _resolve_original_filename(upload_file, local_path: Optional[str] = None) -> str:
+    name = getattr(upload_file, "filename", None)
+    if name and os.path.splitext(name)[1]:
+        return name
+    if local_path:
+        return os.path.basename(local_path.strip().strip('"').strip("'"))
+    return name or "uploaded_file"
 
 
 def _validate_materialized_file_or_cleanup(tmp_path: str, is_raw_pcm: bool, used_sync: bool):
@@ -98,9 +103,9 @@ def _write_upload_to_disk_sync_fallback(upload_file, tmp_path: str) -> bool:
 
 
 def _validate_materialized_file(tmp_path: str, is_raw_pcm: bool, used_sync: bool):
+    del is_raw_pcm
     _validate_materialized_sync_write(tmp_path, used_sync)
-    file_size = _ensure_non_empty_file(tmp_path)
-    _ensure_not_null_byte_payload(tmp_path, file_size, is_raw_pcm)
+    _ensure_non_empty_file(tmp_path)
 
 
 def _validate_materialized_sync_write(tmp_path: str, used_sync: bool):
@@ -113,23 +118,6 @@ def _ensure_non_empty_file(tmp_path: str) -> int:
     if file_size == 0:
         raise ValueError("Remote data stream is empty (0 bytes received).")
     return file_size
-
-
-def _ensure_not_null_byte_payload(tmp_path: str, file_size: int, is_raw_pcm: bool):
-    if _should_skip_header_validation(file_size, is_raw_pcm):
-        return
-    if _is_all_null_header(tmp_path):
-        raise ValueError("Input file is corrupted (contains only null bytes).")
-
-
-def _should_skip_header_validation(file_size: int, is_raw_pcm: bool) -> bool:
-    return file_size <= 1024 or is_raw_pcm
-
-
-def _is_all_null_header(tmp_path: str) -> bool:
-    with open(tmp_path, "rb") as f:
-        header = f.read(1024)
-    return bool(header and all(b == 0 for b in header))
 
 
 def _remove_path_if_exists(path: str):
@@ -157,26 +145,33 @@ async def resolve_and_materialize_upload(local_path, audio_file, file, form_data
 
     _setup_input_flags(request, form_data)
 
-    uploaded_file = await _materialize_if_needed(uploaded_file)
+    uploaded_file = await _materialize_if_needed(uploaded_file, local_path=resolved_local_path)
 
     return resolved_local_path, uploaded_file
+
+
+def _is_raw_pcm_requested(request, form_data) -> bool:
+    for key in ("raw_pcm", "is_pcm"):
+        val = request.query_params.get(key) or form_data.get(key)
+        if val and str(val).strip().lower() in ("true", "1", "yes"):
+            return True
+    return False
 
 
 def _setup_input_flags(request, form_data):
     encode_val = request.query_params.get("encode")
     if encode_val in (None, ""):
         encode_val = form_data.get("encode")
-    if encode_val in (None, ""):
-        encode_val = "true"
-    if str(encode_val).lower() == "false":
+    raw_pcm = _is_raw_pcm_requested(request, form_data)
+    if str(encode_val).lower() == "false" or raw_pcm:
         utils.THREAD_CONTEXT.input_flags = ["-f", "s16le", "-ar", "16000", "-ac", "1"]
     else:
         utils.THREAD_CONTEXT.input_flags = None
 
 
-async def _materialize_if_needed(uploaded_file) -> Optional[str]:
+async def _materialize_if_needed(uploaded_file, local_path: Optional[str] = None) -> Optional[str]:
     is_raw_pcm = utils.THREAD_CONTEXT.input_flags is not None
-    materialized_path, _ = await materialize_upload_file(uploaded_file, is_raw_pcm=is_raw_pcm)
+    materialized_path, _ = await materialize_upload_file(uploaded_file, is_raw_pcm=is_raw_pcm, local_path=local_path)
     if materialized_path:
         return materialized_path
     return None
@@ -291,12 +286,15 @@ def handle_upload(audio_file):
         raise
 
 
-def _build_upload_tmp_path(original_filename: str) -> str:
-    ext = os.path.splitext(original_filename)[1] if original_filename else ".tmp"
-    if len(ext) > 6:
-        ext = ".tmp"
-    upload_dir = config.get_temp_dir()
-    return os.path.join(upload_dir, f"upload_{uuid.uuid4().hex}{ext}")
+def _extract_ext(original_filename: str, local_path: Optional[str]) -> str:
+    ref_path = original_filename or local_path or ""
+    ext = os.path.splitext(ref_path.strip().strip('"').strip("'"))[1]
+    return ext if ext and len(ext) <= 6 else ".tmp"
+
+
+def _build_upload_tmp_path(original_filename: str, local_path: Optional[str] = None) -> str:
+    ext = _extract_ext(original_filename, local_path)
+    return os.path.join(config.get_temp_dir(), f"upload_{uuid.uuid4().hex}{ext}")
 
 
 def _track_successful_upload(tmp_path: str):
@@ -329,8 +327,7 @@ def _write_upload_sync(audio_file, tmp_path: str):
 
 
 def _validate_upload_sync(tmp_path: str):
-    file_size = _ensure_non_empty_file(tmp_path)
-    _ensure_not_null_byte_payload(tmp_path, file_size, is_raw_pcm=False)
+    _ensure_non_empty_file(tmp_path)
 
 
 def shutil_copy_file_in_chunks(src, dst):
@@ -371,22 +368,30 @@ def handle_error(err, context="ASR"):
     return msg, status_code
 
 
+def _run_convert_to_wav(source_path: str, input_flags) -> tuple[Optional[str], Optional[tuple]]:
+    try:
+        clean_wav = utils.convert_to_wav(source_path, input_flags=input_flags)
+        if not clean_wav:
+            return None, ("FFmpeg conversion failed - invalid media format", 400)
+        return clean_wav, None
+    except (RuntimeError, ValueError, OSError) as e:
+        logger.warning("[Prep] FFmpeg conversion failed for %s: %s", source_path, e)
+        return None, ("FFmpeg conversion failed - invalid media format", 400)
+
+
 def get_clean_wav_or_error(source_path, input_flags=None):
     """Normalize input media to 16kHz mono WAV."""
-    if input_flags is None:
-        input_flags = getattr(utils.THREAD_CONTEXT, "input_flags", None)
-
+    flags = input_flags if input_flags is not None else getattr(utils.THREAD_CONTEXT, "input_flags", None)
     model_manager.update_task_progress(0, "Standardizing Audio")
     logger.info("[Prep] Normalizing audio stream (FFmpeg)...")
     start = time.time()
 
-    if not input_flags:
-        if _is_file_corrupted(source_path):
-            return None, ("Input file is corrupted (only null bytes).", 400)
+    if not flags and _is_file_corrupted(source_path):
+        return None, ("Input file is corrupted (only null bytes).", 400)
 
-    clean_wav = utils.convert_to_wav(source_path, input_flags=input_flags)
-    if not clean_wav:
-        return None, ("FFmpeg conversion failed - invalid media format", 400)
+    clean_wav, err = _run_convert_to_wav(source_path, flags)
+    if err:
+        return None, err
 
     logger.info("[Prep] Standardization completed in %s", utils.format_duration(time.time() - start))
     return clean_wav, None

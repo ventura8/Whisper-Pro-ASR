@@ -53,4 +53,3 @@ scripts/ci/build-and-test.sh
 ```
 
 Ensure a perfect **10.0/10.0** Pylint score is preserved across modified code blocks.
-

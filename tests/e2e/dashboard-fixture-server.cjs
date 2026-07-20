@@ -143,7 +143,7 @@ function lifecycleBasePayload(tasks, history) {
   const activeSessions = tasks.filter((t) => t.status === "active").length;
   const queuedSessions = tasks.filter((t) => t.status === "queued").length;
   return {
-    version: "1.1.6-test",
+    version: "1.2.0-test",
     active_sessions: activeSessions,
     queued_sessions: queuedSessions,
     uptime_sec: 3600,

@@ -34,4 +34,3 @@ Preserve the intended policy:
 - No deadlocks/timeouts under bursty mixed workloads.
 - Multi-accelerator detect-language bursts prove the scheduler does not collapse to one priority task at a time.
 - Stage-aware preemption tests confirm pre-vocal and pre-inference ASR yield checkpoints.
-

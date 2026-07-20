@@ -467,32 +467,57 @@ def parse_ffmpeg_progress(process, duration, yield_cb=None):
     return _parse_ffmpeg_progress_impl(process, duration, format_duration, yield_cb=yield_cb)
 
 
-def get_audio_duration(file_path):
-    """Extract precise media duration via ffprobe stream headers."""
+def _pcm_bytes_per_second(input_flags: list[str] | None) -> float:
+    """Derive PCM bytes/sec from -ar and -ac flags; defaults match STANDARD_AUDIO_FLAGS (16kHz mono s16le)."""
+    flags = list(input_flags or [])
+    sample_rate = 16000
+    channels = 1
+    bytes_per_sample = 2  # s16le — 16-bit signed little-endian
     try:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            file_path,
-        ]
-        result = process_exec.check_output_text(cmd, timeout=10).strip()
-        return float(result)
+        if "-ar" in flags:
+            sample_rate = int(flags[flags.index("-ar") + 1])
+        if "-ac" in flags:
+            channels = int(flags[flags.index("-ac") + 1])
+    except (ValueError, IndexError):
+        pass
+    return float(sample_rate * channels * bytes_per_sample)
+
+
+def _calculate_pcm_fallback_duration(file_path: str, input_flags: list[str]) -> float:
+    try:
+        if input_flags and os.path.exists(file_path):
+            f_size = os.path.getsize(file_path)
+            return float(f_size) / _pcm_bytes_per_second(input_flags)
     except tuple([Exception]):
-        # Calculate duration based on file size if input is raw PCM
-        try:
-            input_flags = getattr(THREAD_CONTEXT, "input_flags", None)
-            if input_flags and os.path.exists(file_path):
-                # Standard raw PCM: 16000Hz mono s16le (2 bytes/sample) -> 32000 bytes/sec
-                f_size = os.path.getsize(file_path)
-                return float(f_size) / 32000.0
-        except tuple([Exception]):
-            pass
-        return 0.0
+        pass
+    return 0.0
+
+
+# Public aliases so sibling modules and tests avoid protected-access lint warnings
+pcm_bytes_per_second = _pcm_bytes_per_second
+calculate_pcm_fallback_duration = _calculate_pcm_fallback_duration
+
+
+def get_audio_duration(file_path, input_flags=None):
+    """Extract precise media duration via ffprobe stream headers."""
+    if input_flags is None:
+        input_flags = getattr(THREAD_CONTEXT, "input_flags", None)
+    try:
+        cmd = ["ffprobe", "-v", "error"]
+        if input_flags:
+            cmd.extend(input_flags)
+        cmd.extend(
+            [
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                file_path,
+            ]
+        )
+        return float(process_exec.check_output_text(cmd, timeout=10).strip())
+    except tuple([Exception]):
+        return _calculate_pcm_fallback_duration(file_path, input_flags)
 
 
 def format_duration(seconds):

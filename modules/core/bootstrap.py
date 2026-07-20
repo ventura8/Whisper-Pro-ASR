@@ -11,6 +11,7 @@ import sys
 from glob import glob
 from pathlib import Path
 
+from modules.core.config_helpers import _has_amd_wsl_hardware
 from modules.core.constants import INTEL_ENV_KEYS
 
 
@@ -19,13 +20,22 @@ def initialize_hardware_path():
     Core hardware detection and library path redirection.
     This MUST be called before importing any AI engines.
     """
+    _ensure_wsl_library_path()
     boot_logger = _get_boot_logger()
     device = os.getenv("ASR_DEVICE", os.getenv("DEVICE", "cpu")).lower()
     preprocess_device = os.getenv("ASR_PREPROCESS_DEVICE", "auto").lower()
     is_intel_hw = _detect_intel_hardware(boot_logger)
     is_nvidia_hw = _detect_nvidia_hardware()
-    target_lib, context_reason = _resolve_target_library(device, preprocess_device, is_nvidia_hw, is_intel_hw)
+    is_amd_hw = _detect_amd_hardware(boot_logger)
+    target_lib, context_reason = _resolve_target_library(device, preprocess_device, is_nvidia_hw, is_intel_hw, is_amd_hw)
     _activate_target_library(boot_logger, target_lib, context_reason)
+
+
+def _ensure_wsl_library_path():
+    if os.path.exists("/usr/lib/wsl/lib"):
+        ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+        if "/usr/lib/wsl/lib" not in ld_path:
+            os.environ["LD_LIBRARY_PATH"] = f"/usr/lib/wsl/lib:{ld_path}" if ld_path else "/usr/lib/wsl/lib"
 
 
 def _get_boot_logger():
@@ -65,6 +75,22 @@ def _has_intel_drm_vendor() -> bool:
     return False
 
 
+def _detect_amd_hardware(_boot_logger) -> bool:
+    if os.path.exists("/dev/kfd") or _has_amd_wsl_hardware():
+        return True
+    return _has_amd_drm_vendor()
+
+
+def _has_amd_drm_vendor() -> bool:
+    for vendor_path in Path("/sys/class/drm").glob("card*/device/vendor"):
+        try:
+            if vendor_path.read_text(encoding="utf-8").strip().lower() == "0x1002":
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _detect_nvidia_hardware() -> bool:
     if os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl") or os.path.exists("/dev/nvidia-uvm"):
         return True
@@ -79,14 +105,64 @@ def _detect_nvidia_via_ctranslate2() -> bool:
         return False
 
 
-def _resolve_target_library(device: str, preprocess_device: str, is_nvidia_hw: bool, is_intel_hw: bool) -> tuple[str | None, str]:
+def _resolve_target_library(
+    device: str, preprocess_device: str, is_nvidia_hw: bool, is_intel_hw: bool, is_amd_hw: bool
+) -> tuple[str | None, str]:
+    dual_res = _check_dual_gpu_path(device, preprocess_device, is_nvidia_hw, is_amd_hw)
+    if dual_res:
+        return dual_res
+    nvidia_res = _check_nvidia_library(device, is_nvidia_hw)
+    if nvidia_res:
+        return nvidia_res
+    amd_res = _check_amd_library(device, preprocess_device, is_amd_hw)
+    if amd_res:
+        return amd_res
+    intel_res = _check_intel_library(device, preprocess_device, is_intel_hw)
+    if intel_res:
+        return intel_res
+    return _check_cpu_library()
+
+
+def _check_dual_gpu_path(device: str, preprocess_device: str, is_nvidia_hw: bool, is_amd_hw: bool) -> tuple[str, str] | None:
+    if is_nvidia_hw and is_amd_hw:
+        if _is_explicit_amd_device(device.lower()) or _is_explicit_amd_device(preprocess_device.lower()):
+            return _check_amd_library(device, preprocess_device, is_amd_hw)
+    return None
+
+
+def _check_nvidia_library(device: str, is_nvidia_hw: bool) -> tuple[str, str] | None:
     if _should_use_nvidia_path(device, is_nvidia_hw):
         return "/app/libs/nvidia", "NVIDIA CUDA"
+    return None
+
+
+def _check_amd_library(device: str, preprocess_device: str, is_amd_hw: bool) -> tuple[str, str] | None:
+    if _should_use_amd_path(device, is_amd_hw) or _should_use_amd_path(preprocess_device, is_amd_hw):
+        return "/app/libs/amd", "AMD ROCm"
+    return None
+
+
+def _check_intel_library(device: str, preprocess_device: str, is_intel_hw: bool) -> tuple[str, str] | None:
     if _should_use_intel_path(device, is_intel_hw) or _should_use_intel_path(preprocess_device, is_intel_hw):
         return "/app/libs/intel", "Intel OpenVINO"
+    return None
+
+
+def _check_cpu_library() -> tuple[str | None, str]:
     if os.path.exists("/app/libs/cpu"):
         return "/app/libs/cpu", "CPU Runtime"
     return None, "Default"
+
+
+def _is_explicit_amd_device(normalized: str) -> bool:
+    return normalized in {"amd", "rocm", "dml", "directml"} or normalized.startswith("amd")
+
+
+def _should_use_amd_path(device: str, is_amd_hw: bool) -> bool:
+    if not os.path.exists("/app/libs/amd"):
+        return False
+    normalized = device.lower()
+    return _is_explicit_amd_device(normalized) or (normalized == "auto" and is_amd_hw)
 
 
 def _should_use_nvidia_path(device: str, is_nvidia_hw: bool) -> bool:

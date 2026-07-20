@@ -5,7 +5,7 @@
 ![Pylint](https://img.shields.io/badge/Pylint-10.00%2F10-brightgreen)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-**Whisper Pro ASR** is a high-performance transcription microservice with **speaker diarization**, optimized for the **Whisper Large V3** model. It delivers enterprise-grade performance with native hardware acceleration for **Intel Core Ultra NPUs**, **Integrated GPUs**, and **NVIDIA CUDA** environments.
+**Whisper Pro ASR** is a high-performance transcription microservice with **speaker diarization**, optimized for the **Whisper Large V3** model. It delivers enterprise-grade performance with native hardware acceleration for **Intel Core Ultra NPUs**, **Integrated GPUs**, **NVIDIA CUDA**, and **AMD ROCm/DirectML** environments.
 
 Engineered for seamless integration with **Bazarr** and the broader media automation stack, it offloads computationally intensive AI tasks from your primary system resources, providing industrial-strength transcription with speaker identification and rapid hardware context switching.
 
@@ -57,6 +57,15 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [ gpu ]
+
+    # 3. AMD GPU (ROCm / DirectML via ONNX Runtime)
+    # Linux AMD hosts:
+    # devices:
+    #   - /dev/kfd:/dev/kfd # AMD KFD (ROCm GPU driver)
+    #   - /dev/dri:/dev/dri # DRM render nodes
+    # Windows 11 / WSL2 AMD hosts:
+    # devices:
+    #   - /dev/dxg:/dev/dxg # WSL GPU bridge (DirectML)
     
     environment:
       # --- [SSD WRITE PROTECTION] ---
@@ -81,7 +90,7 @@ services:
 2. Launch: `docker compose up -d`
 
 > [!TIP]
-> **Autonomous Hardware Resolution**: The engine automatically detects and adapts to your specific hardware (NVIDIA, Intel NPU, or Integrated GPU), optimizing the processing pipeline without requiring manual intervention.
+> **Autonomous Hardware Resolution**: The engine automatically detects and adapts to your specific hardware (NVIDIA CUDA, AMD ROCm/DirectML, Intel NPU, or Integrated GPU), optimizing the processing pipeline without requiring manual intervention.
 
 ## Frontend Quality Gates
 
@@ -137,7 +146,7 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 
 ### Precision Architecture
 
-- **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA**, **Intel OpenVINO**, and **Generic CPU** runtimes.
+- **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA**, **AMD ROCm/DirectML**, **Intel OpenVINO**, and **Generic CPU** runtimes.
 - **Re-entrant Hardware Orchestration**: Utilizes a sophisticated thread-local locking system (`model_lock_ctx` in `scheduler.py`) that allows complex pipelines (UVR → ASR → Diarization) to share a single hardware claim without deadlocking.
 - **FFmpeg 8.1.0 Integration**: Features optimized hardware-accelerated decoding. All media (MKV, AVI, MP4, etc.) is automatically standardized to **16kHz Mono WAV** using the `utils.py` core before entering the AI pipeline for maximum accuracy.
 
@@ -176,7 +185,7 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 - **Interactive Documentation**: Full OpenAPI/Swagger interface available at `/docs` for testing and endpoint exploration.
 - **Live SRT Streaming**: Features a real-time, auto-scrolling SubRip (SRT) display during processing, providing immediate visual feedback identical to the final output.
 - **Persistent History Dashboard**: Maintains a durable log of all ASR and Language Detection tasks, including the hardware unit used for each completed task. Completed transcriptions are stored indefinitely and can be downloaded as `.srt` files directly from the dashboard.
-- **Industrial Telemetry**: Real-time progress monitoring, including completion percentages (%), segment counts (`Seg 11 | 01:20 / 05:00`), active processing stages (e.g., UVR Preprocessing, Transcribing), and detailed hardware state reporting. NVIDIA usage is sourced from `nvidia-smi`, while Intel GPU and NPU utilization prefer native device counters before falling back to Windows performance counters or task/activity inference when needed.
+- **Industrial Telemetry**: Real-time progress monitoring, including completion percentages (%), segment counts (`Seg 11 | 01:20 / 05:00`), active processing stages (e.g., UVR Preprocessing, Transcribing), and detailed hardware state reporting. NVIDIA usage is sourced from `nvidia-smi`; AMD GPU utilization is tracked by task and preprocessor activity inference (reporting `100%` when busy, `0%` when idle); Intel GPU and NPU utilization prefer native device counters before falling back to Windows performance counters or task/activity inference when needed.
 - **Granular Performance Auditing**: Every task provides a detailed breakdown of its execution phases, including exact time spent in **Queue**, **Vocal Isolation**, and **AI Inference**.
 - **Material Design Dashboard**: A comprehensive monitoring interface at `/dashboard` (or the root `/` when accessed via browser) featuring live task progress bars, system resource visualization, real-time auto-scrolling logs, and a **Live Refresh** toggle with fixed polling intervals (1s, 2s, 5s, 10s).
 - **Bazarr Optimized**: Purpose-built for high-volume subtitle automation with stable SRT, VTT, and verbose JSON output formats.
@@ -185,17 +194,17 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 
 ### 🧩 Hardware Compatibility Matrix
 
-| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
-| :--- | :---: | :---: | :---: | :---: |
-| **Media Standardization** | ✅ | ✅ | ✅ | ✅ |
-| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
-| **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
-| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
-| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
+| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | AMD (ROCm/DirectML) | Intel iGPU / Arc | Intel NPU |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Media Standardization** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (ONNX ROCm/DirectML) | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### System Architecture
 
-The service utilizes a **Heterogeneous Model Pool** to orchestrate tasks across NVIDIA GPUs, Intel NPUs, and CPUs simultaneously, with integrated WhisperX diarization and configurable model lifecycle management. For a deep dive into the processing pipelines, resource locking, and hardware acceleration logic, see the [Technical Architecture](docs/ARCHITECTURE.md) documentation.
+The service utilizes a **Heterogeneous Model Pool** to orchestrate tasks across NVIDIA GPUs, AMD GPUs, Intel NPUs, and CPUs simultaneously, with integrated WhisperX diarization and configurable model lifecycle management. For a deep dive into the processing pipelines, resource locking, and hardware acceleration logic, see the [Technical Architecture](docs/ARCHITECTURE.md) documentation.
 
 > [!TIP]
 > View the [Concurrency & Resource Orchestration](docs/CONCURRENCY.md) guide for details on parallel preprocessing and pre-emption.

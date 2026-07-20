@@ -117,7 +117,7 @@ def _is_asr_stage(stage: str) -> bool:
 
 
 def _supports_asr_stage_on_unit(unit_type: str) -> bool:
-    if unit_type == "CUDA":
+    if unit_type in ["CUDA", "AMD"]:
         return True
     if unit_type in ["GPU", "NPU"]:
         if openvino_resolver.is_openvino_family_disabled(unit_type):
@@ -373,14 +373,22 @@ def _resolve_unit_utilization(unit_type: str, unit_id: Any) -> int | None:
     if unit_type == "CPU":
         return None
 
-    result: int | None = None
-    if unit_type == "CUDA":
-        result = _resolve_cuda_utilization(unit_id)
-    elif unit_type == "GPU":
-        result = _resolve_intel_unit_utilization("GPU", unit_id, exclude_nvidia=True)
-    elif unit_type == "NPU":
-        result = _resolve_intel_unit_utilization("NPU", unit_id, exclude_nvidia=False)
-    return result
+    resolvers = {
+        "CUDA": lambda: _resolve_cuda_utilization(unit_id),
+        "AMD": lambda: _resolve_amd_utilization(unit_id),
+        "GPU": lambda: _resolve_intel_unit_utilization("GPU", unit_id, exclude_nvidia=True),
+        "NPU": lambda: _resolve_intel_unit_utilization("NPU", unit_id, exclude_nvidia=False),
+    }
+    resolver = resolvers.get(unit_type)
+    return resolver() if resolver else None
+
+
+def _resolve_amd_utilization(unit_id: Any) -> int:
+    idx = _resolve_index(unit_id)
+    inactive_result = _inactive_accelerator_zero_result("AMD", unit_id, idx)
+    if inactive_result is not None:
+        return inactive_result
+    return _probe_activity_fallback(unit_id, idx, "AMD", 100, exclude_nvidia=False)
 
 
 def _resolve_intel_unit_utilization(unit_type: str, unit_id: Any, *, exclude_nvidia: bool) -> int:

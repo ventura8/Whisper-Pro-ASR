@@ -37,8 +37,7 @@ def _create_non_intel_engine(engine_type: str, model_id: str, unit: dict) -> Bas
         return OpenaiWhisperEngine(model_id, device=_resolve_device_str(unit))
 
     if engine_type == engine_registry.ENGINE_WHISPERX:
-        logger.info("[EngineFactory] Loading WhisperXEngine on %s", unit["name"])
-        return WhisperXEngine(model_id, device=_resolve_device_str(unit), compute_type=config.COMPUTE_TYPE)
+        return _create_whisperx_engine(model_id, unit)
 
     if engine_type != engine_registry.ENGINE_FASTER_WHISPER:
         supported = ", ".join(engine_registry.supported_engines())
@@ -63,17 +62,33 @@ def _resolve_device_str(unit: dict) -> str:
     return "cpu"
 
 
+def _coerce_cpu_compute_type(target_device: str, compute_type: str) -> str:
+    """Coerce float16 compute_type to int8 when running CTranslate2/WhisperX on CPU."""
+    if target_device == "cpu" and compute_type == "float16":
+        return "int8"
+    return compute_type
+
+
 def _create_faster_whisper_engine(model_id: str, unit: dict) -> FasterWhisperEngine:
     logger.info("[EngineFactory] Loading FasterWhisperEngine (CTranslate2) on %s", unit["name"])
     target_device = _resolve_device_str(unit)
     if target_device == "cpu" and unit["type"] in ["NPU", "GPU"]:
         logger.info("[EngineFactory] Intel accelerator detected. Faster-Whisper will fall back to CPU for Whisper slot.")
 
+    compute_type = _coerce_cpu_compute_type(target_device, config.COMPUTE_TYPE)
+
     return FasterWhisperEngine(
         model_id,
         device=target_device,
         device_index=unit.get("index", 0),
-        compute_type=config.COMPUTE_TYPE,
+        compute_type=compute_type,
         cpu_threads=config.ASR_THREADS,
         download_root=config.OV_CACHE_DIR,
     )
+
+
+def _create_whisperx_engine(model_id: str, unit: dict) -> WhisperXEngine:
+    logger.info("[EngineFactory] Loading WhisperXEngine on %s", unit["name"])
+    target_device = _resolve_device_str(unit)
+    compute_type = _coerce_cpu_compute_type(target_device, config.COMPUTE_TYPE)
+    return WhisperXEngine(model_id, device=target_device, compute_type=compute_type)

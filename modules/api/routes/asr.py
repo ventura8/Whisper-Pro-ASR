@@ -128,6 +128,7 @@ def _setup_thread_context(request: Request, params: RequestParams) -> None:
         sanitized_params["hf_token"] = "".join(["[", "MASKED", "]"])
     utils.THREAD_CONTEXT.request_json = sanitized_params
     utils.THREAD_CONTEXT.endpoint = request.url.path
+    utils.THREAD_CONTEXT.clean_audio = params.get("clean_audio")
 
 
 def _perform_transcription_task(
@@ -158,9 +159,7 @@ def _perform_transcription_task(
 
 
 def _get_transcription_source(source_path: str) -> tuple[Optional[str], Optional[ApiError]]:
-    if not config.ENABLE_VOCAL_SEPARATION:
-        return routes_utils.get_clean_wav_or_error(source_path)
-    return None, None
+    return routes_utils.get_clean_wav_or_error(source_path)
 
 
 def _initialize_transcription_context(
@@ -255,6 +254,12 @@ def _apply_prompt_and_format_flags(
     params["subtitle_highlight_words"] = _parse_subtitle_highlight(query_params, form_data)
     params["vad_filter"] = _parse_bool_param(query_params, form_data, "vad_filter", True)
     params["word_timestamps"] = _parse_bool_param(query_params, form_data, "word_timestamps", False)
+    clean_audio = _parse_bool_param(query_params, form_data, "clean_audio", None)
+    if clean_audio is None:
+        clean_audio = _parse_bool_param(query_params, form_data, "vocal_separation", None)
+    if clean_audio is None:
+        clean_audio = _parse_bool_param(query_params, form_data, "enable_vocal_separation", None)
+    params["clean_audio"] = clean_audio
     if params["subtitle_highlight_words"]:
         params["word_timestamps"] = True
 
@@ -295,13 +300,13 @@ def _pick_first(
     return default
 
 
-def _parse_bool_param(query_params: QueryParams, form_data: FormData, key: str, default: bool) -> bool:
+def _parse_bool_param(query_params: QueryParams, form_data: FormData, key: str, default: Optional[bool]) -> Optional[bool]:
     val = query_params.get(key)
     if val in (None, ""):
         val = form_data.get(key)
     if val in (None, ""):
-        val = default
-    return str(val).lower() == "true"
+        return default
+    return str(val).lower() in ("true", "1", "yes")
 
 
 def _parse_int_param(

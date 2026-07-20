@@ -80,7 +80,7 @@ def test_resolve_target_library_prefers_intel_for_auto_preprocess_when_intel_ava
     """Bootstrap should prefer Intel ONNX path when AUTO preprocessing can use Intel hardware."""
     resolve_target_library = getattr(bootstrap, "_resolve_target_library")
     with mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path in {"/app/libs/intel", "/app/libs/nvidia"}):
-        target, reason = resolve_target_library("auto", "auto", False, True)
+        target, reason = resolve_target_library("auto", "auto", False, True, False)
 
     assert target == "/app/libs/intel"
     assert reason == "Intel OpenVINO"
@@ -303,3 +303,15 @@ def test_device_open_probe_success_closes_fd_and_access_diag_handles_uid_failure
     ):
         getattr(bootstrap, "_log_intel_access_diagnostics")(logger)
     logger.warning.assert_not_called()
+
+
+def test_detect_amd_hardware_wsl_without_driver_returns_false():
+    """_detect_amd_hardware returns False when /dev/dxg exists without AMD WSL driver."""
+    detect_amd = getattr(bootstrap, "_detect_amd_hardware")
+    logger = mock.MagicMock()
+    with (
+        mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda p: p == "/dev/dxg"),
+        mock.patch.object(bootstrap, "_has_amd_drm_vendor", return_value=False),
+        mock.patch("modules.core.config_helpers._is_amd_wsl_driver_present", return_value=False),
+    ):
+        assert detect_amd(logger) is False

@@ -164,4 +164,3 @@ completed/failed → (archived)  (moved to history; removed from active list)
 - [ ] No unknown status leaks to dashboard under normal or stress-test conditions
 - [ ] Preemption/resumption cycle preserves deterministic ordering during transitions
 - [ ] No placeholder-like status/stage values appear in dashboard payload or rendered UI under normal or stress conditions
-

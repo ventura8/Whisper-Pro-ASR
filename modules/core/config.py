@@ -31,7 +31,7 @@ HOST = os.environ.get("HOST") or ".".join(["0", "0", "0", "0"])
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.1.6"
+VERSION = "1.2.0"
 HARDWARE_UNITS: list[dict[str, str]] = []  # Global registry for accelerator orchestration
 DIARIZATION_HF_TOKEN = os.environ.get("DIARIZATION_HF_TOKEN", "").strip()
 
@@ -42,6 +42,7 @@ CPU_CORE_LIMIT = int(os.environ.get("CPU_CORE_LIMIT", 4))
 MAX_CUDA = get_unit_limit("MAX_CUDA_UNITS", 1, min_value=0)
 MAX_GPU = get_unit_limit("MAX_GPU_UNITS", 1, min_value=0)
 MAX_NPU = get_unit_limit("MAX_NPU_UNITS", 1, min_value=0)
+MAX_AMD = get_unit_limit("MAX_AMD_UNITS", 1, min_value=0)
 MAX_CPU = get_unit_limit("MAX_CPU_UNITS", 1, min_value=1)
 
 # Memory reclamation behavior (unloads models when idle if True)
@@ -76,7 +77,7 @@ else:
 
 # --- [HARDWARE DETECTION] ---
 logger.debug("Performing hardware detection...")
-_DETECTED_DEVICE, _DETECTED_PREP_DEVICE, _DETECTED_COMPUTE = detect_hardware(MAX_CUDA, MAX_GPU, MAX_NPU, HARDWARE_UNITS)
+_DETECTED_DEVICE, _DETECTED_PREP_DEVICE, _DETECTED_COMPUTE = detect_hardware(MAX_CUDA, MAX_GPU, MAX_NPU, MAX_AMD, HARDWARE_UNITS)
 
 # --- [DEVICE ASSIGNMENT] ---
 if ASR_DEVICE_ENV == "AUTO":
@@ -134,8 +135,8 @@ if ASR_ENGINE == "INTEL-WHISPER" and ASR_ENV == DEFAULT_MODEL:
 logger.debug("ASR Engine set to: %s", ASR_ENGINE)
 
 # --- [UI & LOGGING DESCRIPTORS] ---
-ASR_DEVICE_NAME = "NVIDIA GPU" if DEVICE == "CUDA" else DEVICE
-PREPROCESS_DEVICE_NAME = "NVIDIA GPU" if PREPROCESS_DEVICE == "CUDA" else PREPROCESS_DEVICE
+ASR_DEVICE_NAME = "NVIDIA GPU" if DEVICE == "CUDA" else ("AMD GPU" if DEVICE == "AMD" else DEVICE)
+PREPROCESS_DEVICE_NAME = "NVIDIA GPU" if PREPROCESS_DEVICE == "CUDA" else ("AMD GPU" if PREPROCESS_DEVICE == "AMD" else PREPROCESS_DEVICE)
 
 # Refine names using hardware properties for the startup banner
 if ASR_DEVICE_ENV == "AUTO" and DEVICE in ["NPU", "GPU", "CPU"]:
@@ -439,7 +440,7 @@ INITIAL_PROMPT = os.environ.get(
 )
 
 # --- [PREPROCESSING CONFIGURATION] ---
-ENABLE_VOCAL_SEPARATION = os.environ.get("ENABLE_VOCAL_SEPARATION", "false").lower() == "true"
+ENABLE_VOCAL_SEPARATION = os.environ.get("ENABLE_VOCAL_SEPARATION", "false").strip().lower() in ("true", "1", "yes")
 
 VOCAL_SEPARATION_SEGMENT_DURATION = int(os.environ.get("VOCAL_SEPARATION_SEGMENT_DURATION", 600))
 

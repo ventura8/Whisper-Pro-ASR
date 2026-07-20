@@ -29,7 +29,8 @@ services:
     # 1. Intel NPU / iGPU / Arc
     # Linux Intel hosts:
     # group_add:
-    #   - "991"  # Intel render/accel group on Linux hosts
+    #   - "991"  
+    # Intel render/accel group on Linux hosts
     # devices:
     #   - /dev/dri:/dev/dri  # Map all Intel GPU render nodes (multi-GPU safe)
     #   - /dev/accel:/dev/accel  # Map all Intel NPU accel nodes (multi-NPU safe)
@@ -49,6 +50,13 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
+    # 3. AMD Radeon Silicon (ROCm / DirectML)
+    # Linux & Windows 11 / WSL2 AMD hosts:
+    # devices:
+    # - /dev/kfd:/dev/kfd # AMD ROCm Kernel Fusion Driver node (Linux bare-metal only, not WSL2)
+    # - /dev/dri:/dev/dri # AMD GPU Direct Rendering Manager render nodes
+    # - /dev/dxg:/dev/dxg  # Windows 11 / WSL2 AMD GPU bridge (replaces /dev/kfd via librocdxg)
+
     environment:
       # Optional: host timezone and identity mapping overrides (set in .env or shell environment).
       - TZ=${TZ:-UTC}
@@ -63,11 +71,13 @@ services:
       - ONEAPI_DEVICE_SELECTOR=${ONEAPI_DEVICE_SELECTOR:-}
       - ZE_AFFINITY_MASK=${ZE_AFFINITY_MASK:-}
       - OCL_ICD_VENDORS=${OCL_ICD_VENDORS:-}
+      # AMD ROCm / WSL2 runtime hints.
+      - HSA_ENABLE_DXG_DETECTION=1
       # Speaker diarization token (Hugging Face).
       - DIARIZATION_HF_TOKEN=${DIARIZATION_HF_TOKEN:-}
 
       # --- [ENGINE CONFIGURATION] ---
-      # Hardware Target: AUTO (Automated detection), CUDA (NVIDIA), CPU
+      # Hardware Target: AMD (ROCm / DirectML / MIGraphX)
       - ASR_DEVICE=AUTO
       # Computation Precision: AUTO, int8, float16 (default: AUTO)
       - ASR_COMPUTE_TYPE=AUTO
@@ -97,7 +107,7 @@ services:
       # --- [PREPROCESSING (UVR / MDX-NET)] ---
       # NOTE: ASR_PREPROCESS_DEVICE controls UVR preprocessing only.
       # It is independent from ASR_ENGINE selection for Whisper inference.
-      # Target Device: AUTO, CPU, CUDA (NVIDIA), GPU (Intel), NPU (Intel)
+      # Target Device: AUTO, CPU, CUDA (NVIDIA), AMD (ROCm), GPU (Intel), NPU (Intel)
       - ASR_PREPROCESS_DEVICE=AUTO
       # Isolation Model Filename
       - VOCAL_SEPARATION_MODEL=UVR-MDX-NET-Inst_HQ_3.onnx
@@ -125,10 +135,11 @@ services:
       # --- [ACCELERATOR ORCHESTRATION] ---
       # Control how many physical hardware units are utilized. 
       # Default: 1 (Safest for multi-service environments). Set to 'ALL' to use everything.
-      - MAX_CUDA_UNITS=1
-      - MAX_GPU_UNITS=1
-      - MAX_NPU_UNITS=1
-      - MAX_CPU_UNITS=1
+      # - MAX_CUDA_UNITS=1
+      # - MAX_GPU_UNITS=1
+      # - MAX_NPU_UNITS=1
+      # - MAX_AMD_UNITS=1
+      # - MAX_CPU_UNITS=1
 
       # --- [MEDIA PROCESSING] ---
       # Hardware Acceleration: none (CPU), cuda (NVIDIA), vaapi, qsv (Intel)
@@ -150,9 +161,9 @@ services:
       # — no ENOSPC crash will occur.
       # - WHISPER_TEMP_MIN_FREE_MB=2048
 
-    # RAM-backed temp storage for transient processing files (SSD protection).
-    # 2G is sufficient for most movies (≤4h).  Longer files automatically
-    # fall back to SSD-backed persistent storage when tmpfs runs low.
+      # RAM-backed temp storage for transient processing files (SSD protection).
+      # 2G is sufficient for most movies (≤4h).  Longer files automatically
+      # fall back to SSD-backed persistent storage when tmpfs runs low.
     tmpfs:
       - /tmp/whisper:size=2G
       - /tmp/numba-cache:size=128M
@@ -162,6 +173,8 @@ services:
       - ./model_cache:/app/model_cache
       # Persistent storage for task history, telemetry, and system logs
       - ./data:/app/data
+      # Windows 11 / WSL2 GPU host driver bridge (ROCm / CUDA / DirectX / librocdxg)
+      - /usr/lib/wsl:/usr/lib/wsl
       # Recommended: Mirror your Bazarr media mappings here for instant (0-copy) local processing
       # If paths match, Whisper Pro reads files directly instead of requiring uploads.
       # - /mnt/nas/media:/media

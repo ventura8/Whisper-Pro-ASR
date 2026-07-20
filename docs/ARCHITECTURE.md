@@ -1,6 +1,6 @@
 # Technical Architecture
 
-Whisper Pro ASR implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX), with integrated speaker diarization and configurable model lifecycle management.
+Whisper Pro ASR implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX, AMD Radeon), with integrated speaker diarization and configurable model lifecycle management.
 
 ## Concurrency Priority Policy
 
@@ -35,13 +35,13 @@ All core runtime modules are consolidated under `modules/core/` for improved org
 
 ### 🧩 Hardware Compatibility Matrix
 
-| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
-| :--- | :---: | :---: | :---: | :---: |
-| **Media Standardization** | ✅ | ✅ | ✅ | ✅ |
-| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
-| **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
-| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
-| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
+| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | AMD (ROCm/DirectML) | Intel iGPU / Arc | Intel NPU |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Media Standardization** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (ONNX ROCm/DirectML) | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ---
 
@@ -71,8 +71,10 @@ graph TD
     F --> G["Faster-Whisper Inference"]
     G -->|Heterogeneous Parallel| H{"Unit Pool"}
     H -->|NVIDIA| I["CUDA Acceleration"]
+    H -->|AMD| AMD["ONNX ROCm/DirectML (UVR) + CPU ASR"]
     H -->|Intel| J["OpenVINO/CPU Pipeline"]
     I --> K["Segment Assembly"]
+    AMD --> K
     J --> K
     end
 
@@ -203,10 +205,11 @@ The system features a thread-aware logging and telemetry engine designed for ind
 
 ---
 
-## 🏛 Hardware Interface & Host Dependencies
+## 🏐 Hardware Interface & Host Dependencies
 
 - **Intel NPU/GPU**: Leverages `/dev/dri` and `/dev/accel` nodes.
 - **NVIDIA CUDA**: Requires the **NVIDIA Container Toolkit** on the host.
+- **AMD GPU (ROCm/DirectML)**: Leverages `/dev/kfd` and `/dev/dri` on Linux; uses `/dev/dxg` (WSL GPU bridge) on Windows. `onnxruntime-rocm` is isolated under `/app/libs/amd` and loaded automatically when AMD hardware is detected. Whisper ASR runs on CPU while UVR vocal isolation offloads to the AMD GPU via ONNX Runtime ROCm/DirectML.
 - **SSD Optimization**: All transient I/O is redirected to a RAM-backed `tmpfs` volume to prevent physical wear.
 - **Standardization Layer**: All incoming media (MKV, AVI, MP4, etc.) is standardized to 16kHz Mono WAV before entering the pipeline, ensuring consistent results across all formats.
 - **Diarization Models**: WhisperX alignment and PyAnnote diarization models are cached per hardware unit in `_ALIGN_POOL` and `_DIARIZE_POOL`. These are purged alongside Whisper models during `unload_models()`.

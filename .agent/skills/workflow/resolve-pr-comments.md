@@ -604,4 +604,3 @@ git push
 - [ ] Mergeable status confirmed
 - [ ] Ready for merge
 ```
-

@@ -4,7 +4,7 @@ Use this skill for container build/run/deploy changes, hardware passthrough, and
 
 ## Objective
 
-Ensure stable containerized operation across CPU, Intel, and NVIDIA hosts.
+Ensure stable containerized operation across CPU, Intel, NVIDIA, and AMD hosts.
 
 ## Runtime Checklist
 
@@ -12,6 +12,8 @@ Ensure stable containerized operation across CPU, Intel, and NVIDIA hosts.
    - Intel Linux: `/dev/dri` and `/dev/accel`; when render/accel node ACLs require `group_add`, derive the host render/accel device GID (for example via `stat -c '%g' /dev/dri/renderD* /dev/accel/*`) and configure that value. `991` is environment-specific and only an example.
    - Intel Windows/WSL2: `/dev/dxg` plus `/dev/dri` and `/dev/accel` when WSL exposes them
    - NVIDIA: container toolkit + GPU reservation
+   - AMD Linux (ROCm): `/dev/kfd` and `/dev/dri` device mapping
+   - AMD Windows/WSL2 (DirectML): `/dev/dxg` device mapping
 2. Confirm persistent volumes:
    - `model_cache` for model and compilation caches
    - `state`/`data` for history, telemetry, logs

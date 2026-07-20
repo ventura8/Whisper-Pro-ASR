@@ -15,7 +15,8 @@ function _resolveHwPrefixMatch(uid, unitId) {
     const mapping = [
         ['cuda', 'rocket_launch', 'NVIDIA GPU'],
         ['npu', 'psychology_alt', 'Intel NPU'],
-        ['gpu', 'developer_board', 'Intel GPU']
+        ['gpu', 'developer_board', 'Intel GPU'],
+        ['amd', 'bolt', 'AMD GPU']
     ];
     const match = mapping.find(([prefix]) => uid.startsWith(prefix));
     if (!match) {
@@ -60,6 +61,7 @@ function _normalizeHardwareFamily(unit) {
     if (source.startsWith('cuda')) return 'cuda';
     if (source.startsWith('npu')) return 'npu';
     if (source.startsWith('gpu')) return 'gpu';
+    if (source.startsWith('amd')) return 'amd';
     return source;
 }
 

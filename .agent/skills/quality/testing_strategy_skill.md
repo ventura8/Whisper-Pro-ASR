@@ -248,4 +248,3 @@ npm run test:js -- tests/dashboard_main.test.js --coverage
 - Ordering determinism test confirms stable sort across calls.
 - Frontend rendering test validates all 7 statuses render correctly.
 - Paused-vs-waiting hint distinction validated in frontend test.
-

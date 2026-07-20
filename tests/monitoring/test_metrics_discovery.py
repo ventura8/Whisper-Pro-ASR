@@ -399,6 +399,13 @@ def test_is_task_using_accelerator_cuda_stages():
     assert _is_task_using_accelerator(task_ld, "CUDA") is True
 
 
+def test_supports_asr_stage_on_unit_amd():
+    """AMD units support ASR stage tasks."""
+    from modules.monitoring.metrics_discovery import _supports_asr_stage_on_unit
+
+    assert _supports_asr_stage_on_unit("AMD") is True
+
+
 def test_is_task_using_accelerator_intel_engine():
     """Intel Whisper should use NPU/GPU accelerators."""
     from modules.core import config
@@ -695,3 +702,50 @@ def test_intel_probe_real_sample_hold_expires_to_activity_fallback():
 
     assert first == 55
     assert second == 100
+
+
+# --- AMD Utilization Resolver ---
+
+
+def test_resolve_amd_utilization_inactive_returns_zero():
+    """Inactive AMD unit: _inactive_accelerator_zero_result zeroes result and clears held sample."""
+    with (
+        mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value={"active_tasks": []}),
+        mock.patch("modules.inference.runtime.model_manager.PREPROCESSOR_POOL", {}),
+    ):
+        assert metrics_discovery._resolve_amd_utilization("amd:0") == 0
+
+
+def test_resolve_amd_utilization_active_task_returns_100():
+    """Active AMD task: _inactive_accelerator_zero_result returns None → _probe_activity_fallback returns 100."""
+    active_amd_task = [{"unit_type": "AMD", "unit_id": "amd:0", "stage": "Vocal Isolation"}]
+    with (
+        mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value={"active_tasks": active_amd_task}),
+        mock.patch("modules.inference.runtime.model_manager.PREPROCESSOR_POOL", {}),
+    ):
+        assert metrics_discovery._resolve_amd_utilization("amd:0") == 100
+
+
+def test_resolve_amd_utilization_preprocessor_lock_returns_100():
+    """Locked AMD preprocessor with no active tasks: _probe_activity_fallback reports 100 via lock path."""
+    pm = mock.MagicMock()
+    pm.device_type = "AMD"
+    pm.device_id = "amd:0"
+    pm.unit = {"id": "amd:0", "name": "AMD Radeon"}
+    pm.lock.locked.return_value = True
+
+    with (
+        mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value={"active_tasks": []}),
+        mock.patch.dict("modules.inference.runtime.model_manager.PREPROCESSOR_POOL", {"amd:0": pm}, clear=True),
+    ):
+        assert metrics_discovery._resolve_amd_utilization("amd:0") == 100
+
+
+def test_resolve_unit_utilization_amd():
+    """_resolve_unit_utilization dispatching for 'AMD' calls _resolve_amd_utilization."""
+    active_amd_task = [{"unit_type": "AMD", "unit_id": "amd:0", "stage": "Vocal Isolation"}]
+    with (
+        mock.patch("modules.inference.scheduler.get_service_stats_minimal", return_value={"active_tasks": active_amd_task}),
+        mock.patch("modules.inference.runtime.model_manager.PREPROCESSOR_POOL", {}),
+    ):
+        assert metrics_discovery._resolve_unit_utilization("AMD", "amd:0") == 100

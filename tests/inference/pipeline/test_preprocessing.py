@@ -128,17 +128,62 @@ class TestResolveProviders:
         prep_manager._device_type = "NPU"
         prep_manager._device_id = "NPU"
         available = ["OpenVINOExecutionProvider"]
-
-        mock_core = mock.MagicMock()
-        mock_core.available_devices = ["CPU", "NPU.0"]
-
-        with (
-            mock.patch("openvino.Core", return_value=mock_core),
-            mock.patch("modules.inference.pipeline.preprocessing.config") as mock_cfg,
-        ):
+        with mock.patch("modules.inference.pipeline.preprocessing.config") as mock_cfg:
             mock_cfg.OV_CACHE_DIR = "/tmp/ov"
             _, options = prep_manager._resolve_providers(available)
             assert options[0]["device_type"] == "NPU"
+
+    def test_resolve_provider_config_amd_auto_branch(self):
+        """Test provider resolution for AMD when target_prep is AMD or AUTO."""
+        from modules.inference.pipeline.preprocessing import provider as prep_provider
+
+        with mock.patch("modules.inference.pipeline.openvino_provider_dispatch.has_amd_provider", return_value=True):
+            with mock.patch(
+                "modules.inference.pipeline.openvino_provider_dispatch.amd_provider_config", return_value=(["ROCMExecutionProvider"], [{}])
+            ):
+                res = prep_provider.resolve_provider_config_for_preprocessing(
+                    "AMD",
+                    "amd:0",
+                    ["ROCMExecutionProvider"],
+                    [],
+                    "/tmp",
+                    preprocess_threads=2,
+                )
+                assert res[0] == ["ROCMExecutionProvider"]
+
+                res_auto = prep_provider.auto_provider_config_for_preprocessing(
+                    ["ROCMExecutionProvider"],
+                    [],
+                    "/tmp",
+                    2,
+                    target_prep="AUTO",
+                )
+                assert res_auto[0] == ["ROCMExecutionProvider"]
+
+    def test_resolve_openvino_or_cpu_disabled_or_missing(self):
+        """Test _resolve_openvino_or_cpu returns CPU when missing or disabled."""
+        from modules.inference.pipeline.preprocessing import provider as prep_provider
+
+        res = prep_provider._resolve_openvino_or_cpu("GPU.0", ["CPUExecutionProvider"], [], "/tmp", 2)
+        assert res == (["CPUExecutionProvider"], [{}])
+
+        with mock.patch("modules.inference.pipeline.openvino_resolver.is_openvino_family_disabled", return_value=True):
+            res_disabled = prep_provider._resolve_openvino_or_cpu("GPU.0", ["OpenVINOExecutionProvider"], [], "/tmp", 2)
+            assert res_disabled == (["CPUExecutionProvider"], [{}])
+
+    def test_resolve_non_cuda_amd_preprocessing_cpu(self):
+        """Test _resolve_non_cuda_amd_preprocessing returns CPU for CPU target."""
+        from modules.inference.pipeline.preprocessing import provider as prep_provider
+
+        res = prep_provider._resolve_non_cuda_amd_preprocessing(
+            "CPU",
+            "CPU",
+            ["CPUExecutionProvider"],
+            available_openvino_devices=[],
+            ov_cache_dir="/tmp",
+            preprocess_threads=2,
+        )
+        assert res == (["CPUExecutionProvider"], [{}])
 
     def test_resolve_openvino_prefers_concrete_device_when_generic_and_dotted_exist(self, prep_manager):
         """When runtime reports both generic and dotted IDs, prefer exact generic-family match."""

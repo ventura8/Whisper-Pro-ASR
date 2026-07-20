@@ -440,7 +440,7 @@ class TestASREndpoint:
                 content_type="multipart/form-data",
             )
             assert response.status_code == 400
-            assert b"corrupted" in response.data
+            assert b"FFmpeg conversion failed" in response.data or b"corrupted" in response.data
 
     def test_asr_upload_empty(self, routes_client):
         """Test ASR with empty uploaded file."""

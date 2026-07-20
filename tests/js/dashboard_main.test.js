@@ -1909,7 +1909,7 @@ describe("main.js", () => {
 
     context.fetch = vi.fn(async () => ({
       json: async () => ({
-        version: "1.1.6",
+        version: "1.2.0",
         active_sessions: 1,
         queued_sessions: 2,
         system: { cpu_percent: 10, app_cpu_percent: 5, app_memory_gb: 1, memory_total_gb: 16, memory_used_gb: 8, memory_percent: 50 },
@@ -1944,7 +1944,7 @@ describe("main.js", () => {
 
     context.fetch = vi.fn(async () => ({
       json: async () => ({
-        version: "1.1.6",
+        version: "1.2.0",
         active_sessions: 1,
         queued_sessions: 1,
         system: { cpu_percent: 10, app_cpu_percent: 5, app_memory_gb: 1, memory_total_gb: 16, memory_used_gb: 8, memory_percent: 50 },

@@ -1,6 +1,7 @@
 """Provider and OpenVINO resolution helpers for preprocessing."""
 
 import os
+from typing import Optional
 
 from modules.inference.pipeline import openvino_provider_dispatch, openvino_resolver
 
@@ -88,13 +89,22 @@ def _openvino_uvr_cache_dir(base_cache_dir: str, resolved_device: str) -> str:
     return scoped
 
 
-def auto_provider_config_for_preprocessing(
+def _resolve_auto_amd(target_prep: str, available_providers: list[str]) -> Optional[ProviderConfig]:
+    if not openvino_provider_dispatch.has_amd_provider(available_providers):
+        return None
+    if target_prep == "AMD":
+        return openvino_provider_dispatch.amd_provider_config("0", available_providers)
+    if target_prep == "AUTO" and "CUDAExecutionProvider" not in available_providers:
+        return openvino_provider_dispatch.amd_provider_config("0", available_providers)
+    return None
+
+
+def _resolve_auto_accelerator(
     available_providers: list[str],
     available_openvino_devices: list[str],
     ov_cache_dir: str,
     preprocess_threads: int,
-) -> ProviderConfig:
-    """Resolve AUTO provider strategy for preprocessing."""
+) -> Optional[ProviderConfig]:
     if "CUDAExecutionProvider" in available_providers:
         return openvino_provider_dispatch.cuda_or_cpu_provider_config("0", available_providers)
 
@@ -105,8 +115,24 @@ def auto_provider_config_for_preprocessing(
             available_openvino_devices,
             preprocess_threads,
         )
+    return None
 
-    return _cpu_provider_config()
+
+def auto_provider_config_for_preprocessing(
+    available_providers: list[str],
+    available_openvino_devices: list[str],
+    ov_cache_dir: str,
+    preprocess_threads: int,
+    target_prep: str = "AUTO",
+) -> ProviderConfig:
+    """Resolve AUTO provider strategy for preprocessing."""
+    target = (target_prep or "AUTO").upper()
+    amd_cfg = _resolve_auto_amd(target, available_providers)
+    if amd_cfg:
+        return amd_cfg
+
+    accel_cfg = _resolve_auto_accelerator(available_providers, available_openvino_devices, ov_cache_dir, preprocess_threads)
+    return accel_cfg or _cpu_provider_config()
 
 
 def _resolve_openvino_or_cpu(
@@ -125,13 +151,40 @@ def _resolve_openvino_or_cpu(
 
 
 def _resolve_auto(
+    target_prep: str,
     available_providers: list[str],
     available_openvino_devices: list[str],
     ov_cache_dir: str,
     preprocess_threads: int,
 ) -> ProviderConfig:
     """Resolve AUTO provider selection strategy."""
-    return auto_provider_config_for_preprocessing(available_providers, available_openvino_devices, ov_cache_dir, preprocess_threads)
+    return auto_provider_config_for_preprocessing(
+        available_providers,
+        available_openvino_devices,
+        ov_cache_dir,
+        preprocess_threads,
+        target_prep=target_prep,
+    )
+
+
+def _resolve_non_cuda_amd_preprocessing(
+    normalized_type: str,
+    device_id: str,
+    available_providers: list[str],
+    *,
+    available_openvino_devices: list[str],
+    ov_cache_dir: str,
+    preprocess_threads: int,
+) -> ProviderConfig:
+    if normalized_type in {"OPENVINO", "GPU", "NPU"}:
+        return _resolve_openvino_or_cpu(device_id, available_providers, available_openvino_devices, ov_cache_dir, preprocess_threads)
+    return _resolve_auto(
+        normalized_type,
+        available_providers,
+        available_openvino_devices,
+        ov_cache_dir,
+        preprocess_threads,
+    )
 
 
 def resolve_provider_config_for_preprocessing(
@@ -143,16 +196,20 @@ def resolve_provider_config_for_preprocessing(
     *,
     preprocess_threads: int,
 ) -> ProviderConfig:
-    """Resolve preprocessing providers using CUDA/OpenVINO/CPU dispatch rules."""
+    """Resolve preprocessing providers using CUDA/AMD/OpenVINO/CPU dispatch rules."""
     normalized_type = (device_type or "AUTO").upper()
 
     if normalized_type == "CUDA":
         return openvino_provider_dispatch.cuda_or_cpu_provider_config(device_id, available_providers)
 
-    if normalized_type in {"OPENVINO", "GPU", "NPU"}:
-        return _resolve_openvino_or_cpu(device_id, available_providers, available_openvino_devices, ov_cache_dir, preprocess_threads)
+    if normalized_type == "AMD":
+        return openvino_provider_dispatch.amd_provider_config(device_id, available_providers)
 
-    if normalized_type == "CPU":
-        return _cpu_provider_config()
-
-    return _resolve_auto(available_providers, available_openvino_devices, ov_cache_dir, preprocess_threads)
+    return _resolve_non_cuda_amd_preprocessing(
+        normalized_type,
+        device_id,
+        available_providers,
+        available_openvino_devices=available_openvino_devices,
+        ov_cache_dir=ov_cache_dir,
+        preprocess_threads=preprocess_threads,
+    )

@@ -141,7 +141,7 @@ _POOL_LOCK = threading.Lock()
 
 
 def _is_accelerated_preprocess_device() -> bool:
-    return config.PREPROCESS_DEVICE in {"CUDA", "GPU", "NPU", "OPENVINO"}
+    return config.PREPROCESS_DEVICE in {"CUDA", "GPU", "NPU", "OPENVINO", "AMD"}
 
 
 def _pool_preprocessor_by_type(preferred_type: str):
@@ -190,11 +190,11 @@ def _preferred_preprocessor() -> typing.Any:
 def _resolve_preprocessor_for_unit(unit_id: str):
     if _is_accelerated_preprocess_device():
         # Prefer the preprocessor bound to the currently assigned accelerator unit
-        # so concurrent tasks can use distinct hardware (e.g., GPU + NPU) in parallel.
+        # so concurrent tasks can use distinct hardware (e.g., CUDA + AMD) in parallel.
         unit_preprocessor = PREPROCESSOR_POOL.get(unit_id)
         if unit_preprocessor is not None:
             unit_type = str(getattr(unit_preprocessor, "device_type", "")).upper()
-            if unit_type in {"CUDA", "GPU", "NPU", "OPENVINO"}:
+            if unit_type in {"CUDA", "GPU", "NPU", "OPENVINO", "AMD"}:
                 return unit_preprocessor
         return _preferred_preprocessor()
     return PREPROCESSOR_POOL.get(unit_id)

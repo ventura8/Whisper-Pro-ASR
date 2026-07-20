@@ -36,6 +36,7 @@ This catalog lists all available project skills and when to use them.
 - `runtime/concurrency_orchestration_skill.md`: Validate preemption, yielding, and resource orchestration.
 - `runtime/docker_runtime_ops_skill.md`: Docker runtime setup, hardware mapping, and operational checks.
 - `runtime/intel_hardware_inference_skill.md`: Intel-specific runtime and inference behavior.
+- `runtime/amd_hardware_inference_skill.md`: AMD-specific runtime, DirectML/ROCm pre-processing, and CTranslate2 CPU fallbacks.
 - `runtime/language_detection_priority_skill.md`: Priority orchestration rules and expected ASR/detect interaction.
 - `runtime/model_lifecycle_management_skill.md`: Idle timeout/offload behavior and memory lifecycle.
 - `runtime/storage_persistence_hygiene_skill.md`: Temp file cleanup, persistent volumes, and retention behavior.

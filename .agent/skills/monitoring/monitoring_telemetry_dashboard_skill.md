@@ -180,4 +180,3 @@ Any code change touching the following MUST be validated against these rules:
 - Telemetry and history tests pass: all 7 status values appear correctly in aggregations.
 - No broken status payload fields.
 - Frontend tests pass with ≥90% lines/statements coverage (branches/functions pragmatic).
-

@@ -89,7 +89,7 @@ def test_remove_temporary_asset_entry_removes_directory_branch():
         mock.patch("shutil.rmtree") as mock_rmtree,
     ):
         getattr(utils_helpers, "_remove_temporary_asset_entry")("/tmp", "preprocessing")
-        mock_rmtree.assert_called_once_with("/tmp/preprocessing")
+        mock_rmtree.assert_called_once_with(os.path.normpath("/tmp/preprocessing"))
 
 
 def test_validate_audio_true_for_existing_nonempty_file():
