@@ -85,6 +85,10 @@ def _build_ffmpeg_standardization_cmd(
         str(config.FFMPEG_THREADS),
         "-thread_queue_size",
         "2048",
+        "-err_detect",
+        "ignore_err",
+        "-fflags",
+        "+genpts+discardcorrupt",
         "-y",
         "-loglevel",
         "error",
@@ -123,6 +127,7 @@ def _execute_ffmpeg_with_watchdog(command, duration, ffmpeg_timeout, format_dura
         logger.warning("[Prep] FFmpeg execution exceeded timeout (%.1fs).", ffmpeg_timeout)
         raise RuntimeError(f"FFmpeg standardization timed out after {ffmpeg_timeout}s") from exc
     except process_exec.CommandExecutionError as exc:
+        logger.error("[Prep] FFmpeg failed execution: %s (stderr: %s)", exc, getattr(exc, "stderr", ""))
         raise RuntimeError(f"FFmpeg failed with return code {exc.returncode}") from exc
 
 

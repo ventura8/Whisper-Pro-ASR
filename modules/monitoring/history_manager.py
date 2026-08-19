@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from modules.core import config
 from modules.monitoring.history_helpers import (
     accumulate_stats,
+    backfill_single_task_filename,
+    backfill_single_task_request_json,
     backfill_task_filenames,
     iter_unique_legacy_paths,
     merge_legacy_analytics,
@@ -45,7 +47,7 @@ LEGACY_ANALYTICS_FILES = [
     os.path.join(os.path.abspath("data"), "analytics_stats.json"),
 ]
 MAX_HISTORY_DISK = 1000  # Persistent storage limit
-MAX_HISTORY_RAM = 20  # RAM cache limit (match disk limit for accurate stats)
+MAX_HISTORY_RAM = 60  # RAM cache limit for fast dashboard reads (disk persistence retains up to MAX_HISTORY_DISK)
 
 # --- [DEFERRED PERSISTENCE ENGINE] ---
 HISTORY_CACHE: List[Dict[str, Any]] = []
@@ -363,6 +365,8 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
         ensure_loaded()
         _ensure_completion_timestamp(task_data)
         _compute_elapsed_fields(task_data)
+        backfill_single_task_filename(task_data)
+        backfill_single_task_request_json(task_data)
         _update_log_count(task_data)
         _update_segments_processed(task_data)
         _log_result_shape(task_data)
@@ -531,6 +535,9 @@ def get_history() -> List[Dict[str, Any]]:
     module = sys.modules[__name__]
     # Filter out corrupted or legacy entries that don't match the task schema
     valid_tasks = [t for t in module.HISTORY_CACHE if isinstance(t, dict) and "task_id" in t]
+    for task in valid_tasks:
+        backfill_single_task_filename(task)
+        backfill_single_task_request_json(task)
     # Return only the most recent tasks for the dashboard
     return valid_tasks[:MAX_HISTORY_RAM]
 

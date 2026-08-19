@@ -28,7 +28,10 @@ function buildDashboardDom() {
     </div>
     <div id="analytics-section"></div>
     <div id="charts-section"></div>
-    <div id="settings-section"></div>
+    <div id="settings-section">
+      <input id="api-key-input" />
+      <input id="admin-api-key-input" />
+    </div>
 
     <div id="history-list"></div>
     <div id="task-list"></div>
@@ -68,6 +71,7 @@ describe("main.js", () => {
     fetchMock = vi.fn(async (url) => {
       if (url === "/history") {
         return {
+          ok: true,
           json: async () => [
             {
               task_id: "h1",
@@ -91,6 +95,7 @@ describe("main.js", () => {
         return { ok: true, json: async () => ({}) };
       }
       return {
+        ok: true,
         json: async () => ({
           version: "1.0.0",
           active_sessions: 1,
@@ -184,6 +189,11 @@ describe("main.js", () => {
       fullTaskHistory: [],
       lastStatusData: null,
       refreshEnabled: true,
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {},
+      },
     };
 
     context = loadScriptInContext(path.join(__dirname, "../../modules/monitoring/templates/dashboard/core/state.js"), baseContext);
@@ -200,6 +210,7 @@ describe("main.js", () => {
   it("handles tab switching, history rendering, settings save, and status refresh", async () => {
     context.showTab("charts");
     context.showTab("history");
+    context.showTab("settings");
     context.showTab("active");
 
     await context.updateStats();
@@ -221,6 +232,17 @@ describe("main.js", () => {
     const alerts = [];
     context.alert = (msg) => alerts.push(String(msg));
 
+    // saveSettings with API key kept in the live session inputs
+    dom.window.document.getElementById("api-key-input").value = "test_key_123";
+    fetchMock.mockResolvedValueOnce({ ok: true });
+    await context.saveSettings();
+    expect(alerts.some((msg) => msg.includes("Configuration saved!"))).toBe(true);
+    expect(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1].headers["X-API-Key"]).toBe("test_key_123");
+
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 401 });
+    await context.saveSettings();
+    expect(alerts.some((msg) => msg.includes("Failed to save settings (401)"))).toBe(true);
+
     // saveSettings catch branch
     fetchMock.mockRejectedValueOnce(new Error("settings down"));
     await context.saveSettings();
@@ -237,6 +259,11 @@ describe("main.js", () => {
     fetchMock.mockResolvedValueOnce({ ok: false });
     await context.clearTaskHistory();
     expect(alerts.some((msg) => msg.includes("Failed to clear task history."))).toBe(true);
+
+    // clearTelemetryMetrics failure branch (confirm true + non-ok)
+    fetchMock.mockResolvedValueOnce({ ok: false });
+    await context.clearTelemetryMetrics();
+    expect(alerts.some((msg) => msg.includes("Failed to clear telemetry metrics."))).toBe(true);
 
     // clearTelemetryMetrics success branch + reset callback branch
     let resetCalled = 0;
@@ -315,6 +342,7 @@ describe("main.js", () => {
 
   it("normalizes placeholder stage and status values in rendered tasks", async () => {
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.0.9",
         active_sessions: 1,
@@ -354,6 +382,7 @@ describe("main.js", () => {
 
   it("renders idle state and keeps updateStats no-op when refresh disabled", async () => {
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.0.1",
         active_sessions: 0,
@@ -433,6 +462,7 @@ describe("main.js", () => {
 
     const now = Date.now() / 1000;
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.0.2",
         active_sessions: 1,
@@ -481,6 +511,7 @@ describe("main.js", () => {
     if (etaTextNode) etaTextNode.remove();
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.0.3",
         active_sessions: 1,
@@ -516,6 +547,7 @@ describe("main.js", () => {
     await context.updateStats();
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.0.4",
         active_sessions: 0,
@@ -564,6 +596,104 @@ describe("main.js", () => {
     const html = dom.window.document.getElementById("history-list").innerHTML;
     expect(html).toContain("Intel GPU");
     expect(html).not.toContain("Intel GPU (GPU.0)");
+  });
+
+  it("renders history filename from request_json.local_path when stored filename is generic", () => {
+    evalInContext(
+      context,
+      `fullTaskHistory = ${JSON.stringify([
+        {
+          task_id: "hist-bazarr-1",
+          filename: "",
+          type: "Language Detection",
+          completed_at: "now",
+          status: "completed",
+          video_duration: 3600,
+          active_elapsed_sec: 30,
+          queue_elapsed_sec: 2,
+          request_json: {
+            local_path: "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv",
+            audio_file: "",
+          },
+          result: { detected_language: "it", confidence: 0.99 },
+          logs: ["19:00:01 LD completed"],
+        },
+      ])}`
+    );
+
+    context.renderHistory();
+    const html = dom.window.document.getElementById("history-list").innerHTML;
+    expect(html).toContain("Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv");
+    expect(html).not.toContain("Unknown Media");
+    expect(html).toContain("19:00:01 LD completed");
+  });
+
+  it("renders history filename from request_json path key when Bazarr sends path as JSON key", () => {
+    const path = "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv";
+    evalInContext(
+      context,
+      `fullTaskHistory = ${JSON.stringify([
+        {
+          task_id: "hist-bazarr-key-1",
+          filename: "Unknown Media",
+          type: "Language Detection",
+          completed_at: "now",
+          status: "failed",
+          video_duration: 0,
+          active_elapsed_sec: 0,
+          queue_elapsed_sec: 0,
+          request_json: { [path]: "" },
+          result: {},
+          logs: [],
+        },
+      ])}`
+    );
+
+    context.renderHistory();
+    const html = dom.window.document.getElementById("history-list").innerHTML;
+    expect(html).toContain("Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv");
+    expect(html).not.toContain("Unknown Media");
+  });
+
+  it("renders failed history error payload and execution logs", () => {
+    evalInContext(
+      context,
+      `fullTaskHistory = ${JSON.stringify([
+        {
+          task_id: "hist-failed-1",
+          filename: "episode.mkv",
+          type: "Language Detection",
+          completed_at: "now",
+          status: "failed",
+          video_duration: 0,
+          active_elapsed_sec: 1,
+          queue_elapsed_sec: 0,
+          request_json: { local_path: "/tv/episode.mkv" },
+          result: { error: "No audio source provided", status_code: 400 },
+          logs: ["17:31:32 [LD] No audio source provided"],
+        },
+      ])}`
+    );
+
+    context.renderHistory();
+    const html = dom.window.document.getElementById("history-list").innerHTML;
+    expect(html).toContain("No audio source provided");
+    expect(html).toContain("17:31:32 [LD] No audio source provided");
+  });
+
+  it("renders audit request payload with local_path for Bazarr path-as-key entries", () => {
+    const path = "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv";
+    const audit = context.renderAuditDetails({
+      task_id: "audit-bazarr-key",
+      caller_info: { ip: "127.0.0.1", user_agent: "Bazarr" },
+      request_json: { [path]: "" },
+      result: { error: "No audio source provided", status_code: 400 },
+    });
+
+    expect(audit).toContain("local_path");
+    expect(audit).toContain("Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv");
+    expect(audit).not.toContain("Awakenings WEBDL-1080p.mkv&quot;: &quot;&quot;");
+    expect(audit).toContain("No audio source provided");
   });
 
   it("renders slot suffix for history hardware when multiple units of the same family exist", () => {
@@ -618,6 +748,13 @@ describe("main.js", () => {
     const npu = context.getHwIconAndLabel("NPU");
     expect(gpu.label).toBe("Intel GPU");
     expect(npu.label).toBe("Intel NPU");
+  });
+
+  it("selects AMD hardware kind and bolt icon", () => {
+    expect(context._hardwareKind({ type: "AMD", id: "amd:0", name: "AMD GPU 0" })).toBe("amd");
+    expect(context._amdVisual(true, {}).icon).toBe("bolt");
+    expect(context.getHwIconAndLabel("amd:0").label).toContain("AMD GPU");
+    expect(context._normalizeHardwareFamily({ id: "amd:1", type: "AMD" })).toBe("amd");
   });
 
   it("renders hardware in history cards using history unit metadata when IDs are missing", () => {
@@ -684,9 +821,12 @@ describe("main.js", () => {
     context.showTab("history");
     await Promise.resolve();
     await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledWith("/history");
+    expect(fetchMock).toHaveBeenCalledWith("/history", {
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
 
     const card = dom.window.document.createElement("div");
+    card.className = "task-card";
     card.dataset.taskId = "a1";
     const logBuffer = dom.window.document.createElement("div");
     logBuffer.className = "log-buffer";
@@ -698,6 +838,25 @@ describe("main.js", () => {
     expect(evalInContext(context, "expandedElements.has('a1_logs')")).toBe(true);
     context.handleToggle("a1_logs", false);
     expect(evalInContext(context, "expandedElements.has('a1_logs')")).toBe(false);
+
+    const details = dom.window.document.createElement("details");
+    details.className = "js-toggle";
+    details.dataset.toggleId = "a1_logs";
+    card.appendChild(details);
+    context.bindToggleHandlers(dom.window.document.getElementById("task-list"));
+    details.open = true;
+    vi.useFakeTimers();
+    context.setTimeout = setTimeout;
+    context.clearTimeout = clearTimeout;
+    try {
+      details.dispatchEvent(new dom.window.Event("toggle"));
+      await vi.runAllTimersAsync();
+      expect(logBuffer.scrollTop).toBe(99);
+    } finally {
+      vi.useRealTimers();
+      context.setTimeout = setTimeout;
+      context.clearTimeout = clearTimeout;
+    }
   });
 
   it("covers saveSettings failure and renderHistory empty state", async () => {
@@ -765,6 +924,7 @@ describe("main.js", () => {
     const now = Date.now() / 1000;
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.4.0",
         active_sessions: 1,
@@ -804,6 +964,7 @@ describe("main.js", () => {
     dom.window.document.getElementById("task-list").appendChild(stale);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.4.1",
         active_sessions: 1,
@@ -845,6 +1006,7 @@ describe("main.js", () => {
 
   it("covers hardware status detection branches for all unit types", async () => {
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -885,6 +1047,7 @@ describe("main.js", () => {
 
     const now = Date.now() / 1000;
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.2.0",
         active_sessions: 1,
@@ -933,6 +1096,7 @@ describe("main.js", () => {
     context.handleToggle("t-adv_logs", false);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.2.1",
         active_sessions: 1,
@@ -974,6 +1138,7 @@ describe("main.js", () => {
     await context.updateStats();
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.2.2",
         active_sessions: 0,
@@ -1014,6 +1179,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1068,6 +1234,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1117,6 +1284,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1160,6 +1328,7 @@ describe("main.js", () => {
   it("covers different hardware type status detection branches", async () => {
     const now = Date.now() / 1000;
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 2,
@@ -1227,6 +1396,7 @@ describe("main.js", () => {
   it("covers CUDA GPU hardware detection with nvidia array", async () => {
     const now = Date.now() / 1000;
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1274,6 +1444,7 @@ describe("main.js", () => {
 
   it("covers CUDA GPU idle but active via telemetry.nvidia", async () => {
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 0,
@@ -1304,6 +1475,7 @@ describe("main.js", () => {
   it("covers renderHistory with card removal for inactive tasks", async () => {
     const now = Date.now() / 1000;
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1325,6 +1497,7 @@ describe("main.js", () => {
 
     // Update to remove the active task
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 0,
@@ -1351,6 +1524,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1400,6 +1574,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1446,6 +1621,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1494,6 +1670,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1540,6 +1717,7 @@ describe("main.js", () => {
     vi.setSystemTime(now * 1000);
 
     fetchMock.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({
         version: "1.3.0",
         active_sessions: 1,
@@ -1908,8 +2086,9 @@ describe("main.js", () => {
     dom.window.document.getElementById("task-list").appendChild(staleCard);
 
     context.fetch = vi.fn(async () => ({
+      ok: true,
       json: async () => ({
-        version: "1.1.6",
+        version: "1.2.0",
         active_sessions: 1,
         queued_sessions: 2,
         system: { cpu_percent: 10, app_cpu_percent: 5, app_memory_gb: 1, memory_total_gb: 16, memory_used_gb: 8, memory_percent: 50 },
@@ -1943,8 +2122,9 @@ describe("main.js", () => {
     ];
 
     context.fetch = vi.fn(async () => ({
+      ok: true,
       json: async () => ({
-        version: "1.1.6",
+        version: "1.2.0",
         active_sessions: 1,
         queued_sessions: 1,
         system: { cpu_percent: 10, app_cpu_percent: 5, app_memory_gb: 1, memory_total_gb: 16, memory_used_gb: 8, memory_percent: 50 },

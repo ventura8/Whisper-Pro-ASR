@@ -31,7 +31,7 @@ HOST = os.environ.get("HOST") or ".".join(["0", "0", "0", "0"])
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.1.6"
+VERSION = "1.2.0"
 HARDWARE_UNITS: list[dict[str, str]] = []  # Global registry for accelerator orchestration
 DIARIZATION_HF_TOKEN = os.environ.get("DIARIZATION_HF_TOKEN", "").strip()
 
@@ -42,6 +42,7 @@ CPU_CORE_LIMIT = int(os.environ.get("CPU_CORE_LIMIT", 4))
 MAX_CUDA = get_unit_limit("MAX_CUDA_UNITS", 1, min_value=0)
 MAX_GPU = get_unit_limit("MAX_GPU_UNITS", 1, min_value=0)
 MAX_NPU = get_unit_limit("MAX_NPU_UNITS", 1, min_value=0)
+MAX_AMD = get_unit_limit("MAX_AMD_UNITS", 1, min_value=0)
 MAX_CPU = get_unit_limit("MAX_CPU_UNITS", 1, min_value=1)
 
 # Memory reclamation behavior (unloads models when idle if True)
@@ -76,7 +77,7 @@ else:
 
 # --- [HARDWARE DETECTION] ---
 logger.debug("Performing hardware detection...")
-_DETECTED_DEVICE, _DETECTED_PREP_DEVICE, _DETECTED_COMPUTE = detect_hardware(MAX_CUDA, MAX_GPU, MAX_NPU, HARDWARE_UNITS)
+_DETECTED_DEVICE, _DETECTED_PREP_DEVICE, _DETECTED_COMPUTE = detect_hardware(MAX_CUDA, MAX_GPU, MAX_NPU, MAX_AMD, HARDWARE_UNITS)
 
 # --- [DEVICE ASSIGNMENT] ---
 if ASR_DEVICE_ENV == "AUTO":
@@ -134,8 +135,9 @@ if ASR_ENGINE == "INTEL-WHISPER" and ASR_ENV == DEFAULT_MODEL:
 logger.debug("ASR Engine set to: %s", ASR_ENGINE)
 
 # --- [UI & LOGGING DESCRIPTORS] ---
-ASR_DEVICE_NAME = "NVIDIA GPU" if DEVICE == "CUDA" else DEVICE
-PREPROCESS_DEVICE_NAME = "NVIDIA GPU" if PREPROCESS_DEVICE == "CUDA" else PREPROCESS_DEVICE
+DEVICE_DISPLAY_NAMES = {"CUDA": "NVIDIA GPU", "AMD": "AMD GPU"}
+ASR_DEVICE_NAME = DEVICE_DISPLAY_NAMES.get(DEVICE, DEVICE)
+PREPROCESS_DEVICE_NAME = DEVICE_DISPLAY_NAMES.get(PREPROCESS_DEVICE, PREPROCESS_DEVICE)
 
 # Refine names using hardware properties for the startup banner
 if ASR_DEVICE_ENV == "AUTO" and DEVICE in ["NPU", "GPU", "CPU"]:
@@ -256,10 +258,11 @@ except (PermissionError, OSError):
     TEMP_DIR = tempfile.gettempdir()
 
 # Persistence Directory (Should be mounted to a physical volume for history/logs)
+_PERSISTENT_FALLBACK = os.path.abspath(os.path.join(OV_CACHE_DIR, ".state"))
 PERSISTENT_DIR = _resolve_writable_dir(
     "Persistent state",
     [os.environ.get("WHISPER_PERSISTENT_DIR", "/app/data")],
-    os.path.join(_RUNTIME_FALLBACK_ROOT, "state"),
+    _PERSISTENT_FALLBACK,
 )
 
 _state_dir_env = os.environ.get("WHISPER_STATE_DIR")
@@ -269,10 +272,12 @@ else:
     _state_dir_candidates = [PERSISTENT_DIR, "./test_state"]
 
 # State and Telemetry Directory (Persistent across restarts)
+# Fallback lands in model_cache (persistent bind mount) rather than tmpfs,
+# ensuring task history survives container recreation even if /app/data is unwritable.
 STATE_DIR = _resolve_writable_dir(
     "State",
     _state_dir_candidates,
-    os.path.join(_RUNTIME_FALLBACK_ROOT, "state"),
+    _PERSISTENT_FALLBACK,
 )
 LOG_DIR = _resolve_writable_dir(
     "Log",
@@ -439,7 +444,7 @@ INITIAL_PROMPT = os.environ.get(
 )
 
 # --- [PREPROCESSING CONFIGURATION] ---
-ENABLE_VOCAL_SEPARATION = os.environ.get("ENABLE_VOCAL_SEPARATION", "false").lower() == "true"
+ENABLE_VOCAL_SEPARATION = os.environ.get("ENABLE_VOCAL_SEPARATION", "false").strip().lower() in ("true", "1", "yes")
 
 VOCAL_SEPARATION_SEGMENT_DURATION = int(os.environ.get("VOCAL_SEPARATION_SEGMENT_DURATION", 600))
 
@@ -493,7 +498,7 @@ CPU_PARALLEL_LIMIT = calculate_cpu_parallel_limit(MAX_CPU, CPU_CORE_LIMIT, ASR_T
 
 def get_parallel_limit(device):
     """Determine parallel task limit based on physical resource units."""
-    if device not in ["CUDA", "GPU", "NPU"]:
+    if device not in ["CUDA", "GPU", "NPU", "AMD"]:
         return CPU_PARALLEL_LIMIT
     return _accelerator_parallel_limit(device)
 

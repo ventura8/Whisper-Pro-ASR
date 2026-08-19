@@ -9,6 +9,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Awaitable, Callable
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
@@ -16,10 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import QueryParams
 
 from modules.api.routes import asr as routes_asr
 from modules.api.routes import detect as routes_detect
 from modules.api.routes import system as routes_system
+from modules.api.support import security
 
 # CRITICAL: Bootstrap hardware path before ANY other first-party imports
 from modules.core import bootstrap, config, logging_setup, utils
@@ -41,6 +44,19 @@ async def lifespan(fastapi_app: FastAPI) -> AsyncGenerator[FastAPI, None]:
 
     yield
     # Cleanup on shutdown if needed
+
+
+def sanitize_query_params(query_params: QueryParams | None) -> str:
+    """Sanitize query parameters for safe logging."""
+    if not query_params:
+        return ""
+
+    safe_fields = {"beam_size", "task", "language", "vad_filter", "word_timestamps", "clean_audio"}
+    items = []
+    for k, v in query_params.multi_items():
+        if k.lower() in safe_fields:
+            items.append(f"{quote(k)}={quote(v)}")
+    return "&".join(items)
 
 
 def create_app(testing: bool = False) -> FastAPI:
@@ -65,13 +81,15 @@ def create_app(testing: bool = False) -> FastAPI:
     fastapi_app.state.testing = testing
 
     # Configure CORS
-    fastapi_app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    cors_origins = security.get_cors_origins()
+    if cors_origins:
+        fastapi_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # Configure Request Lifecycle Logging & Storage Hygiene Middleware
     @fastapi_app.middleware("http")
@@ -80,9 +98,13 @@ def create_app(testing: bool = False) -> FastAPI:
         client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
         content_length = request.headers.get("content-length", "0")
         body_log = f" | Body: {content_length} bytes" if content_length != "0" else ""
+        query_str = sanitize_query_params(request.query_params)
+        params_log = f" | Params: {query_str}" if query_str else ""
+        content_type = request.headers.get("content-type", "")
+        ct_log = f" | Content-Type: {content_type}" if content_type else ""
 
         log_func = logger.debug if request.url.path in ["/status", "/"] else logger.info
-        log_func(">>> %s %s [Source: %s]%s", request.method, request.url.path, client_ip, body_log)
+        log_func(">>> %s %s [Source: %s]%s%s%s", request.method, request.url.path, client_ip, body_log, params_log, ct_log)
 
         # Scope tracked files per request using a contextvar and request.state
         tracked_list = []
@@ -91,7 +113,8 @@ def create_app(testing: bool = False) -> FastAPI:
 
         response = None
         try:
-            response = await call_next(request)
+            auth_response = security.api_key_rejection_response(request)
+            response = auth_response if auth_response is not None else await call_next(request)
         finally:
             utils.cleanup_tracked_files(request)
             utils.REQUEST_TRACKED_FILES_VAR.reset(token)

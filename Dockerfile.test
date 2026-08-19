@@ -6,22 +6,25 @@ FROM mvdan/shfmt:v3.10.0 AS shfmt-bin
 FROM zricethezav/gitleaks:v8.23.1 AS gitleaks-bin
 FROM mcr.microsoft.com/powershell:7.5-ubuntu-22.04 AS powershell-bin
 
-FROM python:3.12-slim AS base
+FROM python:3.13-slim AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV PYTHONUNBUFFERED=1
 
-ARG POETRY_VERSION=2.3.4
+ARG POETRY_VERSION=2.4.1
 ARG PIP_VERSION=26.1.2
+ARG SETUPTOOLS_VERSION=83.0.0
+ARG NPM_VERSION=12.0.2
 ARG FFMPEG_VERSION=8.1.2
 ARG FFMPEG_TARBALL=ffmpeg-${FFMPEG_VERSION}.tar.xz
 ARG FFMPEG_URL=https://ffmpeg.org/releases/${FFMPEG_TARBALL}
 ARG FFMPEG_SIG_URL=${FFMPEG_URL}.asc
 ARG PSSCRIPTANALYZER_VERSION=1.25.0
 
-# Install Node.js from the official node image
-COPY --from=node:22-slim /usr/local/ /usr/local/
+# Install Node.js from the official node image and upgrade npm
+COPY --from=node:24-slim /usr/local/ /usr/local/
+RUN npm install -g "npm@${NPM_VERSION}"
 
 # Install system dependencies (cached)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -70,14 +73,11 @@ COPY --from=powershell-bin /opt/microsoft/powershell/7 /opt/microsoft/powershell
 
 RUN ln -sf /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh
 
-# Keep pip resolver behavior aligned with production image.
-RUN python -m pip install --no-cache-dir "pip==${PIP_VERSION}"
-
-# Install Poetry and project dependencies (using cache mount for pip/poetry caches)
+# Keep pip resolver behavior aligned with production image and install Poetry + dependencies
 RUN --mount=type=cache,id=whisper-pro-asr-poetry,target=/root/.cache/pypoetry,sharing=locked \
-    python -m pip install --no-cache-dir "poetry==${POETRY_VERSION}" "setuptools==83.0.0" && \
+    python -m pip install --no-cache-dir "pip==${PIP_VERSION}" "poetry==${POETRY_VERSION}" "setuptools==${SETUPTOOLS_VERSION}" && \
     poetry config virtualenvs.create false && \
-    poetry config installer.max-workers 1 && \
+    poetry config installer.max-workers 4 && \
     poetry config cache-dir /root/.cache/pypoetry && \
     poetry install --no-root
 

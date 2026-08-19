@@ -18,10 +18,13 @@ function showTab(tab) {
         }, 50);
     }
     if (tab === 'history') {
-        fetch('/history').then(res => res.json()).then(data => {
+        fetch('/history', { headers: getAuthHeaders() }).then(res => res.json()).then(data => {
             fullTaskHistory = data || [];
             renderHistory();
         });
+    }
+    if (tab === 'settings') {
+        loadDashboardApiKeys();
     }
 }
 
@@ -75,13 +78,23 @@ function changeRefreshInterval(val) {
     renderCharts();
 }
 
+function handleTelemetryPurgeSuccess() {
+    alert('Telemetry history purged successfully.');
+    rollingTelemetryBuffer = [];
+    if (typeof globalThis.resetTelemetryChartsAndStats === 'function') {
+        globalThis.resetTelemetryChartsAndStats();
+    }
+    renderCharts();
+}
+
 async function saveSettings() {
+    persistDashboardApiKeys();
     const telemetryHours = document.getElementById('retention-range').value;
     const logDays = document.getElementById('log-retention-range').value;
     try {
         const response = await fetch('/settings', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: getAuthHeaders('application/json', true),
             body: JSON.stringify({
                 telemetry_retention_hours: parseInt(telemetryHours, 10),
                 log_retention_days: parseInt(logDays, 10)
@@ -99,7 +112,10 @@ async function clearTaskHistory() {
         return;
     }
     try {
-        const res = await fetch('/system/history/clear', { method: 'POST' });
+        const res = await fetch('/system/history/clear', {
+            method: 'POST',
+            headers: getAuthHeaders(null, true)
+        });
         if (res.ok) {
             alert('Task history purged successfully.');
             fullTaskHistory = [];
@@ -115,14 +131,12 @@ async function clearTelemetryMetrics() {
         return;
     }
     try {
-        const res = await fetch('/system/telemetry/clear', { method: 'POST' });
+        const res = await fetch('/system/telemetry/clear', {
+            method: 'POST',
+            headers: getAuthHeaders(null, true)
+        });
         if (res.ok) {
-            alert('Telemetry history purged successfully.');
-            rollingTelemetryBuffer = [];
-            if (typeof globalThis.resetTelemetryChartsAndStats === 'function') {
-                globalThis.resetTelemetryChartsAndStats();
-            }
-            renderCharts();
+            handleTelemetryPurgeSuccess();
         } else {
             alert('Failed to clear telemetry metrics.');
         }
@@ -130,6 +144,7 @@ async function clearTelemetryMetrics() {
 }
 
 window.onload = () => {
+    loadDashboardApiKeys();
     updateStats();
     startRefreshInterval();
     showTab('active');

@@ -14,6 +14,7 @@ from fastapi import APIRouter, File, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from modules.api.support import request_utils as routes_utils
+from modules.api.support.local_path import normalize_bazarr_request_params
 from modules.core import config, utils
 from modules.inference.pipeline import language_detection
 from modules.inference.runtime import model_manager
@@ -42,6 +43,7 @@ class RequestParams(TypedDict, total=False):
     subtitle_highlight_words: bool
     vad_filter: bool
     word_timestamps: bool
+    clean_audio: Optional[bool]
     max_line_width: Optional[int]
     max_line_count: Optional[int]
 
@@ -95,21 +97,27 @@ async def transcribe(
             local_path, audio_file, file, form_data, request
         )
 
-        _setup_thread_context(request, params)
         start_time = time.time()
         filename = routes_utils.get_display_name_early(resolved_local_path, uploaded_file)
         task_type = _resolve_task_type(params)
         _log_task_start(task_type, params)
-        with model_manager.early_task_registration(task_type=task_type, filename=filename):
-            result, source_path, err = await anyio.to_thread.run_sync(
-                _perform_transcription_task, params, task_type, resolved_local_path, uploaded_file
-            )
-            if err:
-                model_manager.update_task_metadata(status="failed")
-                msg, code = err
-                return JSONResponse(content={"error": msg}, status_code=code)
+        worker_context = _build_worker_context(request, params, resolved_local_path)
 
-            return build_response(result, params, {"total": time.time() - start_time}, source_path, start_time)
+        result, source_path, err = await anyio.to_thread.run_sync(
+            lambda: _perform_transcription_task(
+                params,
+                task_type,
+                resolved_local_path,
+                uploaded_file,
+                filename,
+                worker_context=worker_context,
+            )
+        )
+        if err:
+            msg, code = err
+            return JSONResponse(content={"error": msg}, status_code=code)
+
+        return build_response(result, params, {"total": time.time() - start_time}, source_path, start_time)
     except tuple([Exception]) as e:
         msg, code = routes_utils.handle_error(e)
         return JSONResponse(content={"error": msg}, status_code=code)
@@ -118,16 +126,35 @@ async def transcribe(
         model_manager.decrement_active_session()
 
 
-def _setup_thread_context(request: Request, params: RequestParams) -> None:
-    utils.THREAD_CONTEXT.caller_info = {
-        "ip": request.client.host if request.client else "127.0.0.1",
-        "user_agent": request.headers.get("User-Agent", "Unknown"),
-    }
-    sanitized_params = params.copy()
+def _build_worker_context(
+    request: Request,
+    params: RequestParams,
+    resolved_local_path: Optional[str],
+) -> dict[str, Any]:
+    """Capture request metadata for worker-thread task registration and history."""
+    sanitized_params = normalize_bazarr_request_params(dict(params))
     if "hf_token" in sanitized_params:
         sanitized_params["hf_token"] = "".join(["[", "MASKED", "]"])
-    utils.THREAD_CONTEXT.request_json = sanitized_params
-    utils.THREAD_CONTEXT.endpoint = request.url.path
+    if resolved_local_path:
+        sanitized_params["local_path"] = resolved_local_path
+    return {
+        "caller_info": {
+            "ip": request.client.host if request.client else "127.0.0.1",
+            "user_agent": request.headers.get("User-Agent", "Unknown"),
+        },
+        "request_json": sanitized_params,
+        "endpoint": request.url.path,
+        "clean_audio": params.get("clean_audio"),
+        "input_flags": getattr(utils.THREAD_CONTEXT, "input_flags", None),
+    }
+
+
+def _apply_worker_context(worker_context: dict[str, Any]) -> None:
+    utils.THREAD_CONTEXT.caller_info = worker_context["caller_info"]
+    utils.THREAD_CONTEXT.request_json = worker_context["request_json"]
+    utils.THREAD_CONTEXT.endpoint = worker_context["endpoint"]
+    utils.THREAD_CONTEXT.clean_audio = worker_context["clean_audio"]
+    utils.THREAD_CONTEXT.input_flags = worker_context.get("input_flags")
 
 
 def _perform_transcription_task(
@@ -135,32 +162,39 @@ def _perform_transcription_task(
     task_type: str,
     local_path: Optional[str],
     audio_file: Optional[UploadFile],
+    filename: str,
+    *,
+    worker_context: dict[str, Any],
 ) -> tuple[Optional[TranscriptionResult], Optional[str], Optional[ApiError]]:
     """Inner logic for transcription execution."""
-    try:
-        source_path, init_err = _initialize_transcription_context(local_path, audio_file, task_type)
-        if init_err:
-            return None, None, init_err
+    _apply_worker_context(worker_context)
+    with model_manager.early_task_registration(task_type=task_type, filename=filename):
+        try:
+            source_path, init_err = _initialize_transcription_context(local_path, audio_file, task_type)
+            if init_err:
+                msg, code = init_err
+                model_manager.record_task_failure(msg, code, context="ASR")
+                return None, None, init_err
 
-        clean_wav, err = _get_transcription_source(source_path)
-        if err:
-            return None, source_path, err
+            clean_wav, err = _get_transcription_source(source_path)
+            if err:
+                msg, code = err
+                model_manager.record_task_failure(msg, code, context="ASR")
+                return None, source_path, err
 
-        lang = _detect_lang_for_transcription(params.get("language"), source_path, clean_wav)
-        result = _run_transcription(params, source_path, clean_wav, lang)
+            lang = _detect_lang_for_transcription(params.get("language"), source_path, clean_wav)
+            result = _run_transcription(params, source_path, clean_wav, lang)
 
-        if result:
-            model_manager.update_task_metadata(result=result)
-        return result, source_path, None
-    except Exception as e:
-        model_manager.update_task_metadata(result={"error": str(e)})
-        raise e
+            if result:
+                model_manager.update_task_metadata(result=result)
+            return result, source_path, None
+        except Exception as e:
+            model_manager.record_task_failure(str(e), 500, context="ASR")
+            raise e
 
 
 def _get_transcription_source(source_path: str) -> tuple[Optional[str], Optional[ApiError]]:
-    if not config.ENABLE_VOCAL_SEPARATION:
-        return routes_utils.get_clean_wav_or_error(source_path)
-    return None, None
+    return routes_utils.get_clean_wav_or_error(source_path)
 
 
 def _initialize_transcription_context(
@@ -255,6 +289,12 @@ def _apply_prompt_and_format_flags(
     params["subtitle_highlight_words"] = _parse_subtitle_highlight(query_params, form_data)
     params["vad_filter"] = _parse_bool_param(query_params, form_data, "vad_filter", True)
     params["word_timestamps"] = _parse_bool_param(query_params, form_data, "word_timestamps", False)
+    clean_audio = _parse_bool_param(query_params, form_data, "clean_audio", None)
+    if clean_audio is None:
+        clean_audio = _parse_bool_param(query_params, form_data, "vocal_separation", None)
+    if clean_audio is None:
+        clean_audio = _parse_bool_param(query_params, form_data, "enable_vocal_separation", None)
+    params["clean_audio"] = clean_audio
     if params["subtitle_highlight_words"]:
         params["word_timestamps"] = True
 
@@ -295,13 +335,13 @@ def _pick_first(
     return default
 
 
-def _parse_bool_param(query_params: QueryParams, form_data: FormData, key: str, default: bool) -> bool:
+def _parse_bool_param(query_params: QueryParams, form_data: FormData, key: str, default: Optional[bool]) -> Optional[bool]:
     val = query_params.get(key)
     if val in (None, ""):
         val = form_data.get(key)
     if val in (None, ""):
-        val = default
-    return str(val).lower() == "true"
+        return default
+    return str(val).lower() in ("true", "1", "yes")
 
 
 def _parse_int_param(

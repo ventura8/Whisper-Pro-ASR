@@ -16,6 +16,7 @@ from fastapi import APIRouter, File, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from modules.api.support import request_utils as routes_utils
+from modules.api.support.local_path import normalize_bazarr_request_params
 from modules.core import config, utils
 from modules.inference.pipeline import language_detection
 from modules.inference.runtime import model_manager
@@ -35,6 +36,7 @@ class DetectRequestContext(TypedDict):
     uploaded_file: Optional[UploadFile]
     filename: str
     start_time: float
+    worker_context: dict
 
 
 _INFLIGHT_DETECT_LOCK = threading.Lock()
@@ -66,27 +68,52 @@ async def detect_language(
             local_path, audio_file, file, form_data, request
         )
 
-        _setup_detect_context(request, form_data)
+        worker_context = _build_detect_worker_context(request, form_data, resolved_local_path)
+        _apply_detect_worker_context(worker_context)
 
         start_time = time.time()
         filename = routes_utils.get_display_name_early(resolved_local_path, uploaded_file)
         dedupe_key = _build_dedupe_key(resolved_local_path, uploaded_file) if config.ENABLE_LD_REQUEST_COALESCING else None
 
         if dedupe_key:
-            return await _handle_coalesced_detect(dedupe_key, filename, resolved_local_path, uploaded_file, start_time)
+            return await _handle_coalesced_detect(
+                dedupe_key, filename, resolved_local_path, uploaded_file, start_time, worker_context=worker_context
+            )
 
-        return await _run_detection_without_dedupe(resolved_local_path, uploaded_file, filename, start_time)
+        return await _run_detection_without_dedupe(resolved_local_path, uploaded_file, filename, start_time, worker_context=worker_context)
     except tuple([Exception]) as e:
         msg, code = routes_utils.handle_error(e, "LD")
         return JSONResponse(content={"error": msg}, status_code=code)
 
 
-def _setup_detect_context(request: Request, form_data: dict):
-    # Setup contextvars request metadata
-    params = _build_request_params(request, form_data)
-    utils.THREAD_CONTEXT.request_json = _mask_sensitive_params(params)
-    utils.THREAD_CONTEXT.endpoint = request.url.path
-    utils.THREAD_CONTEXT.caller_info = _get_caller_info(request)
+def _build_detect_worker_context(
+    request: Request,
+    form_data: dict,
+    resolved_local_path: Optional[str] = None,
+) -> dict:
+    params = normalize_bazarr_request_params(_build_request_params(request, form_data))
+    if resolved_local_path:
+        params["local_path"] = resolved_local_path
+    return {
+        "caller_info": _get_caller_info(request),
+        "request_json": _mask_sensitive_params(params),
+        "endpoint": request.url.path,
+        "input_flags": getattr(utils.THREAD_CONTEXT, "input_flags", None),
+    }
+
+
+def _apply_detect_worker_context(worker_context: dict) -> None:
+    utils.THREAD_CONTEXT.request_json = worker_context["request_json"]
+    utils.THREAD_CONTEXT.endpoint = worker_context["endpoint"]
+    utils.THREAD_CONTEXT.caller_info = worker_context["caller_info"]
+    utils.THREAD_CONTEXT.input_flags = worker_context.get("input_flags")
+
+
+def _apply_worker_context_from_dict(worker_context: dict) -> None:
+    utils.THREAD_CONTEXT.request_json = worker_context["request_json"]
+    utils.THREAD_CONTEXT.endpoint = worker_context["endpoint"]
+    utils.THREAD_CONTEXT.caller_info = worker_context["caller_info"]
+    utils.THREAD_CONTEXT.input_flags = worker_context.get("input_flags")
 
 
 def _build_request_params(request: Request, form_data: dict) -> dict:
@@ -121,6 +148,8 @@ async def _handle_coalesced_detect(
     resolved_local_path: Optional[str],
     uploaded_file: Optional[UploadFile],
     start_time: float,
+    *,
+    worker_context: dict,
 ) -> DetectResponsePayload:
     is_leader = False
     with _INFLIGHT_DETECT_LOCK:
@@ -135,7 +164,7 @@ async def _handle_coalesced_detect(
             "[LD] Coalescing duplicate detect-language request for %s; waiting for in-flight result.",
             filename,
         )
-        return await _await_shared_result_with_dashboard_task(shared_future, dedupe_key, filename)
+        return await _await_shared_result_with_dashboard_task(shared_future, dedupe_key, filename, worker_context=worker_context)
 
     return await _run_leader_detection(
         shared_future,
@@ -145,6 +174,7 @@ async def _handle_coalesced_detect(
             "uploaded_file": uploaded_file,
             "filename": filename,
             "start_time": start_time,
+            "worker_context": worker_context,
         },
     )
 
@@ -175,26 +205,50 @@ async def _await_shared_result_with_dashboard_task(
     shared_future: concurrent.futures.Future[CoalescedDetectResult],
     dedupe_key: str,
     filename: str,
+    *,
+    worker_context: dict,
 ) -> DetectResponsePayload:
     """Represent coalesced followers in task telemetry while waiting for leader output."""
     return await anyio.to_thread.run_sync(
-        _await_shared_result_with_dashboard_task_sync,
-        shared_future,
-        dedupe_key,
-        filename,
+        lambda: _await_shared_result_with_dashboard_task_sync(
+            shared_future,
+            dedupe_key,
+            filename,
+            worker_context=worker_context,
+        )
     )
+
+
+def _record_ld_failure(msg: str, code: int) -> None:
+    """Persist LD failure metadata for dashboard history."""
+    model_manager.record_task_failure(msg, code, context="LD")
+
+
+def _json_response_failure(response: JSONResponse) -> tuple[str, int]:
+    """Extract error message/code from an LD error response payload."""
+    code = response.status_code
+    try:
+        payload = json.loads(response.body)
+        if isinstance(payload, dict) and payload.get("error"):
+            return str(payload["error"]), code
+    except tuple([Exception]):
+        pass
+    return "Language detection failed", code
 
 
 def _await_shared_result_with_dashboard_task_sync(
     shared_future: concurrent.futures.Future[CoalescedDetectResult],
     dedupe_key: str,
     filename: str,
+    *,
+    worker_context: dict,
 ) -> DetectResponsePayload:
     """Worker-thread follower flow to avoid blocking the event loop on registration."""
+    _apply_worker_context_from_dict(worker_context)
     with model_manager.early_task_registration(
         task_type="Language Detection (Coalesced)",
         filename=filename,
-        is_priority=True,
+        is_priority=False,
     ):
         model_manager.update_task_metadata(
             stage="Coalesced Request (Waiting for Leader)",
@@ -206,15 +260,18 @@ def _await_shared_result_with_dashboard_task_sync(
             result, err = shared_future.result()
         except tuple([Exception]) as e:
             msg, code = routes_utils.handle_error(e, "LD")
+            _record_ld_failure(msg, code)
             return JSONResponse(content={"error": msg}, status_code=code)
 
         if err:
             msg, code = err
+            _record_ld_failure(msg, code)
             return JSONResponse(content={"error": msg}, status_code=code)
 
         if isinstance(result, JSONResponse):
             if result.status_code >= 400:
-                model_manager.update_task_metadata(status="failed")
+                fail_msg, fail_code = _json_response_failure(result)
+                _record_ld_failure(fail_msg, fail_code)
             return result
 
         model_manager.update_task_metadata(
@@ -238,6 +295,7 @@ async def _run_leader_detection(
             request_context["uploaded_file"],
             request_context["filename"],
             request_context["start_time"],
+            worker_context=request_context["worker_context"],
         )
         _safe_set_future_result(shared_future, result_tuple)
         return response
@@ -269,13 +327,27 @@ def _safe_set_future_exception(
         shared_future.set_exception(exc)
 
 
-async def _run_detection_without_dedupe(resolved_local_path, uploaded_file, filename, start_time):
+async def _run_detection_without_dedupe(
+    resolved_local_path,
+    uploaded_file,
+    filename,
+    start_time,
+    *,
+    worker_context,
+):
     """Run a single detect-language request without coalescing."""
-    response, _ = await _run_detection_internal(resolved_local_path, uploaded_file, filename, start_time)
+    response, _ = await _run_detection_internal(resolved_local_path, uploaded_file, filename, start_time, worker_context=worker_context)
     return response
 
 
-async def _run_detection_internal(resolved_local_path, uploaded_file, filename, start_time):
+async def _run_detection_internal(
+    resolved_local_path,
+    uploaded_file,
+    filename,
+    start_time,
+    *,
+    worker_context,
+):
     """Run detection and return both the HTTP response and raw (result, err) tuple."""
     model_manager.increment_active_session()
 
@@ -283,7 +355,13 @@ async def _run_detection_internal(resolved_local_path, uploaded_file, filename, 
         # Run the entire priority task including registration inside the thread pool
         # to avoid blocking the FastAPI event loop thread on priority sequential lock.
         result, err = await anyio.to_thread.run_sync(
-            _perform_detect_language_task, resolved_local_path, uploaded_file, filename, start_time
+            lambda: _perform_detect_language_task(
+                resolved_local_path,
+                uploaded_file,
+                filename,
+                start_time,
+                worker_context=worker_context,
+            )
         )
         if err:
             msg, code = err
@@ -297,22 +375,36 @@ async def _run_detection_internal(resolved_local_path, uploaded_file, filename, 
         model_manager.decrement_active_session()
 
 
-def _perform_detect_language_task(resolved_local_path, uploaded_file, filename, start_time):
+def _perform_detect_language_task(
+    resolved_local_path,
+    uploaded_file,
+    filename,
+    start_time,
+    *,
+    worker_context,
+):
     """
     Orchestrates the language detection sequence in a background worker thread.
 
     This runs inside the thread pool to avoid blocking the FastAPI event loop
     when acquiring priority task locks.
     """
+    _apply_worker_context_from_dict(worker_context)
     with model_manager.early_task_registration(task_type="Language Detection", filename=filename, is_priority=True):
         source_path, _, err = routes_utils.initialize_task_context(resolved_local_path, uploaded_file, True)
         if err:
-            model_manager.update_task_metadata(status="failed")
+            msg, code = err
+            model_manager.record_task_failure(msg, code, context="LD")
             return None, err
 
         model_manager.update_task_progress(None, "Analyzing Stream")
 
-        result = language_detection.run_voting_detection(source_path, model_manager, start_time)
+        try:
+            result = language_detection.run_voting_detection(source_path, model_manager, start_time)
+        except tuple([Exception]) as e:
+            msg, code = routes_utils.handle_error(e, "LD")
+            model_manager.record_task_failure(msg, code, context="LD")
+            return None, (msg, code)
 
         _log_detection_result(result, start_time)
         model_manager.update_task_metadata(result=result)

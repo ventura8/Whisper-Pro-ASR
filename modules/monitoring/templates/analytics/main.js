@@ -59,6 +59,19 @@ function getDetectLangStat(source) {
     return source.detectlang || source.isolations || { count: 0, duration: 0.0 };
 }
 
+function _analyticsAuthHeaders() {
+    const headers = { Accept: "application/json" };
+    try {
+        const apiKey = localStorage.getItem("whisper_api_key");
+        if (apiKey) {
+            headers["X-API-Key"] = apiKey;
+        }
+    } catch (err) {
+        logger.debug("Analytics API key storage is unavailable:", err);
+    }
+    return headers;
+}
+
 async function fetchAnalytics() {
     if (analyticsFetchInFlight) {
         return;
@@ -66,7 +79,7 @@ async function fetchAnalytics() {
     analyticsFetchInFlight = true;
     try {
         const res = await fetch('/analytics', {
-            headers: { 'Accept': 'application/json' }
+            headers: _analyticsAuthHeaders()
         });
         if (!res.ok) {
             throw new Error(`Analytics request failed with status ${res.status}`);
@@ -86,7 +99,9 @@ function renderAnalytics(data) {
 
     _updateTopCards(cumulative);
     _updateCumulativeBreakdown(cumulative);
-    const sortedDates = Object.keys(daily).sort();
+    const sortedDates = Object.keys(daily)
+        .filter((key) => !key.startsWith("__"))
+        .sort();
 
     _renderDailyBreakdownTable(sortedDates, daily);
     renderCharts(sortedDates, daily);

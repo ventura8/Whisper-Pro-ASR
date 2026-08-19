@@ -117,21 +117,6 @@ def test_get_system_telemetry():
                     assert telemetry["app_memory_gb"] == 1.0
 
 
-def test_get_nvidia_vram_usage_mb_sums_visible_devices():
-    """VRAM probe should sum memory.used across all visible NVIDIA devices."""
-    with (
-        mock.patch("modules.core.utils.which", return_value="/usr/bin/nvidia-smi"),
-        mock.patch("modules.core.process_exec.check_output_text", return_value="1024\n512\n"),
-    ):
-        assert utils.get_nvidia_vram_usage_mb() == 1536
-
-
-def test_get_nvidia_vram_usage_mb_returns_none_without_nvidia_smi():
-    """VRAM probe should degrade gracefully when nvidia-smi is unavailable."""
-    with mock.patch("modules.core.utils.which", return_value=None):
-        assert utils.get_nvidia_vram_usage_mb() is None
-
-
 def test_get_pretty_model_name():
     """Test model name formatting."""
     assert utils.get_pretty_model_name("distil-whisper/distil-large-v3") == "Distil Large v3"

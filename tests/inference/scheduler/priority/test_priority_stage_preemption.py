@@ -452,6 +452,13 @@ def test_asr_yields_to_detect_language_before_vocal_separation():
             "Transcription",
             "/tmp/input.mp3",
             None,
+            "input.mp3",
+            worker_context={
+                "caller_info": {"ip": "127.0.0.1", "user_agent": "test"},
+                "request_json": {},
+                "endpoint": "/asr",
+                "clean_audio": False,
+            },
         )
 
     assert (
@@ -502,6 +509,13 @@ def test_asr_yields_again_immediately_before_inference():
             "Transcription",
             "/tmp/input.mp3",
             None,
+            "input.mp3",
+            worker_context={
+                "caller_info": {"ip": "127.0.0.1", "user_agent": "test"},
+                "request_json": {},
+                "endpoint": "/asr",
+                "clean_audio": False,
+            },
         )
 
     assert (

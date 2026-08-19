@@ -1,6 +1,6 @@
 # Technical Architecture
 
-Whisper Pro ASR implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX), with integrated speaker diarization and configurable model lifecycle management.
+Whisper Pro ASR implements a **Heterogeneous Model Pool** architecture designed to extract maximum performance from modern hybrid silicon (Intel Meteor Lake, NVIDIA RTX, AMD Radeon), with integrated speaker diarization and configurable model lifecycle management.
 
 ## Concurrency Priority Policy
 
@@ -30,18 +30,18 @@ All core runtime modules are consolidated under `modules/core/` for improved org
 | Component | Responsibility |
 | :--- | :--- |
 | `modules/inference/` | Inference stack grouped by concern: `runtime/` (`model_manager`, `concurrency`, segment consumption), `scheduler/` (re-entrant locks, state/order/task helpers), `pipeline/` (`preprocessing/` package with orchestrator in `__init__.py` plus `helpers.py`, `provider.py`, `execution.py`, alongside `vad`, `language_detection`, `diarization`, `post_processing`), and `engines/` (`base`, `engine_factory`, `faster_whisper_engine`, `openai_whisper_engine`, `whisperx_engine`, `intel_engine`). |
-| `modules/api/` | FastAPI application layer grouped by concern: `routes/` (`asr`, `detect`, `system`) and `support/` (`request_utils`, `upload_extraction`, `local_path`) for shared request/materialization/path-approval logic. |
+| `modules/api/` | FastAPI application layer grouped by concern: `routes/` (`asr`, `detect`, `system`) and `support/` (`request_utils`, `upload_extraction`, `local_path`, `security`) for shared request/materialization/path-approval/security logic. |
 | `modules/monitoring/` | `dashboard` & `dashboard_ui` (Material Design UI renderer loading manifest-ordered modules from `templates/dashboard_js_files.txt`), `analytics_ui` (analytics dashboard loaded from `templates/analytics_js_files.txt`), `telemetry` & `telemetry_manager` (persistent telemetry history), `history_manager` (task history with dual-tier storage), and `metrics_discovery` (hardware metrics). |
 
 ### 🧩 Hardware Compatibility Matrix
 
-| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | Intel iGPU / Arc | Intel NPU |
-| :--- | :---: | :---: | :---: | :---: |
-| **Media Standardization** | ✅ | ✅ | ✅ | ✅ |
-| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (OpenVINO) | ✅ (OpenVINO) |
-| **VAD Verification** | ✅ | ✅ | ✅ | ✅ |
-| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
-| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
+| Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | AMD (ROCm/DirectML) | Intel iGPU / Arc | Intel NPU |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Media Standardization** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (ONNX ROCm on native Linux `/dev/kfd`; DirectML on Windows host only — not inside Linux Docker/WSL2) | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ---
 
@@ -71,8 +71,10 @@ graph TD
     F --> G["Faster-Whisper Inference"]
     G -->|Heterogeneous Parallel| H{"Unit Pool"}
     H -->|NVIDIA| I["CUDA Acceleration"]
+    H -->|AMD| AMD["ONNX ROCm/DirectML (UVR) + CPU ASR"]
     H -->|Intel| J["OpenVINO/CPU Pipeline"]
     I --> K["Segment Assembly"]
+    AMD --> K
     J --> K
     end
 
@@ -203,10 +205,156 @@ The system features a thread-aware logging and telemetry engine designed for ind
 
 ---
 
-## 🏛 Hardware Interface & Host Dependencies
+## 🏐 Hardware Interface & Host Dependencies
 
 - **Intel NPU/GPU**: Leverages `/dev/dri` and `/dev/accel` nodes.
 - **NVIDIA CUDA**: Requires the **NVIDIA Container Toolkit** on the host.
+- **AMD GPU (ROCm/DirectML)**: Leverages `/dev/kfd` and `/dev/dri` on Linux; uses `/dev/dxg` (WSL GPU bridge) on Windows. `onnxruntime-rocm` is isolated under `/app/libs/amd` and loaded automatically when AMD hardware is detected. Whisper ASR runs on CPU while UVR vocal isolation offloads to the AMD GPU via ONNX Runtime ROCm/DirectML.
 - **SSD Optimization**: All transient I/O is redirected to a RAM-backed `tmpfs` volume to prevent physical wear.
 - **Standardization Layer**: All incoming media (MKV, AVI, MP4, etc.) is standardized to 16kHz Mono WAV before entering the pipeline, ensuring consistent results across all formats.
 - **Diarization Models**: WhisperX alignment and PyAnnote diarization models are cached per hardware unit in `_ALIGN_POOL` and `_DIARIZE_POOL`. These are purged alongside Whisper models during `unload_models()`.
+
+---
+
+## 🛡️ Security & Access Control Architecture
+
+The system incorporates a defense-in-depth security layer implemented in `modules/api/support/security.py`:
+
+```mermaid
+graph TD
+    REQ["Incoming HTTP Request"] --> CORS["CORS Resolution & Origin Verification"]
+    CORS -->|Invalid Origin (browser headers blocked)| AUTH{"Auth Configured?"}
+    CORS -->|Valid / Local Origin| AUTH{"Auth Configured?"}
+    
+    AUTH -->|API_KEY / ADMIN_API_KEY| KEY_CHK{"Constant-Time Key Match"}
+    KEY_CHK -->|Mismatch / Missing| REJ_AUTH["401 Unauthorized"]
+    KEY_CHK -->|Authorized| ROUTE["Protected Handler"]
+    
+    AUTH -->|No Keys Set (Local Mode)| CSRF{"State Changing Endpoint?"}
+    CSRF -->|Yes: /settings, /system/...|     ORIGIN_CHK{"Origin / Referer Present And Match Host?"}
+    ORIGIN_CHK -->|Missing Headers Or Cross-Origin Mismatch| REJ_CSRF["403 Forbidden (CSRF)"]
+    ORIGIN_CHK -->|Trusted / Same-Host| AUDIT["Audit Logger"]
+    CSRF -->|No: Read-Only| ROUTE
+    
+    AUDIT --> VALIDATE{"Payload Validation"}
+    VALIDATE -->|Disallowed Model| REJ_MODEL["400 Bad Request (Model Allowlist)"]
+    VALIDATE -->|Invalid Device| REJ_DEV["400 Bad Request (Device Whitelist)"]
+    VALIDATE -->|Valid| ROUTE
+```
+
+### 1. CORS Defense-in-Depth
+
+- **No Wildcard Default**: Unlike standard FastAPI defaults, wildcard cross-origin access (`*`) is disabled unless `CORS_ALLOW_ALL=true` or `CORS_ORIGINS=*` is explicitly set.
+- **Strict Allowlist**: Only explicit domains configured in `CORS_ORIGINS` are accepted.
+
+### 2. Dual-Tier Authentication & Anti-CSRF
+
+- **`API_KEY`**: Authenticates general API usage (`/asr`, `/detect-language`, `/status`, `/history`).
+- **`ADMIN_API_KEY`**: Authenticates administrative endpoints (`/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`).
+- **Anti-CSRF Origin Validation**: In unauthenticated/local setups, state-modifying administrative endpoints require Origin or Referer and verify the value against the request host or CORS allowlist. Missing both headers, or a cross-origin mismatch, returns `403` to prevent browser drive-by data destruction.
+
+### 3. Model Supply Chain & Parameter Hardening
+
+- **Strict Model Allowlist (`is_valid_model_name`)**: Restricts runtime model changes to standard Faster-Whisper/OpenAI models, official Hugging Face repositories (`Systran/faster-whisper-*`, `openai/whisper-*`), local `/app/system_models` or `/models` paths, and explicit entries in `ALLOWED_MODELS`. Rejects arbitrary repositories and path traversals (`..`).
+- **Device & Range Whitelists**: Restricts hardware targets to `{"AUTO", "CUDA", "CPU", "NPU", "GPU", "AMD"}` and bounds retention configurations within safe limits (1-720 hours for telemetry, 1-90 days for logs).
+- **Security Audit Logging**: Logs administrative modifications (`audit_log_admin_action`) recording caller IP, User-Agent, and modified parameters.
+
+---
+
+## 🛠 Project Structure
+
+```text
+/
+├── whisper_pro_asr.py        # Master entry point
+├── modules/                 # Service Logic
+│   ├── core/                # Core runtime modules
+│   │   ├── bootstrap.py     # Hardware path patching & library redirection
+│   │   ├── config.py        # Global settings (DIARIZATION_HF_TOKEN, MODEL_IDLE_TIMEOUT, etc.)
+│   │   ├── config_helpers.py # Hardware detection helpers (AMD, Intel, CUDA state)
+│   │   ├── constants.py     # Shared constants
+│   │   ├── engine_registry.py # AUTO_ENGINE_PRIORITY ordering
+│   │   ├── logging_setup.py # Task-specific logging
+│   │   ├── process_exec.py  # Subprocess execution helpers
+│   │   ├── subtitles.py     # Subtitle formatting (SRT/VTT wrapping, promo card)
+│   │   ├── utils.py         # System & audio utilities
+│   │   └── utils_helpers.py # Low-level utility helpers
+│   ├── api/                 # API Layer
+│   │   ├── routes/          # Endpoint modules
+│   │   │   ├── asr.py       # /asr, /v1/audio/transcriptions, /v1/audio/translations
+│   │   │   ├── detect.py    # /detect-language
+│   │   │   └── system.py    # /dashboard, /status, /settings, /analytics, /history
+│   │   └── support/         # Shared route helpers
+│   │       ├── request_utils.py
+│   │       ├── security.py  # CORS, API key auth, admin endpoint protection
+│   │       ├── upload_extraction.py
+│   │       └── local_path.py
+│   ├── inference/           # ML Engine
+│   │   ├── runtime/         # Orchestration and lifecycle
+│   │   │   ├── model_manager.py
+│   │   │   ├── model_segment_processing.py
+│   │   │   └── concurrency.py
+│   │   ├── scheduler/       # Scheduling state and policies
+│   │   │   ├── __init__.py
+│   │   │   ├── state_helpers.py
+│   │   │   ├── task_helpers.py
+│   │   │   └── ordering.py
+│   │   ├── pipeline/        # Audio and transcript pipeline stages
+│   │   │   ├── preprocessing/ # UVR vocal separation subpackage
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── execution.py
+│   │   │   │   ├── helpers.py
+│   │   │   │   └── provider.py
+│   │   │   ├── openvino_provider_dispatch.py
+│   │   │   ├── vad.py
+│   │   │   ├── language_detection.py
+│   │   │   ├── language_detection_core.py
+│   │   │   ├── diarization.py
+│   │   │   └── post_processing.py
+│   │   └── engines/         # Backend-specific ASR engines
+│   │       ├── base.py
+│   │       ├── engine_factory.py
+│   │       ├── faster_whisper_engine.py
+│   │       ├── openai_whisper_engine.py
+│   │       ├── intel_engine.py
+│   │       └── whisperx_engine.py
+│   └── monitoring/          # Dashboard, Telemetry & Metrics
+│       ├── dashboard.py     # Dashboard entry point
+│       ├── dashboard_ui.py  # Material Design dashboard renderer (loads from templates)
+│       ├── analytics_ui.py  # Dynamic loader for analytics UI (loads from templates)
+│       ├── templates/       # HTML, CSS, and JS dashboard/analytics templates
+│       │   ├── dashboard.html
+│       │   ├── dashboard.css
+│       │   ├── dashboard_js_files.txt
+│       │   ├── dashboard/
+│       │   │   ├── core/
+│       │   │   │   ├── state.js
+│       │   │   │   └── utils.js
+│       │   │   ├── main.js
+│       │   │   └── features/
+│       │   │       ├── charts.js
+│       │   │       ├── audit.js
+│       │   │       ├── task_filter_history.js
+│       │   │       ├── speed_status.js
+│       │   │       ├── runtime.js
+│       │   │       └── active_tasks.js
+│       │   ├── analytics.html
+│       │   ├── analytics.css
+│       │   ├── analytics_js_files.txt
+│       │   └── analytics/
+│       │       └── main.js
+│       ├── telemetry.py     # Real-time telemetry collection
+│       ├── telemetry_manager.py  # Persistent telemetry history
+│       ├── history_manager.py    # Task history (dual-tier storage)
+│       ├── metrics_discovery.py  # Hardware metrics detection
+│       └── metrics_amd.py   # AMD GPU utilization tracking
+├── tests/                   # Performance & Unit Test Suites
+│   ├── e2e/                 # Playwright Frontend E2E UI Specs (Lifecycle, Filters, Concurrency)
+│   ├── inference/           # Diarization, Language Detection, Scheduler tests
+│   ├── integration/         # API routes, Concurrency (matrix, traffic volume, yielding, idle timeout)
+│   │   └── concurrency/     # End-to-end hardware matrix, preemption stages, and idle reclamation
+│   ├── monitoring/          # Dashboard, History, Telemetry tests
+│   ├── performance/         # Coverage, RAM, SSD optimization tests
+│   └── unit/                # Config, Logging, Utils tests
+├── Dockerfile               # Packaging Definition
+└── docker-compose.yml       # Orchestration Template
+```

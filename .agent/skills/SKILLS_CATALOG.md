@@ -5,7 +5,7 @@ This catalog lists all available project skills and when to use them.
 ## Mandatory Execution Rule
 
 1. Before any task, read `.agent/instructions.md`, this catalog, and all relevant skill/workflow markdown files.
-2. If implementation changes behavior, contracts, architecture, tests, or operations, update all impacted markdown documentation in the same task (`README.md`, `docs/*.md`, `.agent/*.md`).
+2. Every time you work on this project, update all relevant markdown files in the same task (`README.md`, `docs/*.md`, `.agent/*.md`). Never ship code-only changes. A task is incomplete until impacted docs describe the current implementation.
 3. For frontend/dashboard validation and debugging, prefer Playwright CLI-driven checks and MCP tooling over manual browser-only verification.
 
 ## Folder Layout
@@ -36,6 +36,7 @@ This catalog lists all available project skills and when to use them.
 - `runtime/concurrency_orchestration_skill.md`: Validate preemption, yielding, and resource orchestration.
 - `runtime/docker_runtime_ops_skill.md`: Docker runtime setup, hardware mapping, and operational checks.
 - `runtime/intel_hardware_inference_skill.md`: Intel-specific runtime and inference behavior.
+- `runtime/amd_hardware_inference_skill.md`: AMD-specific runtime, DirectML/ROCm pre-processing, and CTranslate2 CPU fallbacks.
 - `runtime/language_detection_priority_skill.md`: Priority orchestration rules and expected ASR/detect interaction.
 - `runtime/model_lifecycle_management_skill.md`: Idle timeout/offload behavior and memory lifecycle.
 - `runtime/storage_persistence_hygiene_skill.md`: Temp file cleanup, persistent volumes, and retention behavior.
@@ -53,8 +54,8 @@ This catalog lists all available project skills and when to use them.
 
 ## Workflow Skills
 
-- `workflow/resolve-pr-comments.md`: Guidelines for resolving PR comments and feedback.
-- `workflow/resolve-pr-comments-run.sh`: Shell helper for the PR comment resolution workflow.
+- `resolve-pr-comments/SKILL.md`: Guidelines for resolving PR review comments with `gh` (canonical skill entry).
+- `workflow/resolve-pr-comments-run.sh`: Shell helper for the PR comment resolution workflow. Auto-resolve requires explicit operator argv overrides (`EVIDENCE_TEST_PATH_OVERRIDE`, `LINKED_COMMIT_SHA_OVERRIDE`); the linked commit must be an ancestor of the PR head ref (not merely a local or foreign-branch commit). Bot comment bodies are never parsed for verification evidence.
 
 ## Recommended Usage Order
 

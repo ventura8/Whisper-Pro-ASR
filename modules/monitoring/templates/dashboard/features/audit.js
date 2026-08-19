@@ -47,9 +47,40 @@ function _auditCaller(item) {
     return item.caller_info ? item.caller_info : {};
 }
 
+function _auditLooksLikeMediaPath(value) {
+    const clean = String(value).trim().replace(/^["']|["']$/g, '');
+    if (!clean.startsWith('/')) {
+        return false;
+    }
+    const lower = clean.toLowerCase();
+    return ['.mkv', '.mp4', '.avi', '.wav', '.m4a', '.mp3', '.flac', '.ts', '.mov', '.webm', '.wmv', '.mpg', '.mpeg']
+        .some((ext) => lower.endsWith(ext));
+}
+
+function _auditNormalizeRequestJson(requestPayload) {
+    if (!requestPayload || typeof requestPayload !== 'object') {
+        return {};
+    }
+    const normalized = {};
+    let localPath = requestPayload.local_path || null;
+    for (const [key, value] of Object.entries(requestPayload)) {
+        if (_auditLooksLikeMediaPath(key)) {
+            if (!localPath) {
+                localPath = key.trim().replace(/^["']|["']$/g, '');
+            }
+            continue;
+        }
+        normalized[key] = value;
+    }
+    if (localPath) {
+        normalized.local_path = localPath;
+    }
+    return normalized;
+}
+
 function _auditRequestJson(item) {
     const requestPayload = item.request_json ? item.request_json : {};
-    return escapeHtml(JSON.stringify(requestPayload, null, 2));
+    return escapeHtml(JSON.stringify(_auditNormalizeRequestJson(requestPayload), null, 2));
 }
 
 function _auditResponseJson(item) {

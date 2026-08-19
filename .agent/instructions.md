@@ -10,14 +10,23 @@ Before implementation:
 2. Read `.agent/skills/SKILLS_CATALOG.md`.
 3. Read all directly relevant skill/workflow files for the task domain.
 
+## Mandatory Markdown Update (Every Task)
+
+Every time you work on this project, you MUST update all relevant markdown files in the same task. Never ship code-only changes.
+
+- Sync every impacted file among `README.md`, `docs/*.md`, and `.agent/*.md` so they describe the current implementation.
+- Treat documentation as part of the deliverable, not a follow-up.
+- Do not close a task until relevant docs and agent assets are updated.
+
 ## Global Execution Rules
 
 - Concurrency correctness (deadlock/livelock safety and bounded progress) takes priority over throughput optimizations.
-- If behavior, architecture, APIs, quality gates, or operations change, update impacted markdown docs in the same task (`README.md`, `docs/*.md`, and relevant `.agent/*.md`).
+- Enforce defense-in-depth security: wildcard CORS disabled by default, API/Admin authentication contracts, dynamic model supply chain allowlisting, and CSRF origin verification on administrative endpoints.
 - Keep endpoint taxonomy contract aligned everywhere:
   - Standard ASR class: `/asr`, `/v1/audio/transcriptions`, `/v1/audio/translations`
   - Priority language-ID class: `/detect-language`, `/detectlang`
 - For dashboard/frontend changes, keep frontend quality-gate docs and commands synchronized, including Playwright browser prerequisites and npm audit enforcement.
+- **No Inline Suppressions or Disables (Hard Rule)**: Do not use inline lint suppressions, excludes, ignores, or disables anywhere in code or tests (such as linter disable comments, type-ignore annotations, or warning bypasses). All code and tests must be written cleanly to pass quality gates without inline suppressions.
 
 ## Agent Asset Maintenance
 
@@ -30,4 +39,4 @@ When code/process changes impact agent guidance:
 
 ## Documentation Completion Rule
 
-Do not close a task that changes user-visible behavior, APIs, quality gates, or architecture until all impacted documentation and agent assets are synchronized.
+Do not close any task until all impacted documentation and agent assets are synchronized with the work just completed.

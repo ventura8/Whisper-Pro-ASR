@@ -103,12 +103,12 @@ class TestConfigEnv:
     def test_app_constants(self):
         """Test app name and version constants."""
         assert "Whisper" in config_module.APP_NAME
-        assert config_module.VERSION == "1.1.6"
+        assert config_module.VERSION == "1.2.0"
 
     def test_device_constant_exists(self):
         """Test DEVICE constant exists."""
         assert hasattr(config_module, "DEVICE")
-        assert config_module.DEVICE in ["CPU", "CUDA", "GPU", "NPU"]
+        assert config_module.DEVICE in ["CPU", "CUDA", "GPU", "NPU", "AMD"]
 
     def test_asr_threads_default(self):
         """Test ASR_THREADS defaults to 4."""
@@ -518,16 +518,16 @@ class TestConfigSSD:
                 importlib.reload(config_module)
                 assert (
                     config_module.TEMP_DIR,
-                    config_module.PERSISTENT_DIR,
+                    os.path.normpath(config_module.PERSISTENT_DIR),
                     config_module.STATE_DIR,
                     config_module.LOG_DIR,
-                    config_module.PERSISTENT_TEMP_DIR,
+                    os.path.normpath(config_module.PERSISTENT_TEMP_DIR),
                 ) == (
                     tempfile.gettempdir(),
-                    os.path.join(tempfile.gettempdir(), "whisper-runtime", "state"),
+                    os.path.normpath(os.path.abspath(os.path.join(config_module.OV_CACHE_DIR, ".state"))),
                     "./test_state",
                     "./test_state",
-                    "./model_cache/temp",
+                    os.path.normpath(os.path.join(config_module.OV_CACHE_DIR, "temp")),
                 )
 
     def test_validate_thread_concurrency_error(self):

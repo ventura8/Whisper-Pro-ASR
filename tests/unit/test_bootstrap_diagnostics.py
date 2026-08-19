@@ -80,10 +80,20 @@ def test_resolve_target_library_prefers_intel_for_auto_preprocess_when_intel_ava
     """Bootstrap should prefer Intel ONNX path when AUTO preprocessing can use Intel hardware."""
     resolve_target_library = getattr(bootstrap, "_resolve_target_library")
     with mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path in {"/app/libs/intel", "/app/libs/nvidia"}):
-        target, reason = resolve_target_library("auto", "auto", False, True)
+        target, reason = resolve_target_library("auto", "auto", False, True, False)
 
     assert target == "/app/libs/intel"
     assert reason == "Intel OpenVINO"
+
+
+def test_resolve_target_library_dual_gpu_selects_amd_onnx():
+    """AUTO dual NVIDIA+AMD hosts must load the AMD ONNX library, not NVIDIA."""
+    resolve_target_library = getattr(bootstrap, "_resolve_target_library")
+    with mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path in {"/app/libs/amd", "/app/libs/nvidia"}):
+        target, reason = resolve_target_library("auto", "auto", True, False, True)
+
+    assert target == "/app/libs/amd"
+    assert reason == "AMD ROCm"
 
 
 def test_has_intel_drm_vendor_handles_oserror_and_finds_intel():
@@ -303,3 +313,48 @@ def test_device_open_probe_success_closes_fd_and_access_diag_handles_uid_failure
     ):
         getattr(bootstrap, "_log_intel_access_diagnostics")(logger)
     logger.warning.assert_not_called()
+
+
+def test_detect_amd_hardware_wsl_without_driver_returns_false():
+    """_detect_amd_hardware returns False when /dev/dxg exists without AMD WSL driver."""
+    detect_amd = getattr(bootstrap, "_detect_amd_hardware")
+    # Shared os.path.exists mock controls /dev/kfd and /dev/dxg check branches
+    with (
+        mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda p: p == "/dev/dxg"),
+        mock.patch.object(bootstrap, "_has_amd_drm_vendor", return_value=False),
+        mock.patch("modules.core.config_helpers._is_amd_wsl_driver_present", return_value=False),
+    ):
+        assert detect_amd() is False
+
+
+def test_ensure_wsl_library_path_absent():
+    """_ensure_wsl_library_path does nothing when /usr/lib/wsl/lib does not exist."""
+    ensure_wsl = getattr(bootstrap, "_ensure_wsl_library_path")
+    with (
+        mock.patch.object(bootstrap.os.path, "exists", return_value=False),
+        mock.patch.dict(bootstrap.os.environ, {"LD_LIBRARY_PATH": "/custom/lib"}, clear=True),
+    ):
+        ensure_wsl()
+        assert bootstrap.os.environ.get("LD_LIBRARY_PATH") == "/custom/lib"
+
+
+def test_ensure_wsl_library_path_already_present():
+    """_ensure_wsl_library_path does not duplicate path when /usr/lib/wsl/lib already present."""
+    ensure_wsl = getattr(bootstrap, "_ensure_wsl_library_path")
+    with (
+        mock.patch.object(bootstrap.os.path, "exists", return_value=True),
+        mock.patch.dict(bootstrap.os.environ, {"LD_LIBRARY_PATH": "/usr/lib/wsl/lib:/other/lib"}, clear=True),
+    ):
+        ensure_wsl()
+        assert bootstrap.os.environ.get("LD_LIBRARY_PATH") == "/usr/lib/wsl/lib:/other/lib"
+
+
+def test_ensure_wsl_library_path_prepends():
+    """_ensure_wsl_library_path prepends when /usr/lib/wsl/lib exists and LD_LIBRARY_PATH is non-empty."""
+    ensure_wsl = getattr(bootstrap, "_ensure_wsl_library_path")
+    with (
+        mock.patch.object(bootstrap.os.path, "exists", return_value=True),
+        mock.patch.dict(bootstrap.os.environ, {"LD_LIBRARY_PATH": "/other/lib"}, clear=True),
+    ):
+        ensure_wsl()
+        assert bootstrap.os.environ.get("LD_LIBRARY_PATH") == "/usr/lib/wsl/lib:/other/lib"

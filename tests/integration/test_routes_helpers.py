@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from modules.api.routes.asr import build_response, get_request_params
+from modules.api.routes.asr import _parse_bool_param, build_response, get_request_params
 from modules.api.support.request_utils import extract_local_path, prepare_source_path
 
 
@@ -122,3 +122,19 @@ def test_routes_extract_new_params(query_params, expected):
     params = asyncio.run(get_request_params(mock_request, {}))
     for key, value in expected.items():
         assert params[key] == value
+
+
+@pytest.mark.parametrize(
+    ("qp", "fd", "expected"),
+    [
+        ({"vad_filter": "1"}, {}, True),
+        ({"vad_filter": "yes"}, {}, True),
+        ({}, {"vad_filter": "1"}, True),
+        ({}, {"vad_filter": "yes"}, True),
+        ({"vad_filter": "true"}, {}, True),
+        ({}, {"vad_filter": "true"}, True),
+    ],
+)
+def test_parse_bool_param_spellings(qp, fd, expected):
+    """Verify _parse_bool_param handles '1' and 'yes' from query_params and form_data."""
+    assert _parse_bool_param(qp, fd, "vad_filter", False) is expected

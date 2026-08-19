@@ -334,3 +334,31 @@ def test_create_engine_raises_for_unsupported_post_validation_value():
     ):
         with pytest.raises(ValueError, match="Unsupported ASR engine"):
             engine_factory.create_engine("IGNORED", "test-model", unit_cpu)
+
+
+def test_create_faster_whisper_engine_coercion():
+    """Verify _create_faster_whisper_engine coerces float16 compute type to int8 on non-CUDA CPU units."""
+    unit_cpu = {"id": "cpu", "type": "CPU", "name": "Host CPU"}
+    with mock.patch("modules.inference.engines.engine_factory.FasterWhisperEngine") as mock_fw_constructor:
+        with mock.patch("modules.inference.engines.engine_factory.config.COMPUTE_TYPE", "float16"):
+            engine_factory._create_faster_whisper_engine("test-model-id", unit_cpu)
+            mock_fw_constructor.assert_called_once()
+            args = mock_fw_constructor.call_args[0]
+            kwargs = mock_fw_constructor.call_args[1]
+            assert args[0] == "test-model-id"
+            assert kwargs["device"] == "cpu"
+            assert kwargs["compute_type"] == "int8"
+
+
+def test_create_whisperx_engine_coercion():
+    """Verify _create_whisperx_engine coerces float16 compute type to int8 on non-CUDA CPU units."""
+    unit_cpu = {"id": "cpu", "type": "CPU", "name": "Host CPU"}
+    with mock.patch("modules.inference.engines.engine_factory.WhisperXEngine") as mock_wx_constructor:
+        with mock.patch("modules.inference.engines.engine_factory.config.COMPUTE_TYPE", "float16"):
+            engine_factory._create_whisperx_engine("test-model-id", unit_cpu)
+            mock_wx_constructor.assert_called_once()
+            args = mock_wx_constructor.call_args[0]
+            kwargs = mock_wx_constructor.call_args[1]
+            assert args[0] == "test-model-id"
+            assert kwargs["device"] == "cpu"
+            assert kwargs["compute_type"] == "int8"

@@ -6,6 +6,16 @@ from unittest import mock
 
 from modules.core import config
 
+_ADMIN_CSRF_HEADERS = {"Origin": "http://localhost", "Host": "localhost"}
+
+
+def _admin_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Same-origin CSRF headers for unauthenticated admin integration tests."""
+    headers = dict(_ADMIN_CSRF_HEADERS)
+    if extra:
+        headers.update(extra)
+    return headers
+
 
 def _unpack_response(resp):
     """Helper to handle Flask Response objects or tuples."""
@@ -51,7 +61,7 @@ def test_status_endpoint(client):
 
 def test_settings_get(client):
     """Test retrieving system settings."""
-    response = client.get("/system/settings")
+    response = client.get("/system/settings", headers=_admin_headers())
     assert response.status_code == 200
     data = json.loads(response.data)
     assert "ASR_MODEL" in data
@@ -65,7 +75,7 @@ def test_settings_update(client):
         mock.patch("modules.inference.runtime.model_manager.load_model") as mock_load,
     ):
         payload = {"ASR_MODEL": "small"}
-        response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json")
+        response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json", headers=_admin_headers())
 
         assert response.status_code == 200
         mock_update.assert_called_once()
@@ -102,7 +112,7 @@ def test_download_logs(client):
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("test log")
 
-    response = client.get("/logs/download")
+    response = client.get("/logs/download", headers=_admin_headers())
     assert response.status_code == 200
     assert b"test log" in response.data
 
@@ -110,7 +120,7 @@ def test_download_logs(client):
 def test_clear_history(client):
     """Test history clearing endpoint."""
     with mock.patch("modules.monitoring.history_manager.clear_history") as mock_clear:
-        response = client.post("/system/history/clear")
+        response = client.post("/system/history/clear", headers=_admin_headers())
         assert response.status_code == 200
         mock_clear.assert_called_once()
 
@@ -118,7 +128,7 @@ def test_clear_history(client):
 def test_cleanup_trigger(client):
     """Test manual cleanup trigger."""
     with mock.patch("modules.core.utils.purge_temporary_assets") as mock_cleanup:
-        response = client.post("/system/cleanup")
+        response = client.post("/system/cleanup", headers=_admin_headers())
         assert response.status_code == 200
         mock_cleanup.assert_called_once()
 
@@ -157,7 +167,7 @@ def test_system_routes_download_logs_error(client):
         mock.patch("os.path.exists", return_value=True),
         mock.patch("builtins.open", side_effect=OSError("Disk Error")),
     ):
-        response = client.get("/logs/download")
+        response = client.get("/logs/download", headers=_admin_headers())
         assert response.status_code == 500
         data = json.loads(response.data)
         assert "Disk Error" in data["error"]
@@ -165,7 +175,7 @@ def test_system_routes_download_logs_error(client):
 
 def test_system_routes_update_settings_missing_data(client):
     """Cover missing data in update_settings."""
-    response = client.post("/system/settings", data=json.dumps({}), content_type="application/json")
+    response = client.post("/system/settings", data=json.dumps({}), content_type="application/json", headers=_admin_headers())
     assert response.status_code == 400
 
 
@@ -176,7 +186,7 @@ def test_system_routes_update_settings_all_fields(client):
         mock.patch("modules.core.config.update_env") as mock_upd,
         mock.patch("modules.inference.runtime.model_manager.load_model"),
     ):
-        response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json")
+        response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json", headers=_admin_headers())
         assert response.status_code == 200
         assert mock_upd.call_count == 3
 
@@ -244,8 +254,96 @@ def test_swagger_theme_static(client):
 def test_clear_telemetry(client):
     """Test clearing telemetry history."""
     with mock.patch("modules.monitoring.telemetry_manager.clear_telemetry_history") as mock_clear:
-        response = client.post("/system/telemetry/clear")
+        response = client.post("/system/telemetry/clear", headers=_admin_headers())
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
         mock_clear.assert_called_once()
+
+
+def test_update_settings_disallowed_model(client):
+    """Test update_settings rejects arbitrary unauthorized models."""
+    payload = {"ASR_MODEL": "attacker/malicious-repo"}
+    response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json", headers=_admin_headers())
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "Invalid or disallowed ASR_MODEL" in data["error"]
+
+
+def test_update_settings_invalid_device(client):
+    """Test update_settings rejects invalid hardware devices."""
+    payload = {"ASR_DEVICE": "INVALID_HARDWARE"}
+    response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json", headers=_admin_headers())
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "Invalid ASR_DEVICE" in data["error"]
+
+
+def test_update_settings_out_of_bounds_retention(client):
+    """Test update_settings rejects retention values out of allowed bounds."""
+    payload = {"telemetry_retention_hours": 9999}
+    response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json", headers=_admin_headers())
+    assert response.status_code == 400
+
+    payload_log = {"log_retention_days": 500}
+    response_log = client.post("/system/settings", data=json.dumps(payload_log), content_type="application/json", headers=_admin_headers())
+    assert response_log.status_code == 400
+
+
+def test_admin_auth_enforcement_when_configured(client):
+    """Test endpoints require ADMIN_API_KEY when configured."""
+    with mock.patch.dict("os.environ", {"ADMIN_API_KEY": "super_secret"}, clear=False):
+        # Without key -> 401
+        res = client.post("/system/history/clear")
+        assert res.status_code == 401
+
+        # With wrong key -> 401
+        res = client.post("/system/history/clear", headers={"X-API-Key": "wrong"})
+        assert res.status_code == 401
+
+        # With correct key -> 200
+        with mock.patch("modules.monitoring.history_manager.clear_history"):
+            res = client.post("/system/history/clear", headers={"X-API-Key": "super_secret"})
+            assert res.status_code == 200
+
+
+def test_update_settings_rejects_float_retention(client):
+    """Non-integer retention values must be rejected."""
+    payload = {"telemetry_retention_hours": 1.9}
+    response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json", headers=_admin_headers())
+    assert response.status_code == 400
+
+
+def test_status_requires_api_key_when_configured(client):
+    """Documented API_KEY protection must apply to /status."""
+    mock_data = {"telemetry": {}, "system": {}, "engines": {}}
+    with (
+        mock.patch.dict("os.environ", {"API_KEY": "secret"}, clear=False),
+        mock.patch("modules.monitoring.dashboard.get_status_data", return_value=mock_data),
+    ):
+        denied = client.get("/status")
+        assert denied.status_code == 401
+        allowed = client.get("/status", headers={"X-API-Key": "secret"})
+        assert allowed.status_code == 200
+
+
+def test_cross_origin_admin_request_rejected(client):
+    """Test cross-origin browser requests to destructive endpoints are rejected."""
+    with mock.patch.dict("os.environ", {}, clear=True):
+        headers = {
+            "Origin": "https://attacker.evil.com",
+            "Host": "whisper-pro.internal:9000",
+        }
+        res = client.post("/system/history/clear", headers=headers)
+        assert res.status_code == 403
+        data = json.loads(res.data)
+        assert "Forbidden" in data["error"]
+
+
+def test_admin_request_without_origin_or_referer_rejected(client):
+    """Unauthenticated admin mutations must not succeed without Origin or Referer."""
+    with mock.patch.dict("os.environ", {}, clear=True):
+        res = client.post("/system/history/clear")
+        assert res.status_code == 403
+        data = json.loads(res.data)
+        assert "Origin or Referer header required" in data["error"]

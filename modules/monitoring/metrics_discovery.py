@@ -2,7 +2,6 @@
 
 import glob
 import logging
-import platform
 import re
 import threading
 import time
@@ -13,6 +12,13 @@ from modules.core import config, process_exec
 from modules.inference import scheduler
 from modules.inference.pipeline import openvino_resolver
 from modules.inference.runtime import model_manager
+from modules.monitoring.amd_utilization_helpers import resolve_amd_utilization
+from modules.monitoring.windows_accelerator_counters import (
+    _gpu_counter_command,
+    _npu_counter_command,
+    _read_first_int_value,
+    _run_windows_accelerator_counter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +86,9 @@ def _is_preprocessor_accelerated(pm: Any) -> bool:
         return False
     if type(pm.separator).__name__ in ("Mock", "MagicMock", "NonCallableMagicMock", "NonCallableMock"):
         return True
+    tokens = ("OpenVINO", "CUDA", "ROCM", "MIGraphX", "Dml", "DML")
     providers = getattr(pm.separator, "onnx_execution_provider", [])
-    return any("OpenVINO" in p or "CUDA" in p for p in providers)
+    return any(any(token in str(p) for token in tokens) for p in providers)
 
 
 def _is_uvr_openvino_disabled(unit_type: str) -> bool:
@@ -217,57 +224,6 @@ def _inactive_accelerator_zero_result(
     return 0
 
 
-def _gpu_counter_command() -> str:
-    return (
-        "(Get-Counter '\\GPU Engine(*engtype_3D)\\Utilization Percentage', "
-        "'\\GPU Engine(*engtype_Video*)\\Utilization Percentage' -ErrorAction SilentlyContinue).CounterSamples | "
-        "Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum"
-    )
-
-
-def _npu_counter_command() -> str:
-    return (
-        "(Get-Counter '\\GPU Engine(*engtype_Compute)\\Utilization Percentage', "
-        "'\\GPU Engine(*engtype_NPU)\\Utilization Percentage' -ErrorAction SilentlyContinue).CounterSamples | "
-        "Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum"
-    )
-
-
-def _run_windows_accelerator_counter(cmd: str) -> int | None:
-    powershell_path = _resolve_windows_powershell()
-    if not powershell_path:
-        return None
-    try:
-        res = process_exec.check_output_text([powershell_path, "-Command", cmd], timeout=5.0).strip()
-        return _normalize_windows_counter_value(res)
-    except (process_exec.CommandExecutionError, process_exec.CommandTimeoutError, ValueError):
-        return None
-
-
-def _resolve_windows_powershell() -> str | None:
-    if platform.system() != "Windows":
-        return None
-    return which("powershell")
-
-
-def _normalize_windows_counter_value(res: str) -> int | None:
-    if not res:
-        return None
-    if float(res) < 0:
-        return None
-    return min(100, int(float(res)))
-
-
-def _read_first_int_value(paths: list[str]) -> int | None:
-    for path in paths:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return int(f.read().strip())
-        except (IOError, ValueError):
-            continue
-    return None
-
-
 def _has_active_accelerator_tasks(device_type: str, unit_id: Any = None, idx: int = 0, exclude_nvidia: bool = False) -> bool:
     try:
         stats = scheduler.get_service_stats_minimal()
@@ -373,14 +329,20 @@ def _resolve_unit_utilization(unit_type: str, unit_id: Any) -> int | None:
     if unit_type == "CPU":
         return None
 
-    result: int | None = None
-    if unit_type == "CUDA":
-        result = _resolve_cuda_utilization(unit_id)
-    elif unit_type == "GPU":
-        result = _resolve_intel_unit_utilization("GPU", unit_id, exclude_nvidia=True)
-    elif unit_type == "NPU":
-        result = _resolve_intel_unit_utilization("NPU", unit_id, exclude_nvidia=False)
-    return result
+    resolvers = {
+        "CUDA": lambda: _resolve_cuda_utilization(unit_id),
+        "AMD": lambda: resolve_amd_utilization(
+            unit_id,
+            resolve_index=_resolve_index,
+            inactive_zero_result=_inactive_accelerator_zero_result,
+            store_real_accelerator_sample=_store_real_accelerator_sample,
+            fetch_single_accelerator_load=_fetch_single_accelerator_load,
+        ),
+        "GPU": lambda: _resolve_intel_unit_utilization("GPU", unit_id, exclude_nvidia=True),
+        "NPU": lambda: _resolve_intel_unit_utilization("NPU", unit_id, exclude_nvidia=False),
+    }
+    resolver = resolvers.get(unit_type)
+    return resolver() if resolver else None
 
 
 def _resolve_intel_unit_utilization(unit_type: str, unit_id: Any, *, exclude_nvidia: bool) -> int:
@@ -427,6 +389,9 @@ def _fetch_single_accelerator_load(
     val = _probe_real_accelerator_sample(device_type, idx, sysfs_paths, windows_cmd)
     if val is not None:
         return val
+
+    if _unit_has_app_accelerator_work(device_type, unit_id, idx, exclude_nvidia=exclude_nvidia):
+        return _probe_activity_fallback(unit_id, idx, device_type, busy_value, exclude_nvidia)
 
     held = _get_recent_real_accelerator_sample(device_type, idx)
     if held is not None:

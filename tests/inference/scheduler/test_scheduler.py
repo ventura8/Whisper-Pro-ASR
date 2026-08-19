@@ -451,6 +451,52 @@ def test_archive_registry_task_normalizes_history_hardware_fields():
     ) == ("CPU", "CPU", "CPU", "CPU", "CPU", "CPU")
 
 
+def test_early_task_registration_exception_records_failure_payload():
+    """Uncaught worker exceptions should archive error payloads and logs."""
+    with mock.patch("modules.inference.scheduler.history_manager.log_completed_task") as log_mock:
+        with pytest.raises(RuntimeError, match="boom"):
+            with scheduler.early_task_registration(task_type="Language Detection", filename="test.mkv", is_priority=True):
+                raise RuntimeError("boom")
+
+    log_mock.assert_called_once()
+    task = log_mock.call_args.args[0]
+    assert task["status"] == "failed"
+    assert task["result"]["error"] == "boom"
+    assert task["response_json"]["error"] == "boom"
+    assert task["logs"]
+
+
+def test_early_task_registration_skips_duplicate_failure_recording():
+    """Explicit record_task_failure before re-raise must not overwrite the first failure."""
+    with mock.patch("modules.inference.scheduler.history_manager.log_completed_task") as log_mock:
+        with pytest.raises(RuntimeError, match="boom"):
+            with scheduler.early_task_registration(task_type="ASR", filename="test.mkv"):
+                scheduler.record_task_failure("init failed", 400, context="ASR")
+                raise RuntimeError("boom")
+
+    log_mock.assert_called_once()
+    task = log_mock.call_args.args[0]
+    assert task["result"]["error"] == "init failed"
+    assert task["response_json"]["error"] == "init failed"
+
+
+def test_archive_registry_task_ensure_failed_payload_when_missing():
+    """Failed archived tasks without payloads should receive a synthesized error."""
+    task_id = "failed-empty"
+    scheduler.STATE.task_registry[task_id] = {
+        "task_id": task_id,
+        "filename": "test.mkv",
+        "status": "failed",
+        "stage": "Waiting for Priority Slot",
+    }
+
+    archived = scheduler._archive_registry_task(task_id)
+
+    assert archived is not None
+    assert archived["result"]["error"] == "Task failed"
+    assert archived["response_json"]["error"] == "Task failed"
+
+
 def test_priority_skips_ffmpeg_drain_when_idle_unit_available():
     """Priority task proceeds immediately without waiting for FFmpeg when a free hardware unit exists."""
     # Active standard FFmpeg (simulating ASR in preprocessing on one unit)

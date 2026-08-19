@@ -50,6 +50,9 @@ describe("main.js", () => {
         document: dom.window.document,
         fetch: fetchMock,
         ApexCharts: FakeApexCharts,
+        localStorage: {
+          getItem: (key) => (key === "whisper_api_key" ? "analytics-key" : null),
+        },
       }
     );
   });
@@ -67,6 +70,7 @@ describe("main.js", () => {
         audio: { count: 0, duration: 0 },
       },
       daily: {
+        __schema_version__: 2,
         "2026-06-20": { count: 1, duration: 300, asr: { count: 1, duration: 300 } },
         "2026-06-21": { count: 2, duration: 800, detectlang: { count: 1, duration: 100 }, asr: { count: 1, duration: 700 } },
       },
@@ -76,6 +80,7 @@ describe("main.js", () => {
 
     expect(String(dom.window.document.getElementById("val-total-tasks").innerText)).toBe("3");
     expect(dom.window.document.getElementById("table-body").innerHTML).toContain("2026-06-21");
+    expect(dom.window.document.getElementById("table-body").innerHTML).not.toContain("__schema_version__");
     expect(String(dom.window.document.getElementById("last-update").innerText)).toContain("Updated:");
   });
 
@@ -96,7 +101,9 @@ describe("main.js", () => {
 
     await context.fetchAnalytics();
 
-    expect(fetchMock).toHaveBeenCalledWith("/analytics", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith("/analytics", {
+      headers: { Accept: "application/json", "X-API-Key": "analytics-key" },
+    });
     expect(renderSpy).toHaveBeenCalled();
   });
 

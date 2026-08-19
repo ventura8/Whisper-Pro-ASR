@@ -4,6 +4,8 @@ import ntpath
 import os
 from typing import Any, Dict, Optional
 
+from modules.api.support.local_path import extract_path_from_mapping_keys, normalize_bazarr_request_params
+
 
 def backfill_task_filenames(data: Any) -> None:
     """Helper to resolve and clean generic task filenames in a flat list of history tasks."""
@@ -13,14 +15,34 @@ def backfill_task_filenames(data: Any) -> None:
         backfill_single_task_filename(task)
 
 
+def resolve_display_filename(task: Any) -> Optional[str]:
+    """Return the best dashboard filename for a task/history entry."""
+    if not isinstance(task, dict):
+        return None
+    current = task.get("filename")
+    if not is_generic_filename(current):
+        return current
+    req_json = _get_request_json_dict(task)
+    return _extract_best_filename(req_json) or current
+
+
 def backfill_single_task_filename(task: Any) -> None:
     """Resolve and clean a single task filename if generic."""
     if not isinstance(task, dict):
         return
+    resolved = resolve_display_filename(task)
+    if resolved and is_generic_filename(task.get("filename")):
+        task["filename"] = resolved
+
+
+def backfill_single_task_request_json(task: Any) -> None:
+    """Normalize Bazarr path-as-key payloads in stored request metadata."""
+    if not isinstance(task, dict):
+        return
     req_json = _get_request_json_dict(task)
-    best_name = _extract_best_filename(req_json)
-    if is_generic_filename(task.get("filename")) and best_name:
-        task["filename"] = best_name
+    if not req_json:
+        return
+    task["request_json"] = normalize_bazarr_request_params(req_json)
 
 
 def _get_request_json_dict(task: dict) -> dict:
@@ -29,6 +51,11 @@ def _get_request_json_dict(task: dict) -> dict:
 
 
 def _extract_best_filename(req_json: dict) -> Optional[str]:
+    path_from_keys = extract_path_from_mapping_keys(req_json)
+    if path_from_keys:
+        base = _clean_candidate_filename(path_from_keys)
+        if base:
+            return base
     candidates = [
         req_json.get("video_file"),
         req_json.get("local_path"),

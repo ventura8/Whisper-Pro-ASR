@@ -6,6 +6,10 @@ This skill ensures project agent assets remain accurate whenever behavior, archi
 
 Keep all `.agent` files aligned with current repository reality so agent behavior does not drift from the codebase.
 
+## Mandatory Rule
+
+Every time you work on this project, you MUST update all relevant markdown files in the same task (`README.md`, `docs/*.md`, and `.agent/*.md`). Never ship code-only changes. A task is incomplete until impacted docs and agent assets describe the current implementation.
+
 ## Trigger Conditions
 
 Run this skill whenever any of the following changes:
@@ -37,4 +41,4 @@ Run this skill whenever any of the following changes:
 
 ## Enforcement Rule
 
-Do not close a task that changes system behavior until required `.agent` asset updates are included in the same change set.
+Do not close any task until required documentation and `.agent` asset updates are included in the same change set.

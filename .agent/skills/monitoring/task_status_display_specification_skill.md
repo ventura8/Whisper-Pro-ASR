@@ -150,6 +150,7 @@ completed/failed → (archived)  (moved to history; removed from active list)
 | Non-deterministic ordering | Same system state produces different task order on repeated /status calls | Use start_time + task_id tie-break; never rely on dict/map iteration order |
 | Ordering policy inconsistent between backend and frontend | Backend sorts one way, frontend renders differently | Validate ordering rules in both scheduler.py (payload assembly) and dashboard feature scripts (rendering) |
 | Unknown status leaks to dashboard | "Unknown" status appears in UI, confusing operators | Use defensive assertions in status-setting code; log all unknown-status cases as errors |
+| Generic history filename from Bazarr/local-path requests | History tab shows "Unknown Media" while audit payload contains `local_path` or path-as-JSON-key (`{"/tv/show.mkv": ""}`) | Backfill filename from `request_json.local_path`/path keys at history write and serve time; normalize Bazarr path-as-key payloads to `local_path` at request ingest; all registered-task failures must call `record_task_failure()` so history retains `result.error`, `response_json`, and execution logs |
 | Post-processing status never visible | Task seems to jump from active to completed without transition | Accept that post-processing is typically transient; include in status payload correctly but don't require visible UI presence |
 
 ## Done Criteria
@@ -164,4 +165,3 @@ completed/failed → (archived)  (moved to history; removed from active list)
 - [ ] No unknown status leaks to dashboard under normal or stress-test conditions
 - [ ] Preemption/resumption cycle preserves deterministic ordering during transitions
 - [ ] No placeholder-like status/stage values appear in dashboard payload or rendered UI under normal or stress conditions
-

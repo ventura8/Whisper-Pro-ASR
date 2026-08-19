@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import logging
 import os
 import shutil
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 WHISPER_ID = "Systran/faster-whisper-large-v3"
 OV_SOURCE_ID = "openai/whisper-large-v3"
 UVR_MODEL = "UVR-MDX-NET-Inst_HQ_3.onnx"
+UVR_MODEL_SHA256 = "317554b07fe1ea5279a77f2b1520a41ea4b93432560c4ffd08792c30fddf9adc"
+SILERO_VAD_MODEL_SHA256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
 
 # The official OpenVINO pre-converted model for GenAI 2025.4
 OV_MODEL_ID = "OpenVINO/whisper-large-v3-fp16-ov"
@@ -173,14 +176,78 @@ def _export_openvino_whisper():
     return False
 
 
+def _download_uvr_direct(target_file):
+    import tempfile
+
+    import requests
+
+    direct_url = f"https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/{UVR_MODEL}"
+    logger.info("Attempting direct UVR model download from %s...", direct_url)
+    with requests.get(direct_url, stream=True, timeout=120) as resp:
+        resp.raise_for_status()
+
+        target_dir = os.path.dirname(os.path.abspath(target_file))
+        os.makedirs(target_dir, exist_ok=True)
+        temp_fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix="uvr_dl_")
+        sha256 = hashlib.sha256()
+        try:
+            with os.fdopen(temp_fd, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    sha256.update(chunk)
+            digest = sha256.hexdigest()
+            if digest != UVR_MODEL_SHA256:
+                raise RuntimeError(f"UVR model checksum mismatch: expected {UVR_MODEL_SHA256}, got {digest}")
+            os.replace(temp_path, target_file)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
+def _download_silero_vad_direct(target_file):
+    import tempfile
+
+    import requests
+
+    vad_url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+    logger.info("Attempting direct Silero VAD model download from %s...", vad_url)
+    with requests.get(vad_url, stream=True, timeout=30) as resp:
+        resp.raise_for_status()
+
+        target_dir = os.path.dirname(os.path.abspath(target_file))
+        os.makedirs(target_dir, exist_ok=True)
+
+        temp_fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix="vad_dl_")
+        sha256 = hashlib.sha256()
+        try:
+            with os.fdopen(temp_fd, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    sha256.update(chunk)
+
+            digest = sha256.hexdigest()
+            if digest != SILERO_VAD_MODEL_SHA256:
+                raise RuntimeError(f"Silero VAD checksum mismatch: expected {SILERO_VAD_MODEL_SHA256}, got {digest}")
+            os.replace(temp_path, target_file)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
 def _ensure_uvr_model():
-    if os.path.exists(os.path.join(UVR_DIR, UVR_MODEL)):
+    target_file = os.path.join(UVR_DIR, UVR_MODEL)
+    if os.path.exists(target_file):
         logger.info("UVR model already exists in %s. Skipping.", UVR_DIR)
         return
 
     if _restore_directory_from_cache("uvr", UVR_DIR, "UVR Model"):
         return
 
+    os.makedirs(UVR_DIR, exist_ok=True)
     logger.info("Downloading UVR Model: %s to %s...", UVR_MODEL, UVR_DIR)
     try:
         sep = Separator(model_file_dir=UVR_DIR, output_dir="/tmp")
@@ -188,37 +255,32 @@ def _ensure_uvr_model():
         logger.info("UVR Model downloaded successfully.")
         _cache_directory(UVR_DIR, "uvr")
     except Exception as exc:
-        logger.error("Failed to download UVR model: %s", exc)
-        sys.exit(1)
+        logger.warning("Separator load_model failed (%s), attempting direct download...", exc)
+        try:
+            _download_uvr_direct(target_file)
+            logger.info("Direct UVR Model download succeeded.")
+            _cache_directory(UVR_DIR, "uvr")
+        except Exception as direct_exc:
+            logger.error("Failed to download UVR model: %s", direct_exc)
+            sys.exit(1)
 
 
 def _ensure_vad_model():
-    if os.path.exists(os.path.join(VAD_DIR, "silero_vad.onnx")):
+    target_file = os.path.join(VAD_DIR, "silero_vad.onnx")
+    if os.path.exists(target_file):
         logger.info("VAD model already exists in %s. Skipping.", VAD_DIR)
         return
 
     if _restore_directory_from_cache("vad", VAD_DIR, "VAD Model"):
         return
 
-    logger.info("Downloading Silero VAD ONNX model to %s...", VAD_DIR)
+    logger.info("Downloading Silero VAD ONNX model to %s (sha256-verified)...", VAD_DIR)
     try:
-        import requests
-
-        vad_url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
-        target_path = os.path.join(VAD_DIR, "silero_vad.onnx")
-
-        os.makedirs(VAD_DIR, exist_ok=True)
-        response = requests.get(vad_url, stream=True, timeout=30)
-        response.raise_for_status()
-        with open(target_path, "wb") as file_handle:
-            for chunk in response.iter_content(chunk_size=8192):
-                file_handle.write(chunk)
-
-        logger.info("Silero VAD ONNX downloaded successfully: %s", target_path)
+        _download_silero_vad_direct(target_file)
+        logger.info("Silero VAD ONNX downloaded successfully: %s", target_file)
         _cache_directory(VAD_DIR, "vad")
     except Exception as exc:
-        logger.error("Failed to download Silero VAD ONNX: %s", exc)
-        sys.exit(1)
+        logger.warning("Silero VAD ONNX download skipped (%s). Runtime will fallback or download when needed.", exc)
 
 
 def verify_ov_model(directory):

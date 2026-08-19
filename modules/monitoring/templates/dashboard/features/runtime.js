@@ -27,7 +27,11 @@ async function updateStats() {
 }
 
 async function _fetchStatusData() {
-    const response = await fetch('/status');
+    const response = await fetch('/status', { headers: getAuthHeaders() });
+    if (!response.ok) {
+        console.warn('Status fetch failed:', response.status, response.statusText);
+        return null;
+    }
     return response.json();
 }
 
@@ -167,7 +171,8 @@ function _hardwareKind(unit) {
     const fixedKinds = {
         NPU: 'npu',
         CPU: 'cpu',
-        CUDA: 'cuda'
+        CUDA: 'cuda',
+        AMD: 'amd'
     };
     if (fixedKinds[unit.type]) {
         return fixedKinds[unit.type];
@@ -190,8 +195,13 @@ function _hardwareKindVisual(kind, unit, isUsed, telemetry, tasks) {
     if (kind === 'intel-gpu') return _intelGpuVisual(isUsed, telemetry);
     if (kind === 'npu') return _npuVisual(isUsed, telemetry);
     if (kind === 'cuda') return _cudaVisual(unit, isUsed, telemetry);
+    if (kind === 'amd') return _amdVisual(isUsed, telemetry);
     if (kind === 'cpu') return _cpuVisual(isUsed, tasks);
     return { icon: 'memory', isUsed };
+}
+
+function _amdVisual(isUsed, telemetry) {
+    return { icon: 'bolt', isUsed };
 }
 
 function _intelGpuVisual(isUsed, telemetry) {

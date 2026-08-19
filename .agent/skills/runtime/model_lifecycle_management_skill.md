@@ -38,19 +38,35 @@ To test dynamic timer scheduling and cancellation:
 - Assert the timer is actively scheduled in `STATE.idle_timer`.
 - Trigger a second session increment before the timer fires, and assert that the timer is successfully cancelled.
 
-### 3. Verify Thread Safety
+### 3. Module Structure
+
+All lifecycle logic lives in `modules/inference/runtime/model_manager.py` (kept under 500 lines). Key lifecycle functions:
+
+- `_run_idle_cleanup`, `_schedule_idle_cleanup`, `_cancel_idle_cleanup` — Timer-based idle model purging.
+- `unload_models` — Aggressive model purge from RAM/VRAM.
+- `increment_active_session`, `decrement_active_session` — Session tracking with automatic idle scheduling.
+- `wait_for_priority` — Priority task synchronization.
+- Public aliases: `check_preemption`, `cancel_idle_cleanup`.
+
+### 4. Verify Thread Safety
 
 The lifecycle operations utilize thread locks to protect model pools from concurrent modifications:
 
 - Ensure that if a task arrives *during* model unload execution, the unload lock prevents race conditions, allowing the unload to complete before models are reloaded on demand.
 
-### 4. Execute Automated Verification
+### 5. Execute Automated Verification
 
-Run the Docker parity wrapper so the lifecycle tests run through the same container pipeline as CI:
+Run targeted end-to-end idle timeout reclamation and lifecycle tests:
+
+```bash
+docker build -f Dockerfile.test --target test -t whisper-pro-asr-test .
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test python3 -m pytest tests/integration/concurrency/test_e2e_idle_timeout_reclamation.py -v
+```
+
+Or run the full Docker test pipeline wrapper:
 
 ```bash
 scripts/ci/build-and-test.sh
 ```
 
-Ensure a perfect **10.0/10.0** Pylint score is preserved across modified code blocks.
-
+Ensure per-file coverage >=90% and Rank-A complexity (Radon CC <= 5) across modified code blocks.

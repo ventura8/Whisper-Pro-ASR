@@ -5,6 +5,9 @@ import logging
 import os
 from unittest import mock
 
+from starlette.datastructures import QueryParams
+
+import whisper_pro_asr
 from modules.core import config, logging_setup
 from modules.core.logging_setup import (
     LOGGERS_TO_FILTER,
@@ -432,3 +435,9 @@ class TestHardwareInfo:
                 assert any("OpenVINO (GPU)" in line for line in lines)
                 assert any("[DEVICE PROPERTIES]" in line for line in lines)
                 assert any("Prop1" in line for line in lines)
+
+
+def test_sanitize_query_params():
+    """Verify sanitize_query_params retains only safe fields and URL-encodes keys/values."""
+    qp = QueryParams([("hf_token", "secret123"), ("beam_size", "5 & more"), ("special key", "value")])
+    assert whisper_pro_asr.sanitize_query_params(qp) == "beam_size=5%20%26%20more"

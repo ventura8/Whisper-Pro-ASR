@@ -32,6 +32,15 @@ For concurrency-impacting changes, liveness regressions are blocking failures.
 
 For any change affecting scheduler status updates, preemption, or task ordering:
 
+### Dashboard Concurrency UI E2E Interaction Coverage
+
+Add Playwright E2E tests that exercise real user interactions (tabs + filter buttons) against the dashboard while the system is in an active concurrency burst scenario.
+
+Minimum checks that we consider "full interaction" for this UI layer:
+- task filter buttons correctly narrow visible task cards (active vs queued vs paused-for-priority vs v1 categories)
+- switching to the history tab shows the correct empty-state (no placeholder/sentinel strings)
+- placeholder-like tokens (`unknown`, `null`, `undefined`, `none`, `(0/0)`) never appear in DOM text during concurrency
+
 ### 1. Status Transition Test
 
 Add test to validate correct status/stage semantics during preemption:
@@ -229,14 +238,20 @@ describe('Task Status Rendering (All 7 Statuses)', () => {
 ## Validation Commands
 
 ```bash
-# Backend status/ordering tests
-.venv/bin/python -m pytest tests/monitoring/ tests/inference/scheduler/test_scheduler.py tests/inference/scheduler/test_scheduler_priority_and_fifo.py tests/inference/scheduler/test_scheduler_pause_and_metadata.py tests/inference/scheduler/priority/test_priority_concurrency.py tests/inference/scheduler/priority/test_priority_concurrency_core_tests.py tests/inference/scheduler/priority/test_priority_concurrency_extended_tests.py -v -k "status or order or preemption"
+# End-to-end concurrency suite in Docker (HW matrix, volume tiers, yielding stages, idle timeout, edge cases, telemetry, UI HTML)
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test python3 -m pytest tests/integration/concurrency/ -v
+
+# Playwright E2E UI concurrency & preemption tests
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test npm run test:e2e
+
+# Backend status/ordering/priority unit & integration tests
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test python3 -m pytest tests/monitoring/ tests/inference/scheduler/ tests/integration/concurrency/ -v -k "status or order or preemption"
 
 # Frontend status rendering tests
-npm run test:js -- tests/dashboard_main.test.js --coverage
+docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test npm run test:js -- tests/js/dashboard_main.test.js --coverage
 
-# Full suite
-.venv/bin/python -m pytest tests/
+# Full suite in Docker
+scripts/ci/build-and-test.sh
 ```
 
 ## Done Criteria
@@ -248,4 +263,4 @@ npm run test:js -- tests/dashboard_main.test.js --coverage
 - Ordering determinism test confirms stable sort across calls.
 - Frontend rendering test validates all 7 statuses render correctly.
 - Paused-vs-waiting hint distinction validated in frontend test.
-
+- Playwright E2E UI concurrency test validates multi-hardware cards, active session counters, preemption hint banners, and zero DOM placeholders.
