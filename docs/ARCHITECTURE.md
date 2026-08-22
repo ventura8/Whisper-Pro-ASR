@@ -29,7 +29,7 @@ All core runtime modules are consolidated under `modules/core/` for improved org
 
 | Component | Responsibility |
 | :--- | :--- |
-| `modules/inference/` | Inference stack grouped by concern: `runtime/` (`model_manager`, `concurrency`, segment consumption), `scheduler/` (re-entrant locks, state/order/task helpers), `pipeline/` (`preprocessing/` package with orchestrator in `__init__.py` plus `helpers.py`, `provider.py`, `execution.py`, alongside `vad`, `language_detection`, `diarization`, `post_processing`), and `engines/` (`base`, `engine_factory`, `faster_whisper_engine`, `openai_whisper_engine`, `whisperx_engine`, `intel_engine`). |
+| `modules/inference/` | Inference stack grouped by concern: `runtime/` (`model_manager`, `concurrency`, segment consumption), `scheduler/` (nesting-safe locking via non-locking "_direct" sub-stage entry points, state/order/task helpers), `pipeline/` (`preprocessing/` package with orchestrator in `__init__.py` plus `helpers.py`, `provider.py`, `execution.py`, alongside `vad`, `language_detection`, `diarization`, `post_processing`), and `engines/` (`base`, `engine_factory`, `faster_whisper_engine`, `openai_whisper_engine`, `whisperx_engine`, `intel_engine`). |
 | `modules/api/` | FastAPI application layer grouped by concern: `routes/` (`asr`, `detect`, `system`) and `support/` (`request_utils`, `upload_extraction`, `local_path`, `security`) for shared request/materialization/path-approval/security logic. |
 | `modules/monitoring/` | `dashboard` & `dashboard_ui` (Material Design UI renderer loading manifest-ordered modules from `templates/dashboard_js_files.txt`), `analytics_ui` (analytics dashboard loaded from `templates/analytics_js_files.txt`), `telemetry` & `telemetry_manager` (persistent telemetry history), `history_manager` (task history with dual-tier storage), and `metrics_discovery` (hardware metrics). |
 
@@ -60,7 +60,7 @@ graph TD
     
     subgraph CORE ["Heterogeneous Engine Pool"]
     PRE -->|16kHz Stereo| C{"Isolation?"}
-    C -->|Enabled| D["UVR Separation (Re-entrant Lock)"]
+    C -->|Enabled| D["UVR Separation (Direct, No Re-Lock)"]
     C -->|Disabled| E["Standard Signal"]
     
     D --> VAD{"Single-Pass VAD"}
@@ -110,7 +110,7 @@ graph TD
     SAMPLING --> MONTAGE["Batch Montage: FFmpeg Concat (16kHz Stereo)"]
     
     subgraph BATCH ["Consolidated Batch Pipeline"]
-    MONTAGE --> ISOLATE["UVR Isolation (Single Pass - Re-entrant)"]
+    MONTAGE --> ISOLATE["UVR Isolation (Single Pass - Direct, No Re-Lock)"]
     ISOLATE --> VAD["Global VAD Scan (One Pass)"]
     VAD --> BATCH_INF["Batch Inference Session"]
     
@@ -131,16 +131,16 @@ graph TD
 
 ## 🔒 Granular Resource Orchestration
 
-### 1. Re-entrant Hardware Locks
+### 1. Nesting-Safe Hardware Locks
 
-The system implements a **Thread-Local Re-entrant Locking Pattern** via `model_lock_ctx()`. This allows a high-level task (like a full transcription request) to "claim" a hardware unit once and share it across all internal sub-stages:
+The system avoids re-locking during nested sub-stages structurally rather than through a reentrant lock: a high-level task (like a full transcription request) claims a hardware unit once via `model_lock_ctx()` (gated by a single global `threading.Semaphore(accel_limit)` that bounds total concurrent hardware claims; which *specific* unit is assigned comes from `STATE.hw_pool`, a separate FIFO queue of hardware-unit entries), and internal sub-stages call dedicated non-locking "_direct" entry points (e.g. `run_vocal_isolation_direct`, `run_batch_language_detection_direct`, `run_language_detection_core`) that skip acquisition entirely, so the already-claimed unit is shared across:
 
 1. **Vocal Isolation (UVR)**
 2. **Language Identification (Whisper)**
 3. **ASR Transcription (Whisper)**
 4. **Speaker Diarization (WhisperX)**
 
-This prevents deadlocks where a task might release a unit between stages and be unable to reclaim it due to high queue volume.
+This prevents deadlocks where a task might release a unit between stages and be unable to reclaim it due to high queue volume, without requiring the lock itself to support reentry.
 
 ### 2. Deadlock-Free Priority Resumption
 

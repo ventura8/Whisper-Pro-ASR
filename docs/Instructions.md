@@ -46,13 +46,13 @@
     | **Whisper ASR** | ✅ | ✅ | ❌ (CPU Fallback) | ❌ (CPU Fallback) |
     | **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
 
-- **Hybrid Device Support**: Simultaneously utilize multiple accelerators (e.g., Intel for isolation and NVIDIA for transcription).
+- **Hybrid Device Support**: Simultaneously utilize multiple accelerators via per-task assignment (e.g., one task uses Intel NPU/iGPU for UVR vocal isolation while another uses NVIDIA GPU for Whisper ASR transcription, concurrently and independently). Intel units accelerate preprocessing only; Whisper ASR falls back to CPU on Intel and AMD units.
 - **Advanced Preprocessing Stack**: Integrated **UVR/MDX-NET** (Vocal Isolation) with hardware acceleration and dedicated thread pooling (`PREPROCESS_THREADS`).
 - **OpenAI Compatible**: Native support for `/v1/audio/transcriptions` and `/v1/audio/translations` OpenAI API format.
 - **Swagger Documentation**: Interactive API testing available at `/docs`.
 - **Customizable ASR Parameters**: `initial_prompt`, `vad_filter`, and `word_timestamps` can be set per-request or via environment variables.
 - **Subtitle Layout Control**: `max_line_width` and `max_line_count` for SRT/VTT formatting.
-- **Smart Model Lifecycle**: Configurable `MODEL_IDLE_TIMEOUT` keeps models warm in memory for rapid response, with background idle monitoring.
+- **Smart Model Lifecycle**: Configurable `MODEL_IDLE_TIMEOUT` keeps models warm in memory for rapid response to bursty workloads. A deferred `threading.Timer` starts only after the last active session ends, and is cancelled and rescheduled if a new task arrives before it fires.
 - **Probabilistic Language ID**: Robust identification using **Strategic Uniform Sampling** and **Weighted Voting**. The system automatically samples up to 15 non-overlapping zones across the media and aggregates high-confidence evidence to eliminate false positives.
 
 - **Sequential Priority Queue**: High-priority requests (Language Detection) are serialized per-hardware-unit, preserving same-priority FIFO at acquisition time while allowing detect-language tasks to run across multiple units concurrently for maximum throughput and hardware stability.
@@ -84,7 +84,7 @@ Powered by **Faster-Whisper**. Supports **CPU** (Intel MKL/OpenMP) and **NVIDIA 
 ### Vocal Separation (Preprocessing)
 
 Powered by **ONNX Runtime (patched for OpenVINO)**. Supports **CPU**, **NVIDIA CUDA**, **Intel GPU**, and **Intel NPU**.
-*This allows for a "Split Architecture" where you can offload vocal cleaning to an Intel iGPU/NPU while keeping your NVIDIA card focused on transcription.*
+*This allows for per-task accelerator assignment, where one task can run entirely on an Intel iGPU/NPU while another task runs entirely on your NVIDIA card, concurrently and independently.*
 
 ## Quick Start
 
@@ -229,7 +229,7 @@ docker run --rm whisper-npu-test
 - **FIX**: Resolved "nn" (Nynorsk) language hallucination on silent or non-speech audio segments.
 - **FEAT**: Implemented **High-Performance Batch Montage**. Consolidated all sampling targets into a single high-density montage with **30s Grid Padding**, enabling single-pass UVR isolation and reducing identification latency by up to 80%.
 - **FEAT**: Added **Entropy-Adaptive Smart Search**. The engine now recovers from silent zones by scanning strides for peak signal energy.
-- **FEAT**: Implemented **Confusion-Matrix Tie-Breaker**. Resolves ambiguities between similar language pairs (e.g., NO/NN) with weighted bias resolution.
+- **FEAT**: Implemented **Squared-Confidence Voting**. Softmax probabilities are squared before aggregation, punishing low-confidence noise (e.g., spurious NO/NN hallucinations) so the dominant candidate wins the vote.
 - **FEAT**: Added **Fail-Safe Dual-Path VAD**. Automatically verifies speech and signal confidence on both isolated and raw audio segments. If confidence is <80% on isolated audio, it audits the raw signal and selects the one with higher confidence.
 - **FEAT**: Implemented **Strategic Uniform Sampling** for language detection. The engine now samples up to 5 non-overlapping zones across the entire media to ensure representative identification.
 - **FEAT**: Enhanced **Dynamic Chunk Sizing**. Samples now scale linearly (5m to 20m) to provide deep context for both short clips and feature films.

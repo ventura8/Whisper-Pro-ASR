@@ -6,9 +6,13 @@ import io
 import json
 import threading
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
+import pytest
+
 from tests.conftest import FlaskCompatibleClient
+from tests.integration.conftest import _BAZARR_TRANSCRIPTION_RESULT
 
 
 class TestBazarrLocalPathVolumeMapping:
@@ -263,3 +267,116 @@ class TestBazarrEdgeCases:
             body = resp.data.decode()
             assert "Hello world" in body
             assert "from Bazarr" in body
+
+
+class TestBazarrJsonSchemaContract:
+    """6.3: JSON schema/contract stability for the /asr JSON transcript response.
+
+    Bazarr's parser depends on specific field names/types in the JSON output.
+    If a field is renamed, removed, or its type changes, this must fail loudly
+    instead of Bazarr silently breaking.
+    """
+
+    EXPECTED_TOP_LEVEL_SCHEMA = {"text": str, "segments": list}
+    EXPECTED_SEGMENT_SCHEMA = {"text": str, "timestamp": list}
+
+    def _assert_matches_schema(self, obj: dict, schema: dict, context: str) -> None:
+        for field, expected_type in schema.items():
+            assert field in obj, f"{context}: expected field {field!r} is missing (contract broken)"
+            type_ok = isinstance(obj[field], expected_type)
+            type_msg = f"{context}: field {field!r} expected type {expected_type.__name__}, got {type(obj[field]).__name__}"
+            assert type_ok, type_msg
+
+    def _assert_all_segments_match_schema(self, segments: list[dict[str, Any]]) -> None:
+        for seg in segments:
+            assert isinstance(seg, dict), "each segment must serialize as a JSON object"
+            self._assert_matches_schema(seg, self.EXPECTED_SEGMENT_SCHEMA, "segment")
+
+    def _assert_segment_timing_matches_expected(self, actual_segments: list[dict[str, Any]]) -> None:
+        """Assert each segment's timing and text (used by Bazarr for subtitle placement
+        and content) survived the JSON round trip unchanged, not just present with the
+        right type."""
+        expected_segments = _BAZARR_TRANSCRIPTION_RESULT["segments"]
+        for actual_segment, expected_segment in zip(actual_segments, expected_segments, strict=True):
+            assert actual_segment["timestamp"] == list(expected_segment["timestamp"])
+            assert actual_segment["text"] == expected_segment["text"]
+
+    def test_asr_json_response_matches_expected_schema(self, bazarr_client: FlaskCompatibleClient, bazarr_wav: str):
+        """Verify the /asr JSON response's top-level and segment fields match the expected schema."""
+        with mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav):
+            resp = bazarr_client.post(f"/asr?local_path={bazarr_wav}&output=json")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+
+        self._assert_matches_schema(data, self.EXPECTED_TOP_LEVEL_SCHEMA, "top-level JSON response")
+        assert data["text"] == _BAZARR_TRANSCRIPTION_RESULT["text"]
+        assert len(data["segments"]) == len(_BAZARR_TRANSCRIPTION_RESULT["segments"])
+        self._assert_all_segments_match_schema(data["segments"])
+        self._assert_segment_timing_matches_expected(data["segments"])
+
+    def _assert_detect_language_field_matches_schema(self, data: dict, field: str, expected_type: type | tuple[type, ...]) -> None:
+        assert field in data, f"detect-language response missing expected field {field!r}"
+        value = data[field]
+        type_ok = isinstance(value, expected_type) and not isinstance(value, bool)
+        type_msg = f"detect-language field {field!r} expected {expected_type}, got {type(value).__name__!r} value {value!r}"
+        assert type_ok, type_msg
+
+    def test_detect_language_json_response_matches_expected_schema(self, bazarr_client: FlaskCompatibleClient, bazarr_wav: str):
+        """Verify the /detect-language JSON response fields match the expected schema."""
+        expected_schema = {
+            "detected_language": str,
+            "language": str,
+            "language_code": str,
+            "confidence": (int, float),
+        }
+        with mock.patch("modules.core.utils.get_audio_duration", return_value=120.0):
+            resp = bazarr_client.post(f"/detect-language?local_path={bazarr_wav}")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        for field, expected_type in expected_schema.items():
+            self._assert_detect_language_field_matches_schema(data, field, expected_type)
+
+
+# 6.6: non-ASCII / multi-byte text survives the full HTTP round trip for SRT/VTT/JSON.
+_NON_ASCII_MIXED_TEXT = "Café à côté — 你好世界 — مرحبا بالعالم — שלום עולם"
+
+
+def _post_asr_with_mocked_non_ascii_result(bazarr_client: FlaskCompatibleClient, bazarr_wav: str, output: str) -> Any:
+    """Shared setup: mock a transcription result containing the mixed non-ASCII text and POST /asr with the given output format."""
+    mocked_result = {
+        "text": _NON_ASCII_MIXED_TEXT,
+        "segments": [{"timestamp": (0.0, 1.0), "text": _NON_ASCII_MIXED_TEXT}],
+    }
+    with (
+        mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav),
+        mock.patch("modules.api.routes.asr.model_manager") as mock_mm,
+    ):
+        mock_mm.is_engine_initialized.return_value = True
+        mock_mm.increment_active_session.return_value = None
+        mock_mm.decrement_active_session.return_value = None
+        mock_mm.run_transcription.return_value = mocked_result
+        return bazarr_client.post(f"/asr?local_path={bazarr_wav}&output={output}")
+
+
+def _assert_json_output_preserves_non_ascii_text(resp: Any) -> None:
+    data = json.loads(resp.data)
+    assert data["text"] == _NON_ASCII_MIXED_TEXT
+    assert data["segments"][0]["text"] == _NON_ASCII_MIXED_TEXT
+
+
+def _assert_text_output_preserves_non_ascii_text(resp: Any, *, expect_no_bom: bool) -> None:
+    if expect_no_bom:
+        assert not resp.data.startswith(b"\xef\xbb\xbf"), "SRT output must not have a UTF-8 BOM"
+    assert _NON_ASCII_MIXED_TEXT in resp.data.decode("utf-8")
+
+
+@pytest.mark.parametrize("output", ["json", "srt", "vtt"])
+def test_asr_output_preserves_non_ascii_text(bazarr_client: FlaskCompatibleClient, bazarr_wav: str, output: str):
+    """Verify non-ASCII/multi-byte text survives the round trip in the /asr output, for every format."""
+    resp = _post_asr_with_mocked_non_ascii_result(bazarr_client, bazarr_wav, output)
+    assert resp.status_code == 200
+
+    if output == "json":
+        _assert_json_output_preserves_non_ascii_text(resp)
+    else:
+        _assert_text_output_preserves_non_ascii_text(resp, expect_no_bom=output in ("srt", "vtt"))

@@ -3,6 +3,7 @@ Telemetry and Statistics Collection for Whisper Pro ASR
 """
 
 import logging
+import math
 import threading
 import time
 from typing import Any
@@ -26,6 +27,15 @@ _DISPLAYABLE_STATUSES: set[str] = {
     "completed",
     "failed",
 }
+
+# Track which task IDs have already emitted a stale-task warning so repeated
+# dashboard polls do not produce duplicate log entries for the same orphan.
+_STALE_TASK_WARNED: set[str] = set()
+
+
+def _clear_stale_task_warned() -> None:
+    """Clear the stale-task deduplication set. Intended for test teardown."""
+    _STALE_TASK_WARNED.clear()
 
 
 def _normalize_status_value(status: Any) -> str:
@@ -162,16 +172,160 @@ def get_service_stats() -> dict[str, Any]:
     }
 
 
-def _get_dashboard_tasks_snapshot() -> list[dict[str, Any]]:
+# Safety net so a crashed/killed worker doesn't leave a task registry entry stuck
+# reporting "active"/"running" forever on the dashboard. Normal task completion always
+# removes the entry via scheduler._finalize_registered_task, so any "active" entry that
+# outlives this window with no owning worker is treated as a stale ghost for display.
+_STALE_ACTIVE_TASK_TIMEOUT_SEC = 6 * 3600
+# Below this, a start_active/start_time value is assumed to be a relative/synthetic
+# offset (e.g. in tests) rather than a real wall-clock epoch timestamp, so staleness
+# is not evaluated against it. Mirrors the epoch-vs-relative guard used client-side in
+# active_tasks.js (_areComparableTimestamps).
+_EPOCH_TIMESTAMP_THRESHOLD = 100_000_000
+
+
+def _resolve_epoch_timestamp(value: Any) -> float | None:
+    """Return `value` as a float epoch timestamp, or None if it is missing,
+    non-numeric, non-finite (NaN/inf), or too small to be a real wall-clock epoch
+    (i.e. it looks like a relative/synthetic offset rather than an actual epoch
+    timestamp)."""
+    if not value:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    if value < _EPOCH_TIMESTAMP_THRESHOLD:
+        return None
+    return value
+
+
+def _resolve_epoch_start_active(task: dict[str, Any], now: float) -> float | None:
+    """Return the task's start timestamp as a float epoch value, or None if
+    neither field resolves to one. `start_active` and `start_time` are resolved
+    independently (not via `or`), so an invalid/non-finite `start_active` cannot
+    mask an otherwise-valid `start_time`. A value later than `now` (clock skew,
+    a bad write) is rejected the same way `_resolve_last_liveness_signal` rejects
+    a future `last_progress_at`, since it would otherwise make `now - last_signal`
+    negative and permanently hide staleness."""
+    resolved = _resolve_epoch_timestamp(task.get("start_active"))
+    if resolved is not None and resolved <= now:
+        return resolved
+    resolved = _resolve_epoch_timestamp(task.get("start_time"))
+    if resolved is not None and resolved <= now:
+        return resolved
+    return None
+
+
+def _resolve_last_liveness_signal(task: dict[str, Any], now: float) -> float | None:
+    """Return the most recent evidence the owning worker is still alive: the last
+    progress/stage update (`last_progress_at`, written on every `update_task_progress`
+    call) if present, otherwise the task's start timestamp. A task whose worker keeps
+    making progress keeps refreshing this value and is never considered stale,
+    regardless of total elapsed run time. A `last_progress_at` later than `now`
+    (clock skew, a bad write) is rejected rather than trusted, since it would
+    otherwise make `now - last_signal` negative and permanently hide staleness;
+    the task's start timestamp is used instead in that case."""
+    last_progress_at = _resolve_epoch_timestamp(task.get("last_progress_at"))
+    if last_progress_at is not None and last_progress_at <= now:
+        return last_progress_at
+    return _resolve_epoch_start_active(task, now)
+
+
+def _is_stale_active_task(task: dict[str, Any], now: float) -> bool:
+    """Return True when a task has been reported 'active' with no liveness signal
+    (no progress/stage update, or none ever recorded past start) for far longer than
+    any real run should go silent -- i.e. it looks orphaned, not merely long-running."""
+    if task.get("status") != "active":
+        return False
+    last_signal = _resolve_last_liveness_signal(task, now)
+    if last_signal is None:
+        return False
+    return (now - last_signal) > _STALE_ACTIVE_TASK_TIMEOUT_SEC
+
+
+def _mark_task_copy_stale(task_copy: dict[str, Any], tid: Any) -> None:
+    """Relabel a display copy as stale and emit a one-time dedup warning for it."""
+    task_copy["status"] = "failed"
+    task_copy["stage"] = "Stale (worker did not report completion)"
+    task_id_str = str(tid)
+    if task_id_str not in _STALE_TASK_WARNED:
+        _STALE_TASK_WARNED.add(task_id_str)
+        logger.warning(
+            "[Telemetry] Stale active task detected (no liveness signal for > %ss): task_id=%s",
+            _STALE_ACTIVE_TASK_TIMEOUT_SEC,
+            task_id_str,
+        )
+
+
+def _build_task_copy(tid: Any, task: dict[str, Any], now: float, stale_task_ids: list[Any]) -> dict[str, Any]:
+    """Build one task's display copy, relabeling it (and recording it in
+    `stale_task_ids` for later revalidation/finalization) if it's stale. Does NOT
+    mutate the live registry entry -- that only happens in `_finalize_one_stale_task`,
+    under a fresh revalidation, to avoid a TOCTOU race where a heartbeat arriving
+    between this snapshot and finalization would otherwise be silently overridden."""
+    task_copy = task.copy()
+    if _is_stale_active_task(task_copy, now):
+        stale_task_ids.append(tid)
+        _mark_task_copy_stale(task_copy, tid)
+    else:
+        task_copy["status"] = _normalize_status_value(task_copy.get("status"))
+        task_copy["stage"] = _normalize_stage_value(task_copy.get("stage"), task_copy.get("status"))
+    task_copy["logs"] = logging_setup.TASK_LOGS.get(tid, [])
+    return task_copy
+
+
+def _finalize_one_stale_task(tid: Any) -> None:
+    """Revalidate, mark, and finalize a single stale task atomically. Reacquires
+    task_registry_lock and re-runs the staleness check fresh (not the earlier
+    snapshot) immediately before marking the live entry failed and handing it to
+    the scheduler's archive/remove lifecycle -- this closes the race window
+    between the initial staleness snapshot (in _build_task_copy) and finalization:
+    if the owning worker reported a fresh heartbeat in between, the task is
+    genuinely alive and must not be archived/removed. If it's still stale, marking
+    the live entry failed happens under the same lock acquisition as the
+    revalidation, so `_archive_registry_task` (invoked by scheduler.finalize_stale_task
+    right after, outside this lock) always sees the correct status."""
     with scheduler.STATE.task_registry_lock:
-        tasks = []
-        for tid, task in scheduler.STATE.task_registry.items():
-            task_copy = task.copy()
-            task_copy["status"] = _normalize_status_value(task_copy.get("status"))
-            task_copy["stage"] = _normalize_stage_value(task_copy.get("stage"), task_copy.get("status"))
-            task_copy["logs"] = logging_setup.TASK_LOGS.get(tid, [])
-            tasks.append(task_copy)
-        return tasks
+        task = scheduler.STATE.task_registry.get(tid)
+        if task is None:
+            return  # Already finalized concurrently (e.g. the owning worker's own path).
+        if not _is_stale_active_task(task, time.time()):
+            return  # A fresh liveness signal arrived since the snapshot -- not stale anymore.
+        task["status"] = "failed"
+        task["stage"] = "Stale (worker did not report completion)"
+
+    scheduler.finalize_stale_task(tid)
+    task_id_str = str(tid)
+    if task_id_str in _STALE_TASK_WARNED and tid not in scheduler.STATE.task_registry:
+        _STALE_TASK_WARNED.discard(task_id_str)
+
+
+def _finalize_stale_tasks(stale_task_ids: list[Any]) -> None:
+    """Finalize each confirmed-stale task through the scheduler's own lifecycle (the
+    same archive/remove path normal completion uses), so a ghost entry doesn't just
+    look reaped in the display copy while staying "active" forever in
+    scheduler.STATE.task_registry itself (e.g. get_minimal_stats() counts
+    active_sessions directly off the live registry, bypassing the display-layer
+    logic entirely, and would otherwise keep counting the ghost). Idempotent: if the
+    "crashed" worker is actually still alive and eventually reaches its own
+    finally-block finalize call, that call no-ops on an already-removed task_id
+    rather than erroring. Must be called after the outer task_registry_lock (held
+    while building display copies) is released."""
+    for tid in stale_task_ids:
+        _finalize_one_stale_task(tid)
+
+
+def _get_dashboard_tasks_snapshot() -> list[dict[str, Any]]:
+    now = time.time()
+    stale_task_ids: list[Any] = []
+    with scheduler.STATE.task_registry_lock:
+        tasks = [_build_task_copy(tid, task, now, stale_task_ids) for tid, task in scheduler.STATE.task_registry.items()]
+
+    _finalize_stale_tasks(stale_task_ids)
+    return tasks
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, float, str]:

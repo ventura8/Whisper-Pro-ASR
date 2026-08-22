@@ -17,6 +17,21 @@ For concurrency-impacting changes, liveness regressions are blocking failures.
 5. Run full suite after targeted passes are green.
 6. **Preserve helpful comments** during optimization—code clarity (especially around synchronization and lock ordering) takes precedence over aggressive line count reduction.
 
+## Test Hygiene Patterns
+
+The following patterns are language-neutral and mandatory for all new tests (Python and JS,
+e.g. `tests/js/*.test.js`), unless marked Python-only below:
+
+- **Global state cleanup**: Any test that mutates global state (e.g. `scheduler.STATE.task_registry`) MUST restore it in a `try/finally` block so a mid-test assertion failure does not leak dirty state into subsequent tests.
+- **Workload-relative timing thresholds**: Use `baseline_duration * N + fixed_overhead` bounds instead of fixed absolute second values for elapsed-time assertions. Fixed bounds are fragile on slow CI runners; relative bounds absorb runner variance while still catching real regressions.
+
+The following patterns are Python-only (they rely on Python-specific language semantics with
+no direct JS equivalent) and apply to `tests/**/*.py`, not to `tests/js/*.test.js`:
+
+- **Zip length validation** (Python-only): Use `zip(..., strict=True)` (Python 3.10+) when iterating paired actual/expected lists. Silently truncated mismatches hide bugs.
+- **Numeric type assertion** (Python-only): When asserting `isinstance(value, (int, float))`, add an explicit `and not isinstance(value, bool)` guard. `bool` is a subclass of `int` in Python and must be explicitly excluded when numeric intent is required.
+- **Shallow copy snapshots** (Python-only): When capturing a dict from a shared registry (e.g. `task_registry`) for later comparison, return `dict(live_entry)` while still holding the registry lock. A live reference can be mutated after the lock releases, causing false assertions.
+
 ## Priority/Concurrency Test Guidance
 
 1. Explicitly control task arrival ordering.

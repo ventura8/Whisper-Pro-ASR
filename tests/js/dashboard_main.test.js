@@ -1,6 +1,7 @@
 const path = require("path");
 const { JSDOM } = require("jsdom");
 const { evalInContext, loadScriptInContext, createMatchMediaStub } = require("./helpers");
+const taskOrderingFixture = require("../fixtures/task_ordering_fixture.json");
 
 function buildDashboardDom() {
   return new JSDOM(`<!doctype html><html><body>
@@ -2164,6 +2165,58 @@ describe("main.js", () => {
       `_compareTaskOrder(${JSON.stringify(sameTierSameTimeA)}, ${JSON.stringify(sameTierSameTimeB)})`
     );
     expect(byId).toBeLessThan(0);
+  });
+
+  it("orders the shared task-ordering fixture the same as the Python _task_sort_key", () => {
+    // tests/fixtures/task_ordering_fixture.json is the SAME fixture consumed by
+    // tests/monitoring/test_telemetry_loop.py::test_task_sort_key_matches_shared_fixture_active_order.
+    // Both sides must agree on the resulting order, or the active-task timeline could render
+    // differently on the dashboard depending on which layer computed it.
+    const tasks = taskOrderingFixture.tasks.map((t) => ({ ...t }));
+    // task_a/task_b share status/is_priority/start_time in the fixture, and
+    // happen to already appear in expected-output order in the fixture's own
+    // input array. Left as-is, a no-op/stable sort of already-sorted input
+    // would pass this assertion without ever exercising the tie-break
+    // comparator. Swap just that pair here so the sort must actively resolve
+    // the tie (by task_id) to reproduce the expected order.
+    const tieBreakPairIds = ["task_a", "task_b"];
+    const tieBreakIndices = tieBreakPairIds.map((id) => tasks.findIndex((t) => t.task_id === id));
+    expect(tieBreakIndices).not.toContain(-1);
+    const [firstIdx, secondIdx] = tieBreakIndices;
+    [tasks[firstIdx], tasks[secondIdx]] = [tasks[secondIdx], tasks[firstIdx]];
+
+    // Resolve _compareTaskOrder once before sorting to avoid a per-comparison evalInContext call.
+    const compareTaskOrder = evalInContext(context, "_compareTaskOrder");
+    const ordered = tasks.slice().sort((a, b) => compareTaskOrder(a, b));
+    const orderedIds = ordered.map((t) => t.task_id);
+
+    expect(orderedIds).toEqual(taskOrderingFixture.expected_active_task_order);
+  });
+
+  it("orders the shared fixture's history-status tasks by start_time+task_id, not completion time (_compareHistoryItems)", () => {
+    // Closes the 5.3 gap: when a task moves from "active" to "history", the history list must
+    // order by start_time/task_id -- NOT by completed_at. The fixture's completed_at values are
+    // deliberately scrambled relative to start_time to prove that.
+    const historyTasks = taskOrderingFixture.tasks
+      .filter((t) => taskOrderingFixture.history_status_values.includes(t.status))
+      .map((t) => ({ ...t }));
+
+    // Resolve _compareHistoryItems once before sorting to avoid a per-comparison evalInContext call.
+    const compareHistoryItems = evalInContext(context, "_compareHistoryItems");
+    const ordered = historyTasks
+      .slice()
+      .sort((a, b) => compareHistoryItems(a, b));
+    const orderedIds = ordered.map((t) => t.task_id);
+
+    expect(orderedIds).toEqual(taskOrderingFixture.expected_history_task_order);
+
+    // Sanity check that this order is genuinely NOT the completed_at order, i.e. the assertion
+    // above is actually exercising start_time-based ordering rather than a coincidence.
+    const completedAtOrder = historyTasks
+      .slice()
+      .sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at)))
+      .map((t) => t.task_id);
+    expect(orderedIds).not.toEqual(completedAtOrder);
   });
 
   it("covers timestamp comparability and UVR speed estimation helper", () => {
