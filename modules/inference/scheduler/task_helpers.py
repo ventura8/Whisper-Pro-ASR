@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 from typing import Any
 
 from modules.core import logging_setup, utils
@@ -50,6 +51,12 @@ def update_task_metadata(state: Any, **kwargs: Any) -> None:
 
 def _apply_metadata_update(state: Any, target_key: str | int, kwargs: dict[str, Any]) -> None:
     state.task_registry[target_key].update(kwargs)
+    # Any metadata write from the owning worker (e.g. current_position during
+    # transcription/preprocessing) is itself evidence of liveness -- stamp the
+    # same heartbeat used by update_task_progress so the staleness reaper
+    # (telemetry._is_stale_active_task) doesn't depend on progress always
+    # being reported through update_task_progress specifically.
+    state.task_registry[target_key]["last_progress_at"] = time.time()
     if "live_text" in kwargs:
         logger.debug("[Scheduler] Updated live_text for task %s", state.task_registry[target_key].get("task_id"))
 
@@ -157,6 +164,15 @@ def _apply_progress_update(
         state.task_registry[target_key]["progress"] = progress
     if should_update_stage:
         state.task_registry[target_key]["stage"] = stage
+    _stamp_heartbeat_if_updated(state, target_key, should_update_progress, should_update_stage)
+
+
+def _stamp_heartbeat_if_updated(state: Any, target_key: str | int, updated_progress: bool, updated_stage: bool) -> None:
+    """Heartbeat: proves the owning worker is still alive and making progress,
+    distinguishing a legitimately long-running task from an orphaned ghost whose
+    worker crashed without ever reaching normal completion."""
+    if updated_progress or updated_stage:
+        state.task_registry[target_key]["last_progress_at"] = time.time()
 
 
 def _verify_progress_not_regressing(progress: int | float, current_progress: int | float) -> bool:

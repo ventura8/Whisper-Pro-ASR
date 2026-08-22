@@ -131,6 +131,48 @@ jobs:
             type=sha,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
+      - name: Verify Release Notes File Exists
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if ! echo "$TAG_NAME" | grep -qE '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "Error: tag '$TAG_NAME' does not match the expected 'vMAJOR.MINOR.PATCH' format."
+            exit 1
+          fi
+          notes_path="docs/releases/GITHUB_RELEASE_${TAG_NAME}.md"
+          if [ ! -f "$notes_path" ]; then
+            echo "Error: release notes file '$notes_path' is missing. Add it before tagging a release."
+            exit 1
+          fi
+
+          # Guard against tagging a version the shipped code doesn't actually match
+          # (e.g. tag v1.2.2 pushed while config.py/pyproject.toml/package.json still say 1.2.1).
+          # package.json/pyproject.toml are parsed structurally (not via grep/sed line
+          # matching) so a line that merely looks similar elsewhere in the file can't
+          # produce a false match.
+          expected_version="${TAG_NAME#v}"
+          pyproject_version=$(python3 -c "
+          import tomllib
+          print(tomllib.load(open('pyproject.toml', 'rb'))['tool']['poetry']['version'])
+          ")
+          package_version=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+          config_version=$(grep -m1 '^VERSION = ' modules/core/config.py | sed -E 's/^VERSION = "([^"]+)"$/\1/')
+
+          version_sources=(
+            "pyproject.toml:$pyproject_version"
+            "package.json:$package_version"
+            "modules/core/config.py:$config_version"
+          )
+          for source_pair in "${version_sources[@]}"; do
+            source_label="${source_pair%%:*}"
+            source_value="${source_pair#*:}"
+            if [ -z "$source_value" ] || [ "$source_value" != "$expected_version" ]; then
+              echo "Error: tag '$expected_version' vs $source_label '${source_value:-<not found>}'."
+              exit 1
+            fi
+          done
+
       - name: Authenticate to DockerHub
         if: >
           github.ref == 'refs/heads/main' ||
@@ -158,6 +200,13 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.event.repository.html_url }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e  # v3
+        with:
+          name: ${{ github.ref_name }}
+          body_path: docs/releases/GITHUB_RELEASE_${{ github.ref_name }}.md
 
       - name: Update Docker Hub Description
         if: >

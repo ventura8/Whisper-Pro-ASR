@@ -35,7 +35,7 @@ Whisper Pro uses a **Hardware Resource Pool** to balance I/O-bound tasks, CPU-bo
 | :--- | :--- | :--- | :--- |
 | `STATE.model_lock` | `threading.Semaphore` | Global | Governs total parallel tasks based on physical hardware units. |
 | `STATE.hw_pool` | `queue.Queue` | Global | Holds specific hardware IDs (e.g. `GPU.0`, `NPU.0`) for task assignment. |
-| `model_lock_ctx` | **Re-entrant Lock** | Thread-Local | Allows nested sub-tasks (UVR → ASR → Diarization) to share the same hardware claim. |
+| `model_lock_ctx` | Semaphore-backed claim + non-locking "_direct" sub-stage entry points | Per-Task | Allows nested sub-tasks (UVR → ASR → Diarization) to share the same hardware claim without re-acquiring the lock. |
 | `STATE.priority_lock` | `threading.Lock` | Global | Protects priority counters and pre-emption signals. |
 | `_POOL_LOCK` | `threading.Lock` | Global | Serializes model loading and unloading operations to prevent race conditions during engine state transitions. |
 | `_OPENVINO_INIT_LOCKS[family]` | `threading.Lock` | Accelerator-family | Serializes first-time OpenVINO UVR initialization per family (`GPU`, `NPU`) while allowing GPU and NPU first-load paths to proceed independently. |
@@ -63,7 +63,7 @@ graph TD
     end
  
     subgraph TRANS_FLOW ["Unit-Pinned Processing"]
-    TYPE -->|ASR| ALOCK["model_lock_ctx (Re-entrant)"]
+    TYPE -->|ASR| ALOCK["model_lock_ctx (Claim, then Direct Sub-stages)"]
     ALOCK --> CLAIM1["Claim Unit from Pool"]
     CLAIM1 --> AEXEC["Inference + Diarization (Sub-tasks share Unit)"]
     AEXEC --> REL1["Return Unit to Pool"]
@@ -71,7 +71,7 @@ graph TD
  
     subgraph PRIO_FLOW ["Hardware-Aware Priority"]
     TYPE -->|Detection| PLOCK["_PRIORITY_LOCK"]
-    PLOCK --> DLOCK["model_lock_ctx (Re-entrant)"]
+    PLOCK --> DLOCK["model_lock_ctx (Claim, then Direct Sub-stages)"]
     DLOCK --> CLAIM2["Claim Free Unit"]
     CLAIM2 --> MONTAGE["Batch Montage (FFmpeg 16kHz Stereo)"]
     MONTAGE --> DEXEC["Global VAD & In-Memory Batch ID"]
@@ -147,7 +147,7 @@ In the `/detect-language` endpoint, the system uses a **Global VAD + In-Memory S
 
 By consolidating up to 15 probes into a single processing pass:
 
-- **Latency**: Reduced by up to 85% compared to sequential processing.
+- **Latency**: Substantially reduced compared to sequential processing.
 - **VAD Optimization**: Redundant VAD scans are eliminated. The inference engine processes raw audio segments only where the Global VAD has already confirmed speech presence.
 - **Hardware Stability**: Prevents context-switching thrashing and ensures the accelerator (NPU/GPU) remains at peak utilization.
 
@@ -191,7 +191,7 @@ On hardware with very limited resources (e.g., 1-CPU systems), the service autom
 
 ## 🗣 Speaker Diarization Concurrency
 
-When `diarize=true` is passed to `/asr`, the diarization pipeline runs **within the same re-entrant hardware lock context** as the main transcription. This ensures:
+When `diarize=true` is passed to `/asr`, the diarization pipeline runs **within the same claimed hardware unit** as the main transcription, via a non-locking "_direct" sub-stage entry point rather than re-acquiring the lock. This ensures:
 
 - **No additional hardware claims**: Alignment and diarization share the unit already claimed for transcription.
 - **Cache isolation**: Each hardware unit maintains its own `_ALIGN_POOL` and `_DIARIZE_POOL` entries, preventing cross-unit cache collisions.

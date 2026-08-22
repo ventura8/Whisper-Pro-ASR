@@ -384,6 +384,15 @@ def _finalize_registered_task(task_id):
             logger.error("[Scheduler] Failed to persist task history for %s: %s", task_id, err)
 
 
+def finalize_stale_task(task_id):
+    """Public entry point for external reapers (e.g. telemetry's stale-active-task
+    detection) to run a task through the same archive/remove lifecycle normal task
+    completion uses, without reaching into the private `_finalize_registered_task`.
+    Idempotent: a no-op if the task was already finalized (e.g. by its own owning
+    worker's `early_task_registration` finally-block, concurrently)."""
+    _finalize_registered_task(task_id)
+
+
 def _archive_registry_task(task_id: str) -> Optional[dict]:
     if task_id not in STATE.task_registry:
         return None

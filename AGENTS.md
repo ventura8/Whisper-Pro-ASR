@@ -15,6 +15,7 @@
 - **Build Script Bootstrap (Mandatory)**: `scripts/ci/build-and-test.sh` and `scripts/ci/build-and-test.ps1` are allowed to bootstrap missing `npm`/`docker` dependencies on Linux via `apt-get`, but must fail clearly when automatic installation is unavailable.
 - **Playwright + MCP Tooling (Mandatory)**: For frontend and dashboard verification, use Playwright CLI commands (`npx playwright ...` or npm scripts wrapping Playwright CLI) and MCP browser tooling for DOM/state inspection and deterministic troubleshooting. Do not rely on ad-hoc browser/manual-only verification paths when these automated tools are available.
 - **Docker-Only Quality Execution**: All linting, formatting, schema validation, type checking, dependency auditing, security scanning, and testing MUST be executed exclusively within the Docker test image pipeline (`Dockerfile.test` target `test`). Host-side executions of these quality gates are forbidden; the local/CI wrappers (`build-and-test.sh` and `build-and-test.ps1`) must only build and run the Docker test image and consume its results.
+- **PR Review-Thread Closure (Mandatory)**: After fixing (or determining no change is needed for) a PR review comment/thread, reply to that specific thread on GitHub explaining the outcome (fixed / already resolved / not applicable / deferred, with a brief reason), then mark it resolved. Do this for every thread addressed in the pass, not just a single summary comment on the PR. Only reply/resolve once the underlying fix is actually pushed and visible in the PR diff — do not resolve a thread against a local, unpushed commit.
 
 ## Task & Status Display Priority (Mandatory)
 
@@ -59,7 +60,7 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 - **I/O Optimization**: Avoid using `soundfile` (`sf.read`) directly on non-WAV video containers as it causes expensive full-file probes. Use FFmpeg to extract small chunks to temporary WAV files first if signal analysis (RMS) is required.
 - **Priority Yielding**: Maintain "Full-Pipeline Priority Yielding" logic—high-priority tasks (LD) must pause batch operations (ASR).
 - **Silent Status**: Ensure hardware acceleration warnings (ONNX, OpenVINO) are suppressed in favor of custom authoritative status logs.
-- **Model Lifecycle**: Respect `MODEL_IDLE_TIMEOUT` and `AGGRESSIVE_OFFLOAD` settings in `modules/config.py`. If `MODEL_IDLE_TIMEOUT > 0`, models are purged by a background monitor thread after the configured idle period instead of immediate unloading.
+- **Model Lifecycle**: Respect `MODEL_IDLE_TIMEOUT` and `AGGRESSIVE_OFFLOAD` settings in `modules/core/config.py`. If `MODEL_IDLE_TIMEOUT > 0`, models are purged by a deferred `threading.Timer` (started after the last active session ends) after the configured idle period instead of immediate unloading; the timer is automatically cancelled and rescheduled if new work arrives before it fires.
 
 ## Speaker Diarization
 

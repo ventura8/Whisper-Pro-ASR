@@ -1,6 +1,6 @@
 # Concurrency & Resource Orchestration Skill
 
-This skill documents how to test, debug, and verify the thread-local re-entrant lock pools and priority request preemption pipelines under high task loads.
+This skill documents how to test, debug, and verify the nesting-safe hardware-claim pools (a single global permit semaphore gating concurrent claims, with concrete unit assignment tracked separately via `STATE.hw_pool`, plus non-locking "_direct" sub-stage entry points) and priority request preemption pipelines under high task loads.
 
 ## Objective
 
@@ -16,9 +16,9 @@ Code clarity around synchronization, lock ordering, and state transitions is ess
 
 ## Architectural Mechanisms
 
-### 1. Re-entrant Locking (`model_lock_ctx`)
+### 1. Nesting-Safe Locking (`model_lock_ctx`)
 
-Ensures that a request context can obtain the model lock once and share it seamlessly across:
+The model lock (`STATE.model_lock`, a plain `threading.Semaphore`) is not reentrant. Instead, a request context obtains it once at the top level, and internal sub-stages avoid re-acquiring it by calling dedicated non-locking "_direct" entry points (e.g. `run_vocal_isolation_direct`, `run_batch_language_detection_direct`, `run_language_detection_core`) that skip the lock and reuse the already-claimed unit, seamlessly sharing it across:
 
 1. **Vocal Separation (UVR)**
 2. **Language Detection (Whisper)**
@@ -26,6 +26,11 @@ Ensures that a request context can obtain the model lock once and share it seaml
 4. **Speaker Diarization (PyAnnote/WhisperX)**
 
 This prevents a standard task from being preempted mid-pipeline, avoiding state corruption.
+
+**Test structural verification**: The "_direct" sibling invariant is confirmed by
+`test_nested_subtasks_route_through_direct_variants_not_model_lock_ctx` using an
+AST-based check (`ast.walk`) rather than a fragile substring scan. The AST check
+correctly handles aliased imports and ignores string literals/comments.
 
 ### 2. Preemption & Resumption
 
@@ -48,6 +53,9 @@ Ensures thread context registers and deletes all temporary audio WAV stems (stan
 
 - Confirm lock-order compliance for modified paths.
 - Confirm all new waits follow current policy (indefinite under saturation) and do not introduce timeout-based request failures in priority/preemption paths.
+- **Daemon threads**: All worker threads in integration/concurrency tests MUST be created with `daemon=True`. This ensures a test failure that leaves a thread blocked does not hang the entire test runner. Every daemon worker thread must still be followed by a bounded `thread.join(timeout=...)` and an `assert not thread.is_alive()` — `daemon=True` only stops a stuck thread from hanging the *process* at interpreter exit, it does not detect or fail the test when a thread hangs mid-run, so the join+assert pair is what actually catches that regression.
+- **Worker error capture**: Use the `_capture_worker_exc(errors)` context manager pattern (defined in `tests/inference/scheduler/priority/_preemption_test_helpers.py`) instead of bare `except Exception` in worker thread bodies. The bare catch lives only inside the named context manager, keeping worker bodies clean.
+- **Deadline-based polling**: Replace `time.sleep(N)` synchronization waits with `_poll_until(lambda: condition, timeout=T)`. This eliminates race conditions on slow CI runners without requiring large fixed sleeps.
 - Confirm a regression test exists for each changed liveness pathway.
 
 ### 1. Simulate Concurrency Races & Full End-to-End Suite

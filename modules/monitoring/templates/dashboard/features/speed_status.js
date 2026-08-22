@@ -132,8 +132,18 @@ function _trimTimeline(timeline, now) {
     }
 }
 
+// Reuse is only safe to bridge small gaps between polls where the processed
+// position simply hasn't ticked yet (the task is still actively working).
+// Beyond this window an unchanged position means real progress has actually
+// stalled (e.g. a scheduler preemption pause), and blindly counting the ETA
+// down by wall-clock elapsed time would make it shrink toward zero exactly
+// while no work is happening. Past the limit, fall through to a fresh
+// calculation instead, which correctly factors the stall into a lower speed
+// and a growing remaining-time estimate.
+const _TIMELINE_REUSE_STALL_LIMIT_SEC = 5;
+
 function _reuseTimelineEstimate(timeline, ctx, now) {
-    if (!_canReuseTimelineEstimate(timeline, ctx)) {
+    if (!_canReuseTimelineEstimate(timeline, ctx, now)) {
         return null;
     }
     const calculatedSpeed = timeline.lastCalculatedSpeed || 0;
@@ -142,7 +152,24 @@ function _reuseTimelineEstimate(timeline, ctx, now) {
     return { calculatedSpeed, remainingSeconds };
 }
 
-function _canReuseTimelineEstimate(timeline, ctx) {
+function _canReuseTimelineEstimate(timeline, ctx, now) {
+    if (!_isSameTimelinePositionAndStage(timeline, ctx)) {
+        return false;
+    }
+    const sinceLastSample = now - (timeline.lastSmoothedTimestamp || now);
+    return sinceLastSample >= 0 && sinceLastSample <= _TIMELINE_REUSE_STALL_LIMIT_SEC;
+}
+
+function _isSameTimelinePositionAndStage(timeline, ctx) {
+    // NOTE: call-order dependency -- this function is only called from
+    // _reuseTimelineEstimate, which is called AFTER _prepareTaskTimeline in
+    // calculateTaskSpeedAndEta. _prepareTaskTimeline calls _resetTimelineOnStageChange,
+    // which updates timeline.lastStage to ctx.currentStage (and clears the cache on a
+    // stage change). The `timeline.lastStage === ctx.currentStage` check below is
+    // therefore guaranteed to be trivially true for any same-stage call, but it serves
+    // as a defensive guard: reordering _prepareTaskTimeline and _reuseTimelineEstimate
+    // in calculateTaskSpeedAndEta would break that guarantee and allow stale cached
+    // estimates from a prior stage to be reused incorrectly.
     if (!timeline) {
         return false;
     }

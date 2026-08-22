@@ -1,0 +1,45 @@
+{
+  "_description": "Shared fixture for verifying that the Python task ordering (_task_sort_key in modules/monitoring/telemetry.py) and the JS task ordering (_compareTaskOrder in active_tasks.js, _compareHistoryItems in task_filter_history.js) stay in lockstep. Tasks must sort deterministically by start_time, tie-broken by task_id. Do NOT edit either comparator without re-checking the expected orders below.",
+  "tasks": [
+    {
+      "task_id": "task_c",
+      "start_time": 300.0,
+      "status": "active",
+      "completed_at": null
+    },
+    {
+      "task_id": "task_d",
+      "start_time": 200.0,
+      "status": "active",
+      "completed_at": null
+    },
+    {
+      "task_id": "task_a",
+      "start_time": 100.0,
+      "status": "completed",
+      "completed_at": "2026-01-01T02:00:00Z"
+    },
+    {
+      "task_id": "task_b",
+      "start_time": 100.0,
+      "status": "completed",
+      "completed_at": "2026-01-01T05:00:00Z"
+    },
+    {
+      "task_id": "task_e",
+      "start_time": 250.0,
+      "status": "completed",
+      "completed_at": "2026-01-01T01:00:00Z"
+    },
+    {
+      "task_id": "task_f",
+      "start_time": 50.0,
+      "status": "failed",
+      "completed_at": "2026-01-01T04:00:00Z"
+    }
+  ],
+  "expected_active_task_order": ["task_d", "task_c", "task_f", "task_a", "task_b", "task_e"],
+  "expected_history_task_order": ["task_e", "task_b", "task_a", "task_f"],
+  "history_status_values": ["completed", "failed"],
+  "notes": "expected_active_task_order covers the full task list ordered by _task_sort_key/_compareTaskOrder: active tier (tier 0) first ordered by start_time ascending, then all non-active statuses (tier 1) ordered by start_time ascending with task_id ascending as the tie-break (task_a/task_b share start_time=100, so tie-break makes task_a sort before task_b). expected_history_task_order covers only the tasks whose status is in history_status_values (i.e. task_a, task_b, task_e, task_f -- the ones that would appear in the history list, NOT the active task_c/task_d) ordered by _compareHistoryItems: start_time DESCENDING with task_id DESCENDING as the tie-break (task_a/task_b share start_time=100, so tie-break makes task_b sort before task_a -- the reverse of the active-list tie-break direction). The completed_at values are intentionally NOT correlated with start_time order, to prove the history ordering is based on start_time and not completion time."
+}

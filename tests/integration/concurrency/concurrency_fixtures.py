@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import os
 import struct
+import threading
 import uuid
 import wave
 from collections.abc import Generator
@@ -16,7 +17,7 @@ from urllib.parse import quote
 
 import pytest
 
-from modules.core import config
+from modules.core import config, utils
 from modules.inference import scheduler
 from modules.inference.runtime import model_manager
 from tests.conftest import FlaskCompatibleClient
@@ -113,6 +114,20 @@ def create_test_wav_file(file_path: str, duration_sec: float = 1.0) -> str:
     return file_path
 
 
+def reset_scheduler_state_and_pools() -> None:
+    """Cancel any pending idle-unload timer and reset scheduler state plus all
+    runtime pools (model/preprocessor/diarize/align) to a clean slate. Shared by
+    `HarnessContext.reset_pools` and other call sites (e.g.
+    tests/integration/concurrency/test_e2e_traffic_volume.py) that need the same
+    reset without going through the full HTTP-client harness."""
+    model_manager.cancel_idle_cleanup()
+    scheduler.STATE = scheduler.SchedulerState()
+    model_manager.MODEL_POOL.clear()
+    model_manager.PREPROCESSOR_POOL.clear()
+    model_manager.DIARIZE_POOL.clear()
+    model_manager.ALIGN_POOL.clear()
+
+
 class HarnessContext:
     """Manages active mock patches and ensures comprehensive teardown."""
 
@@ -127,13 +142,7 @@ class HarnessContext:
 
     def reset_pools(self) -> None:
         """Reset runtime pools and scheduler state."""
-        # Ensure any scheduled idle-unload timer is cancelled before clearing pools.
-        model_manager.cancel_idle_cleanup()
-        scheduler.STATE = scheduler.SchedulerState()
-        model_manager.MODEL_POOL.clear()
-        model_manager.PREPROCESSOR_POOL.clear()
-        model_manager.DIARIZE_POOL.clear()
-        model_manager.ALIGN_POOL.clear()
+        reset_scheduler_state_and_pools()
 
     def __enter__(self) -> HarnessContext:
         return self
@@ -155,6 +164,24 @@ def _populate_initial_model_pools(hw_list: list[dict[str, str]]) -> None:
         unit_id = unit["id"]
         model_manager.MODEL_POOL[unit_id] = mock.MagicMock()
         model_manager.PREPROCESSOR_POOL[unit_id] = mock.MagicMock()
+
+
+@contextmanager
+def registered_worker_session(is_priority: bool = False) -> Generator[None, None, None]:
+    """Reset thread context, register an active/early-registered session, and clean up on exit.
+
+    Shared setup for test worker threads that need to acquire a hardware unit via
+    `model_manager.model_lock_ctx`: resets `THREAD_CONTEXT`, increments the active-session
+    count, and opens `early_task_registration` for the duration of the `with` block.
+    """
+    utils.THREAD_CONTEXT.reset()
+    model_manager.increment_active_session()
+    try:
+        with model_manager.early_task_registration(is_priority=is_priority):
+            yield
+    finally:
+        model_manager.decrement_active_session()
+        utils.THREAD_CONTEXT.reset()
 
 
 def setup_concurrency_harness(
@@ -204,11 +231,7 @@ def setup_concurrency_harness(
     except Exception:
         for patcher in reversed(started_patchers):
             patcher.stop()
-        scheduler.STATE = scheduler.SchedulerState()
-        model_manager.MODEL_POOL.clear()
-        model_manager.PREPROCESSOR_POOL.clear()
-        model_manager.DIARIZE_POOL.clear()
-        model_manager.ALIGN_POOL.clear()
+        reset_scheduler_state_and_pools()
         raise
 
 
@@ -267,3 +290,35 @@ def assert_all_responses_successful(responses: list[dict[str, Any]]) -> None:
     for resp in responses:
         assert resp["status_code"] == 200
         assert resp["json"] is not None
+
+
+@contextmanager
+def auto_confirm_priority_waits() -> Generator[None, None, None]:
+    """Keep priority pause confirmations flowing during concurrency tests."""
+    stop_event = threading.Event()
+    errors: list[BaseException] = []
+
+    def run_auto_confirm() -> None:
+        try:
+            while not stop_event.is_set():
+                state = scheduler.STATE
+                if state.pause_requested.is_set() and not state.pause_confirmed.is_set():
+                    state.pause_confirmed.set()
+                for u_sync in list(state.unit_sync.values()):
+                    if u_sync["pause_requested"].is_set() and not u_sync["pause_confirmed"].is_set():
+                        u_sync["pause_confirmed"].set()
+                stop_event.wait(0.01)
+        except BaseException as exc:  # background-thread isolation: captured and re-raised
+            errors.append(exc)
+            raise
+
+    confirm_thread = threading.Thread(target=run_auto_confirm, daemon=True)
+    confirm_thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        confirm_thread.join(timeout=2.0)
+        assert not confirm_thread.is_alive(), "auto_confirm_priority_waits background thread did not stop"
+        if errors:
+            raise RuntimeError("auto_confirm_priority_waits background thread failed") from errors[0]

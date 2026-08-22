@@ -122,6 +122,16 @@ To use this service with **Bazarr**:
 - **Runtime Configuration**: Dynamic `/settings` endpoint allows model, device, and retention changes without container restart.
 - **Telemetry Downsampling**: Dual-layer downsampling (server + client) caps chart data at 300 points for smooth dashboard rendering during extended operation.
 - **Strict Lint Baseline**: CI/local parity enforces Ruff + Flake8 + Pylint on Python sources, with Flake8 configured at 140 chars and no ignore directives.
+- **Nesting-Safe Hardware Orchestration**: Dedicated non-locking entry points let nested AI sub-tasks share a single hardware claim without re-locking.
+- **Per-Task Accelerator Assignment**: Each incoming task is assigned a concrete hardware unit from `STATE.hw_pool` (FIFO), so different tasks can land on different accelerators (e.g., Intel NPU or NVIDIA GPU) and run independently.
+- **Priority-First Engine**: Cooperative, unit-aware preemption lets high-priority tasks (like language detection) claim a saturated hardware unit as soon as the running task reaches its next yield checkpoint.
+- **FIFO with Priority Yielding**: Requests are processed by `start_time` order (tie-break by registration order at acquisition time) within their own priority class while language detection still preempts ASR under saturation.
+- **Stable Task Timeline**: Dashboard task cards (active + history) are displayed in deterministic `start_time` + `task_id` order for operations monitoring; this tie-break (by `task_id` string) is distinct from the scheduler's registration-order FIFO at acquisition time.
+- **Bazarr Ready**: Direct compatibility with the full media automation stack via standard formats (SRT, VTT, JSON).
+- **Industrial Telemetry**: Real-time speed multipliers, ETA calculation, and detailed hardware state reporting.
+- **Intel GPU Saturation Reporting**: Intel iGPU/Arc dashboard charts report full busy-load saturation as `100%` instead of capping at `99%`.
+- **Interactive Documentation**: Full OpenAPI/Swagger interface available at `/docs`.
+- **Live SRT Streaming**: Real-time auto-scrolling subtitle display during processing for immediate visual feedback.
 
 ### 🧩 Hardware Compatibility Matrix
 
@@ -132,17 +142,6 @@ To use this service with **Bazarr**:
 | **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
 | **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-- **Re-entrant Hardware Orchestration**: Intelligent thread-local locking for nested AI sub-tasks.
-- **Hybrid "Split" Architecture**: Efficiently distribute workloads across multiple accelerators (e.g., Intel NPU for isolation and NVIDIA for transcription).
-- **Priority-First Engine**: Instant sub-second pre-emption for high-priority tasks (like language detection).
-- **FIFO with Priority Yielding**: Requests are processed by `start_time` order (tie-break `task_id`) within their own priority class while language detection still preempts ASR under saturation.
-- **Stable Task Timeline**: Dashboard task cards (active + history) are displayed in deterministic `start_time` + `task_id` order for operations monitoring.
-- **Bazarr Ready**: Direct compatibility with the full media automation stack via standard formats (SRT, VTT, JSON).
-- **Industrial Telemetry**: Real-time speed multipliers, ETA calculation, and detailed hardware state reporting.
-- **Intel GPU Saturation Reporting**: Intel iGPU/Arc dashboard charts report full busy-load saturation as `100%` instead of capping at `99%`.
-- **Interactive Documentation**: Full OpenAPI/Swagger interface available at `/docs`.
-- **Live SRT Streaming**: Real-time auto-scrolling subtitle display during processing for immediate visual feedback.
 
 ---
 

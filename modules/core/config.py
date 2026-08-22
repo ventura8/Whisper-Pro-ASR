@@ -31,7 +31,7 @@ HOST = os.environ.get("HOST") or ".".join(["0", "0", "0", "0"])
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 HARDWARE_UNITS: list[dict[str, str]] = []  # Global registry for accelerator orchestration
 DIARIZATION_HF_TOKEN = os.environ.get("DIARIZATION_HF_TOKEN", "").strip()
 
