@@ -5,24 +5,40 @@ Private utilities and helpers for API routes.
 import logging
 import os
 import traceback
-import uuid
 from typing import Optional
 
 from fastapi import Request
 
 from modules.api.support.audio_standardization import get_clean_wav_or_error
-from modules.api.support.local_path import (
-    extract_path_from_mapping_keys,
-    get_approved_roots,
-    is_path_approved,
-    log_local_path_optimization,
+from modules.api.support.local_path import extract_path_from_mapping_keys
+from modules.api.support.source_resolution import (
+    _build_upload_tmp_path,
+    extract_ext,
+    get_display_name_early,
+    handle_upload,
+    prepare_source_path,
+    resolve_local_path,
+    shutil_copy_file_in_chunks,
 )
 from modules.api.support.upload_extraction import (
     _is_valid_upload_file,
     extract_uploaded_file,
 )
-from modules.core import config, utils
+from modules.core import utils
 from modules.inference.runtime import model_manager
+
+# Re-exported for existing callers/tests that import these from request_utils
+# (e.g. modules.api.routes.asr / detect, and their test suites) -- the actual
+# implementations live in source_resolution.py to keep this file under the
+# 500-line limit.
+__all__ = [
+    "extract_ext",
+    "get_display_name_early",
+    "handle_upload",
+    "prepare_source_path",
+    "resolve_local_path",
+    "shutil_copy_file_in_chunks",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +160,32 @@ def _track_materialized_upload(tmp_path: str):
     )
 
 
+def _resolve_video_file_as_path(form_data, request) -> str | None:
+    """Resolve Bazarr's `video_file` caller-metadata field the same approved-roots-gated
+    way as local_path (see resolve_local_path). Now that we replicate Bazarr's own
+    audio-track selection and delay correction server-side (see
+    utils.get_stream_alignment_directives), reading the mapped source directly here --
+    like the existing local_path zero-copy optimization -- is preferable to using
+    Bazarr's already re-encoded upload: it operates on the original, full-quality
+    source instead of Bazarr's lossy resampled copy, and skips the upload/materialization
+    entirely. Takes priority over any uploaded audio_file whenever it resolves."""
+    video_file = extract_video_file(form_data, request)
+    return resolve_local_path(video_file) if video_file else None
+
+
+def _record_audio_source_mode(mode_message: str) -> None:
+    """Log immediately (visible in the main/file log right away) and stash on
+    THREAD_CONTEXT so it can also be re-logged once task registration begins --
+    this function runs in the async route handler, before early_task_registration(),
+    so LogBufferHandler (dashboard per-task "Execution Logs") can't capture it yet:
+    it keys its buffer by task_id/registration_thread_id, neither of which exists
+    until the worker thread enters early_task_registration(). worker_context/
+    apply_worker_context_from_dict carries this value into that later point (see
+    asr.py/detect.py's _perform_*_task, which re-log it right after entering)."""
+    logger.info("[System] %s", mode_message)
+    utils.THREAD_CONTEXT.audio_source_mode = mode_message
+
+
 async def resolve_and_materialize_upload(local_path, audio_file, file, form_data, request):
     """Extract local path, uploaded file, and materialize the upload to disk."""
     resolved_local_path = extract_local_path(local_path, form_data, request)
@@ -154,9 +196,27 @@ async def resolve_and_materialize_upload(local_path, audio_file, file, form_data
     # skip upload materialization entirely (zero-copy Bazarr flow).
     optimized_local_path = resolve_local_path(resolved_local_path) if resolved_local_path else None
     if optimized_local_path:
+        # local_path resolves to the original media container, not the (now-bypassed)
+        # upload -- Bazarr's encode=false/raw_pcm hints describe the upload's raw PCM
+        # format, and applying them here would make FFmpeg misinterpret a real
+        # container as headerless PCM.
+        utils.THREAD_CONTEXT.input_flags = None
+        _record_audio_source_mode(f"Audio source: MAPPED PATH (local_path) -> {optimized_local_path}")
         return optimized_local_path, None
 
+    optimized_video_path = _resolve_video_file_as_path(form_data, request)
+    if optimized_video_path:
+        # video_file resolves to the original media container, not the (now-bypassed)
+        # upload -- Bazarr's encode=false/raw_pcm hints describe the upload's raw PCM
+        # format, and applying them here would make FFmpeg misinterpret a real
+        # container as headerless PCM.
+        utils.THREAD_CONTEXT.input_flags = None
+        _record_audio_source_mode(f"Audio source: MAPPED PATH (video_file) -> {optimized_video_path}")
+        return optimized_video_path, None
+
     uploaded_file = await _materialize_if_needed(uploaded_file, local_path=resolved_local_path)
+    if uploaded_file:
+        _record_audio_source_mode(f"Audio source: UPLOADED AUDIO -> materialized to {uploaded_file}")
 
     return resolved_local_path, uploaded_file
 
@@ -180,211 +240,45 @@ def _setup_input_flags(request, form_data):
         utils.THREAD_CONTEXT.input_flags = None
 
 
+class MaterializedUploadPath(str):
+    """A materialized upload's on-disk temp path, tagged with the client's original
+    filename. `_build_upload_tmp_path` always names the temp file `upload_<uuid>.ext`
+    (never the client's real name), so without this the original filename is gone by
+    the time display-name resolution (get_display_name_early, prepare_source_path)
+    runs -- both would otherwise show the random temp basename in the dashboard/history
+    instead of the file the client actually sent."""
+
+    original_filename: Optional[str] = None
+
+
 async def _materialize_if_needed(uploaded_file, local_path: Optional[str] = None) -> Optional[str]:
-    materialized_path, _ = await materialize_upload_file(uploaded_file, local_path=local_path)
-    if materialized_path:
-        return materialized_path
-    return None
-
-
-def prepare_source_path(local_path=None, audio_file=None):
-    """Resolve input media - 1. Local path mapping, 2. Upload fallback."""
-    display_name = _derive_display_name_from_path(local_path)
-    local_resolution = _resolve_local_source(local_path, display_name)
-    if local_resolution:
-        return local_resolution
-
-    if audio_file:
-        res = _prepare_audio_file_path(audio_file, display_name)
-        if res:
-            return res
-
-    if local_path:
-        raise ValueError(f"Path not accessible: {local_path} (Volumes unmapped and no audio data attached)")
-
-    return None, None, None
-
-
-def _derive_display_name_from_path(local_path) -> Optional[str]:
-    if not local_path:
+    materialized_path, original_filename = await materialize_upload_file(uploaded_file, local_path=local_path)
+    if not materialized_path:
         return None
-    return os.path.basename(local_path.strip().strip('"').strip("'"))
+    tagged_path = MaterializedUploadPath(materialized_path)
+    tagged_path.original_filename = original_filename
+    return tagged_path
 
 
-def _resolve_local_source(local_path, display_name: Optional[str]) -> Optional[tuple]:
-    if not local_path:
-        return None
-    resolved = resolve_local_path(local_path)
-    if not resolved:
-        return None
-    return resolved, None, display_name
+def apply_worker_context_from_dict(worker_context: dict) -> None:
+    """Apply a captured worker_context dict onto the current thread's THREAD_CONTEXT.
+    Shared by asr.py/detect.py's own _apply_*_worker_context wrappers and
+    detect_coalescing.py's coalesced-follower flow."""
+    utils.THREAD_CONTEXT.request_json = worker_context["request_json"]
+    utils.THREAD_CONTEXT.endpoint = worker_context["endpoint"]
+    utils.THREAD_CONTEXT.caller_info = worker_context["caller_info"]
+    utils.THREAD_CONTEXT.input_flags = worker_context.get("input_flags")
+    utils.THREAD_CONTEXT.audio_source_mode = worker_context.get("audio_source_mode")
 
 
-def _prepare_audio_file_path(audio_file, display_name: Optional[str]) -> Optional[tuple]:
-    pre_materialized = _resolve_pre_materialized_upload(audio_file, display_name)
-    if pre_materialized:
-        return pre_materialized
-    tmp_path, temp_path, original_filename = handle_upload(audio_file)
-    if tmp_path:
-        resolved_name = display_name if display_name else original_filename
-        return tmp_path, temp_path, resolved_name
-    return None
-
-
-def _resolve_pre_materialized_upload(audio_file, display_name: Optional[str]) -> Optional[tuple]:
-    if not isinstance(audio_file, str):
-        return None
-    resolved_p = resolve_local_path(audio_file)
-    if not resolved_p:
-        return None
-    resolved_name = display_name if display_name else os.path.basename(resolved_p)
-    logger.info("[System] Using pre-materialized upload: %s", os.path.basename(resolved_p))
-    return resolved_p, resolved_p, resolved_name
-
-
-_GENERIC_UPLOAD_NAMES = frozenset({"audio_file", "file", "blob"})
-
-
-def _basename_from_path(path: str) -> str:
-    return os.path.basename(path.strip().strip('"').strip("'"))
-
-
-def _display_name_from_path(path: str) -> Optional[str]:
-    base = _basename_from_path(path)
-    return base or None
-
-
-def _display_name_from_upload_file(audio_file) -> Optional[str]:
-    upload_name = getattr(audio_file, "filename", None)
-    if not upload_name:
-        return None
-    base = os.path.basename(str(upload_name).strip())
-    if base and base not in _GENERIC_UPLOAD_NAMES:
-        return base
-    return None
-
-
-def _resolve_early_display_name_from_local_path(local_path) -> Optional[str]:
-    if not local_path or not isinstance(local_path, str):
-        return None
-    return _display_name_from_path(local_path)
-
-
-def _resolve_early_display_name_from_audio_file(audio_file) -> Optional[str]:
-    if not audio_file:
-        return None
-    if isinstance(audio_file, str):
-        return _display_name_from_path(audio_file)
-    return _display_name_from_upload_file(audio_file)
-
-
-def get_display_name_early(local_path=None, audio_file=None):
-    """Extract a descriptive filename for the dashboard before processing starts."""
-    return (
-        _resolve_early_display_name_from_local_path(local_path)
-        or _resolve_early_display_name_from_audio_file(audio_file)
-        or "Unknown Media"
-    )
-
-
-def resolve_local_path(raw_path):
-    """Check if the provided path exists locally."""
-    clean_path = raw_path.strip().strip('"').strip("'")
-    candidates = [clean_path, clean_path.replace("+", " ")]
-
-    approved_roots = get_approved_roots()
-
-    for p in candidates:
-        if not p:
-            continue
-        normalized_p = os.path.realpath(p)
-        if not is_path_approved(normalized_p, approved_roots):
-            logger.warning("[System] Path not in approved roots (volume not mounted?): %s", p)
-            return None
-
-        if os.path.exists(normalized_p):
-            log_local_path_optimization(logger, normalized_p)
-            return normalized_p
-    return None
-
-
-def handle_upload(audio_file):
-    """Handle binary file upload."""
-    if not audio_file:
-        return None, None, None
-
-    original_filename = getattr(audio_file, "filename", "uploaded_file") or "uploaded_file"
-    logger.info("[System] Ingesting remote data: %s", original_filename)
-    tmp_path = None
-    try:
-        tmp_path = _build_upload_tmp_path(original_filename)
-        _write_upload_sync(audio_file, tmp_path)
-        _validate_upload_sync(tmp_path)
-        _track_successful_upload(tmp_path)
-        return tmp_path, tmp_path, original_filename
-    except Exception:
-        _cleanup_temp_upload_on_error(tmp_path)
-        raise
-
-
-def _extract_ext(original_filename: str, local_path: Optional[str]) -> str:
-    for candidate in (original_filename, local_path):
-        if not candidate:
-            continue
-        ext = os.path.splitext(candidate.strip().strip('"').strip("'"))[1]
-        if ext and len(ext) <= 6:
-            return ext
-    return ".tmp"
-
-
-extract_ext = _extract_ext
-
-
-def _build_upload_tmp_path(original_filename: str, local_path: Optional[str] = None) -> str:
-    ext = _extract_ext(original_filename, local_path)
-    return os.path.join(config.get_temp_dir(), f"upload_{uuid.uuid4().hex}{ext}")
-
-
-def _track_successful_upload(tmp_path: str):
-    file_size = os.path.getsize(tmp_path)
-    utils.track_file(tmp_path)
-    logger.info("[System] Remote source ingestion successful: %d bytes", file_size)
-
-
-def _cleanup_temp_upload_on_error(tmp_path: Optional[str]):
-    if not tmp_path:
-        return
-    try:
-        _remove_path_if_exists(tmp_path)
-    except FileNotFoundError:
-        pass
-
-
-def _write_upload_sync(audio_file, tmp_path: str):
-    if hasattr(audio_file, "file") and audio_file.file:
-        try:
-            audio_file.file.seek(0)
-        except tuple([Exception]):
-            pass
-        with open(tmp_path, "wb") as f:
-            shutil_copy_file_in_chunks(audio_file.file, f)
-    else:
-        content = audio_file.read() if hasattr(audio_file, "read") else audio_file
-        with open(tmp_path, "wb") as f:
-            f.write(content)
-
-
-def _validate_upload_sync(tmp_path: str):
-    _ensure_non_empty_file(tmp_path)
-
-
-def shutil_copy_file_in_chunks(src, dst):
-    """Helper to copy file stream in chunks to avoid high RAM spikes."""
-    while True:
-        chunk = src.read(1024 * 1024)  # 1MB chunk
-        if not chunk:
-            break
-        dst.write(chunk)
+def log_audio_source_mode(worker_context: dict) -> None:
+    """Re-log the audio-source decision (made earlier, before task registration
+    existed) now that a task_id/registration_thread_id exists -- only now can
+    LogBufferHandler capture it into the dashboard's per-task "Execution Logs".
+    Call this right after entering early_task_registration()."""
+    mode = worker_context.get("audio_source_mode")
+    if mode:
+        logger.info("[System] %s", mode)
 
 
 def cleanup_files(*args):
@@ -416,9 +310,9 @@ def handle_error(err, context="ASR"):
     return msg, status_code
 
 
-def initialize_task_context(local_path=None, audio_file=None, is_priority=False):
+def initialize_task_context(local_path=None, audio_file=None, is_priority=False, video_file=None):
     """Shared initialization logic for transcription and detection tasks."""
-    source_path, upload_temp, display_name = prepare_source_path(local_path, audio_file)
+    source_path, upload_temp, display_name = prepare_source_path(local_path, audio_file, video_file)
     if display_name:
         utils.THREAD_CONTEXT.filename = display_name
         model_manager.update_task_metadata(filename=display_name)
@@ -469,16 +363,18 @@ async def _parse_multipart_form(request: Request) -> dict:
 
 def extract_local_path(local_path: str | None, form_data: dict, request: Request) -> str | None:
     """Extract local path parameter from form data and query params."""
+    # video_file is intentionally excluded: it's Bazarr caller metadata sent for
+    # logging/display only (see whisperai.py's pass_video_name option) and must
+    # never be resolved as a local filesystem path -- see the wire-format
+    # contract asserted in tests/integration/test_bazarr_wire_format.py.
     candidates = [
         local_path,
         form_data.get("local_path"),
-        form_data.get("video_file"),
         form_data.get("file_path"),
         form_data.get("original_path"),
         form_data.get("file"),
         form_data.get("audio_file"),
         request.query_params.get("local_path"),
-        request.query_params.get("video_file"),
         request.query_params.get("file_path"),
         request.query_params.get("original_path"),
         request.query_params.get("file"),
@@ -486,6 +382,19 @@ def extract_local_path(local_path: str | None, form_data: dict, request: Request
         extract_path_from_mapping_keys(form_data),
     ]
     for val in candidates:
+        if val and isinstance(val, str):
+            return val
+    return None
+
+
+def extract_video_file(form_data: dict, request: Request) -> str | None:
+    """Extract Bazarr's `video_file` caller-metadata field. Historically display/logging
+    only, but this value may also be passed to _resolve_video_file_as_path, which
+    resolves it through the same approved-roots gate as local_path (see
+    resolve_local_path) and, when it resolves, uses it directly as the transcription
+    source -- see extract_local_path's exclusion comment for why *this* function
+    itself never resolves it as a filesystem path."""
+    for val in (form_data.get("video_file"), request.query_params.get("video_file")):
         if val and isinstance(val, str):
             return val
     return None

@@ -5,8 +5,12 @@ import os
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 import modules.core.config as config_module
 import modules.core.config_helpers as config_helpers_module
+
+pytestmark = pytest.mark.usefixtures("restore_config_after_reload")
 
 
 def _exists_with_intel_nodes(path: str, real_exists):

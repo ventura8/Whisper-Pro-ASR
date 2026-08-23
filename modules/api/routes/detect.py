@@ -2,19 +2,18 @@
 Language Detection Routes for Whisper Pro ASR
 """
 
-import asyncio
-import concurrent.futures
 import json
 import logging
-import os
-import threading
 import time
-from typing import Optional, TypedDict
+from typing import Optional
 
 import anyio
 from fastapi import APIRouter, File, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from modules.api.routes import detect_coalescing
+from modules.api.routes.detect_coalescing import CoalescedDetectResult, DetectResponsePayload
 from modules.api.support import request_utils as routes_utils
 from modules.api.support.local_path import normalize_bazarr_request_params
 from modules.core import config, utils
@@ -23,24 +22,6 @@ from modules.inference.runtime import model_manager
 
 router = APIRouter(tags=["Identification"])
 logger = logging.getLogger(__name__)
-
-type DetectError = tuple[str, int]
-type DetectResponsePayload = dict[str, object] | Response
-type CoalescedDetectResult = tuple[DetectResponsePayload | None, DetectError | None]
-
-
-class DetectRequestContext(TypedDict):
-    """Request context used while processing language-detection jobs."""
-
-    resolved_local_path: Optional[str]
-    uploaded_file: Optional[UploadFile]
-    filename: str
-    start_time: float
-    worker_context: dict
-
-
-_INFLIGHT_DETECT_LOCK = threading.Lock()
-_INFLIGHT_DETECT_BY_PATH: dict[str, concurrent.futures.Future[CoalescedDetectResult]] = {}
 
 
 @router.post("/detect-language")
@@ -68,16 +49,23 @@ async def detect_language(
             local_path, audio_file, file, form_data, request
         )
 
-        worker_context = _build_detect_worker_context(request, form_data, resolved_local_path)
-        _apply_detect_worker_context(worker_context)
+        video_file = routes_utils.extract_video_file(form_data, request)
+        worker_context = _build_detect_worker_context(request, form_data, resolved_local_path, video_file)
+        routes_utils.apply_worker_context_from_dict(worker_context)
 
         start_time = time.time()
-        filename = routes_utils.get_display_name_early(resolved_local_path, uploaded_file)
-        dedupe_key = _build_dedupe_key(resolved_local_path, uploaded_file) if config.ENABLE_LD_REQUEST_COALESCING else None
+        filename = routes_utils.get_display_name_early(resolved_local_path, uploaded_file, video_file)
+        dedupe_key = detect_coalescing.build_dedupe_key(resolved_local_path, uploaded_file) if config.ENABLE_LD_REQUEST_COALESCING else None
 
         if dedupe_key:
-            return await _handle_coalesced_detect(
-                dedupe_key, filename, resolved_local_path, uploaded_file, start_time, worker_context=worker_context
+            return await detect_coalescing.handle_coalesced_detect(
+                dedupe_key,
+                filename,
+                resolved_local_path,
+                uploaded_file,
+                start_time,
+                worker_context=worker_context,
+                run_detection_internal=_run_detection_internal,
             )
 
         return await _run_detection_without_dedupe(resolved_local_path, uploaded_file, filename, start_time, worker_context=worker_context)
@@ -90,6 +78,7 @@ def _build_detect_worker_context(
     request: Request,
     form_data: dict,
     resolved_local_path: Optional[str] = None,
+    video_file: Optional[str] = None,
 ) -> dict:
     params = normalize_bazarr_request_params(_build_request_params(request, form_data))
     if resolved_local_path:
@@ -99,27 +88,21 @@ def _build_detect_worker_context(
         "request_json": _mask_sensitive_params(params),
         "endpoint": request.url.path,
         "input_flags": getattr(utils.THREAD_CONTEXT, "input_flags", None),
+        "audio_source_mode": getattr(utils.THREAD_CONTEXT, "audio_source_mode", None),
+        "video_file": video_file,
     }
 
 
-def _apply_detect_worker_context(worker_context: dict) -> None:
-    utils.THREAD_CONTEXT.request_json = worker_context["request_json"]
-    utils.THREAD_CONTEXT.endpoint = worker_context["endpoint"]
-    utils.THREAD_CONTEXT.caller_info = worker_context["caller_info"]
-    utils.THREAD_CONTEXT.input_flags = worker_context.get("input_flags")
-
-
-def _apply_worker_context_from_dict(worker_context: dict) -> None:
-    utils.THREAD_CONTEXT.request_json = worker_context["request_json"]
-    utils.THREAD_CONTEXT.endpoint = worker_context["endpoint"]
-    utils.THREAD_CONTEXT.caller_info = worker_context["caller_info"]
-    utils.THREAD_CONTEXT.input_flags = worker_context.get("input_flags")
-
-
 def _build_request_params(request: Request, form_data: dict) -> dict:
+    """Dump form fields into a display/audit dict, skipping file uploads.
+
+    `await request.form()` (Starlette) yields plain `starlette.datastructures.UploadFile`
+    instances, not the `fastapi.UploadFile` subclass -- checking against the subclass
+    here always failed, so uploads fell through to `str(v)` and leaked a raw
+    'UploadFile(filename=...)' repr into the audit payload instead of being skipped."""
     params = dict(request.query_params)
     for k, v in form_data.items():
-        if not isinstance(v, UploadFile):
+        if not isinstance(v, StarletteUploadFile):
             params[k] = str(v)
     return params
 
@@ -142,191 +125,6 @@ def _get_caller_info(request: Request) -> dict:
     }
 
 
-async def _handle_coalesced_detect(
-    dedupe_key: str,
-    filename: str,
-    resolved_local_path: Optional[str],
-    uploaded_file: Optional[UploadFile],
-    start_time: float,
-    *,
-    worker_context: dict,
-) -> DetectResponsePayload:
-    is_leader = False
-    with _INFLIGHT_DETECT_LOCK:
-        shared_future = _INFLIGHT_DETECT_BY_PATH.get(dedupe_key)
-        if shared_future is None:
-            shared_future = concurrent.futures.Future[CoalescedDetectResult]()
-            _INFLIGHT_DETECT_BY_PATH[dedupe_key] = shared_future
-            is_leader = True
-
-    if not is_leader:
-        logger.info(
-            "[LD] Coalescing duplicate detect-language request for %s; waiting for in-flight result.",
-            filename,
-        )
-        return await _await_shared_result_with_dashboard_task(shared_future, dedupe_key, filename, worker_context=worker_context)
-
-    return await _run_leader_detection(
-        shared_future,
-        dedupe_key,
-        {
-            "resolved_local_path": resolved_local_path,
-            "uploaded_file": uploaded_file,
-            "filename": filename,
-            "start_time": start_time,
-            "worker_context": worker_context,
-        },
-    )
-
-
-def _build_dedupe_key(resolved_local_path: Optional[str], uploaded_file: Optional[UploadFile]) -> Optional[str]:
-    """Build a stable key for local-path detection requests that can be safely coalesced."""
-    if uploaded_file is not None or not resolved_local_path:
-        return None
-    normalized = os.path.abspath(os.path.normpath(resolved_local_path))
-    return f"local_path::{normalized}"
-
-
-async def _await_shared_result(shared_future: concurrent.futures.Future[CoalescedDetectResult]) -> DetectResponsePayload:
-    """Wait for a leader request and return the same response payload."""
-    try:
-        result, err = await asyncio.wrap_future(shared_future)
-    except tuple([Exception]) as e:
-        msg, code = routes_utils.handle_error(e, "LD")
-        return JSONResponse(content={"error": msg}, status_code=code)
-
-    if err:
-        msg, code = err
-        return JSONResponse(content={"error": msg}, status_code=code)
-    return result
-
-
-async def _await_shared_result_with_dashboard_task(
-    shared_future: concurrent.futures.Future[CoalescedDetectResult],
-    dedupe_key: str,
-    filename: str,
-    *,
-    worker_context: dict,
-) -> DetectResponsePayload:
-    """Represent coalesced followers in task telemetry while waiting for leader output."""
-    return await anyio.to_thread.run_sync(
-        lambda: _await_shared_result_with_dashboard_task_sync(
-            shared_future,
-            dedupe_key,
-            filename,
-            worker_context=worker_context,
-        )
-    )
-
-
-def _record_ld_failure(msg: str, code: int) -> None:
-    """Persist LD failure metadata for dashboard history."""
-    model_manager.record_task_failure(msg, code, context="LD")
-
-
-def _json_response_failure(response: JSONResponse) -> tuple[str, int]:
-    """Extract error message/code from an LD error response payload."""
-    code = response.status_code
-    try:
-        payload = json.loads(response.body)
-        if isinstance(payload, dict) and payload.get("error"):
-            return str(payload["error"]), code
-    except tuple([Exception]):
-        pass
-    return "Language detection failed", code
-
-
-def _await_shared_result_with_dashboard_task_sync(
-    shared_future: concurrent.futures.Future[CoalescedDetectResult],
-    dedupe_key: str,
-    filename: str,
-    *,
-    worker_context: dict,
-) -> DetectResponsePayload:
-    """Worker-thread follower flow to avoid blocking the event loop on registration."""
-    _apply_worker_context_from_dict(worker_context)
-    with model_manager.early_task_registration(
-        task_type="Language Detection (Coalesced)",
-        filename=filename,
-        is_priority=False,
-    ):
-        model_manager.update_task_metadata(
-            stage="Coalesced Request (Waiting for Leader)",
-            status="queued",
-            coalesced=True,
-            coalesced_key=dedupe_key,
-        )
-        try:
-            result, err = shared_future.result()
-        except tuple([Exception]) as e:
-            msg, code = routes_utils.handle_error(e, "LD")
-            _record_ld_failure(msg, code)
-            return JSONResponse(content={"error": msg}, status_code=code)
-
-        if err:
-            msg, code = err
-            _record_ld_failure(msg, code)
-            return JSONResponse(content={"error": msg}, status_code=code)
-
-        if isinstance(result, JSONResponse):
-            if result.status_code >= 400:
-                fail_msg, fail_code = _json_response_failure(result)
-                _record_ld_failure(fail_msg, fail_code)
-            return result
-
-        model_manager.update_task_metadata(
-            status="completed",
-            stage="Coalesced Request (Reused Leader Result)",
-            result=result,
-            progress=100,
-        )
-        return result
-
-
-async def _run_leader_detection(
-    shared_future: concurrent.futures.Future[CoalescedDetectResult],
-    dedupe_key: str,
-    request_context: DetectRequestContext,
-) -> DetectResponsePayload:
-    """Execute the canonical detect-language task for a dedupe key."""
-    try:
-        response, result_tuple = await _run_detection_internal(
-            request_context["resolved_local_path"],
-            request_context["uploaded_file"],
-            request_context["filename"],
-            request_context["start_time"],
-            worker_context=request_context["worker_context"],
-        )
-        _safe_set_future_result(shared_future, result_tuple)
-        return response
-    except BaseException as e:
-        _safe_set_future_exception(shared_future, e)
-        if isinstance(e, Exception):
-            msg, code = routes_utils.handle_error(e, "LD")
-            return JSONResponse(content={"error": msg}, status_code=code)
-        raise
-    finally:
-        _safe_set_future_exception(shared_future, RuntimeError("Leader exited early without setting a result."))
-        with _INFLIGHT_DETECT_LOCK:
-            _INFLIGHT_DETECT_BY_PATH.pop(dedupe_key, None)
-
-
-def _safe_set_future_result(
-    shared_future: concurrent.futures.Future[CoalescedDetectResult],
-    result: CoalescedDetectResult,
-) -> None:
-    if not shared_future.done():
-        shared_future.set_result(result)
-
-
-def _safe_set_future_exception(
-    shared_future: concurrent.futures.Future[CoalescedDetectResult],
-    exc: BaseException,
-) -> None:
-    if not shared_future.done():
-        shared_future.set_exception(exc)
-
-
 async def _run_detection_without_dedupe(
     resolved_local_path,
     uploaded_file,
@@ -334,7 +132,7 @@ async def _run_detection_without_dedupe(
     start_time,
     *,
     worker_context,
-):
+) -> DetectResponsePayload:
     """Run a single detect-language request without coalescing."""
     response, _ = await _run_detection_internal(resolved_local_path, uploaded_file, filename, start_time, worker_context=worker_context)
     return response
@@ -347,7 +145,7 @@ async def _run_detection_internal(
     start_time,
     *,
     worker_context,
-):
+) -> tuple[DetectResponsePayload, CoalescedDetectResult]:
     """Run detection and return both the HTTP response and raw (result, err) tuple."""
     model_manager.increment_active_session()
 
@@ -389,9 +187,12 @@ def _perform_detect_language_task(
     This runs inside the thread pool to avoid blocking the FastAPI event loop
     when acquiring priority task locks.
     """
-    _apply_worker_context_from_dict(worker_context)
+    routes_utils.apply_worker_context_from_dict(worker_context)
     with model_manager.early_task_registration(task_type="Language Detection", filename=filename, is_priority=True):
-        source_path, _, err = routes_utils.initialize_task_context(resolved_local_path, uploaded_file, True)
+        routes_utils.log_audio_source_mode(worker_context)
+        source_path, _, err = routes_utils.initialize_task_context(
+            resolved_local_path, uploaded_file, True, video_file=worker_context.get("video_file")
+        )
         if err:
             msg, code = err
             model_manager.record_task_failure(msg, code, context="LD")

@@ -9,6 +9,7 @@ from typing import Any
 
 from modules.core import utils
 from modules.inference import scheduler
+from modules.inference.engines import whisperx_worker_client
 
 logger = logging.getLogger(__name__)
 
@@ -80,16 +81,14 @@ def _clear_whisperx_models(
     diarize_pool: dict[str, Any],
     align_pool: dict[str, Any],
 ) -> None:
-    for unit_id in list(diarize_pool.keys()):
-        model_d = diarize_pool.pop(unit_id)
-        del model_d
+    # Handles into the isolated WhisperX worker process become invalid the
+    # moment the worker is torn down, so the pools just need clearing —
+    # shutting down the worker outright is what actually reclaims its
+    # RAM/VRAM (see whisperx_worker_client for why it can't be done
+    # in-process).
     diarize_pool.clear()
-
-    for key in list(align_pool.keys()):
-        model_a, metadata = align_pool.pop(key)
-        del model_a
-        del metadata
     align_pool.clear()
+    whisperx_worker_client.shutdown()
 
 
 def _run_garbage_collection_and_reclamation(engines: dict[str, Any]) -> None:

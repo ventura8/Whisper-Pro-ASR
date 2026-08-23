@@ -5,7 +5,11 @@ import os
 import tempfile
 from unittest import mock
 
+import pytest
+
 import modules.core.config as config_module
+
+pytestmark = pytest.mark.usefixtures("restore_config_after_reload")
 
 
 class TestSSDOptimization:

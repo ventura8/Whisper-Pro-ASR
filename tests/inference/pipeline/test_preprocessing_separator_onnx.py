@@ -181,6 +181,7 @@ def test_ensure_openvino_onnxruntime_logs_warning_when_reload_unavailable():
     mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
 
     with (
+        mock.patch("modules.inference.pipeline.preprocessing.config") as mock_cfg,
         mock.patch("modules.inference.pipeline.preprocessing.ort", mock_ort),
         mock.patch(
             "modules.inference.pipeline.preprocessing._reload_onnxruntime_from_intel_path",
@@ -188,6 +189,7 @@ def test_ensure_openvino_onnxruntime_logs_warning_when_reload_unavailable():
         ),
         mock.patch("modules.inference.pipeline.preprocessing.logger.warning") as mock_warning,
     ):
+        mock_cfg.DEVICE = "CPU"
         preprocessing._ensure_openvino_onnxruntime("NPU")
         mock_warning.assert_called_once()
 
@@ -265,7 +267,7 @@ def test_auto_provider_config_uses_openvino_when_accelerator_visible():
     assert providers == ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
     assert options[0]["device_type"] == "GPU.0"
     assert options[0]["num_streams"] == "1"
-    assert options[0]["cache_dir"].endswith("/uvr/gpu")
+    assert "cache_dir" not in options[0]
 
 
 def test_auto_provider_config_uses_first_visible_intel_accelerator_when_both_families_are_visible():
@@ -284,7 +286,7 @@ def test_auto_provider_config_uses_first_visible_intel_accelerator_when_both_fam
     assert providers == ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
     assert options[0]["device_type"] == "GPU.0"
     assert options[0]["num_streams"] == "1"
-    assert options[0]["cache_dir"].endswith("/uvr/gpu")
+    assert "cache_dir" not in options[0]
 
 
 def test_auto_provider_config_respects_npu_first_discovery_order_when_visible():
@@ -303,7 +305,54 @@ def test_auto_provider_config_respects_npu_first_discovery_order_when_visible():
     assert providers == ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
     assert options[0]["device_type"] == "NPU"
     assert options[0]["num_streams"] == "1"
-    assert options[0]["cache_dir"].endswith("/uvr/npu")
+    assert "cache_dir" not in options[0]
+
+
+def test_block_openvino_alongside_cuda_redirects_openvino_result_to_cuda():
+    """When ASR runs on CUDA, an OpenVINO-selected preprocessing provider must be
+    redirected to CUDA (same vendor as ASR) rather than left as OpenVINO -- an
+    OpenVINO GPU/NPU context alongside an active CUDA context has been observed
+    to crash/hang natively."""
+    from modules.inference.pipeline.preprocessing import provider as preprocessing_provider
+
+    openvino_result = (["OpenVINOExecutionProvider", "CPUExecutionProvider"], [{"device_type": "GPU"}])
+    with mock.patch("modules.inference.pipeline.preprocessing.provider.config") as mock_cfg:
+        mock_cfg.DEVICE = "CUDA"
+        providers, options = preprocessing_provider._block_openvino_alongside_cuda(
+            openvino_result, "0", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        )
+
+    assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert options[0]["device_id"] == 0
+
+
+def test_block_openvino_alongside_cuda_falls_back_to_cpu_when_cuda_unavailable():
+    """The CUDA redirect itself must still fall back to CPU if CUDAExecutionProvider
+    isn't actually available in onnxruntime, rather than claiming CUDA it can't use."""
+    from modules.inference.pipeline.preprocessing import provider as preprocessing_provider
+
+    openvino_result = (["OpenVINOExecutionProvider", "CPUExecutionProvider"], [{"device_type": "GPU"}])
+    with mock.patch("modules.inference.pipeline.preprocessing.provider.config") as mock_cfg:
+        mock_cfg.DEVICE = "CUDA"
+        providers, options = preprocessing_provider._block_openvino_alongside_cuda(openvino_result, "0", ["CPUExecutionProvider"])
+
+    assert providers == ["CPUExecutionProvider"]
+    assert options == [{}]
+
+
+def test_ensure_openvino_onnxruntime_does_not_reload_when_device_is_cuda():
+    """_ensure_openvino_onnxruntime must skip the ONNX Runtime hot-reload entirely
+    when ASR runs on CUDA, regardless of the requested preprocessing device_type --
+    reloading would swap the process-wide `ort` module to the Intel-only build and
+    poison CUDA-based execution providers for the rest of the process."""
+    with (
+        mock.patch("modules.inference.pipeline.preprocessing.config") as mock_cfg,
+        mock.patch("modules.inference.pipeline.preprocessing._reload_onnxruntime_from_intel_path") as mock_reload,
+    ):
+        mock_cfg.DEVICE = "CUDA"
+        preprocessing._ensure_openvino_onnxruntime("GPU")
+
+    mock_reload.assert_not_called()
 
 
 def test_stem_resolution_candidates_include_output_cache_and_source_parent():

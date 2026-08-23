@@ -15,7 +15,7 @@ All lints, tests, security scans, audits, or type-checking MUST happen inside th
 
 Run the main build and test script:
 
-- Both local wrappers verify `poetry.lock` in the workspace before Docker builds, using a disposable Python container to regenerate it only when it is missing or stale.
+- Both local wrappers verify `poetry.lock` in the workspace before Docker builds, using a disposable Python container. That container upgrades to the pinned latest `pip` (`PIP_VERSION` in `scripts/ci/dependencies.env`, kept in sync with `ARG PIP_VERSION` in `Dockerfile` / `Dockerfile.test`) before installing Poetry, then regenerates the lock only when it is missing or stale.
 
 - **Linux/macOS**:
 
@@ -29,13 +29,21 @@ Run the main build and test script:
   powershell -ExecutionPolicy Bypass -File .\scripts\ci\build-and-test.ps1
   ```
 
+### 2b. Stage Selection & Caching (CI Parallelization)
+
+`tests/run_suite.sh` is stage-selectable via the `PIPELINE_STAGE` env var (`all` by default -- what the commands above use; or one of `lint`, `python-tests`, `js-unit-tests`, `e2e-fixture`, `e2e-real` for a single slice). Stage order for `all` is always **lint first** (including Radon rank-A), then tests: `js-unit-tests` → `python-tests` → `e2e-fixture` → `e2e-real`. `.github/workflows/ci.yml` runs `lint-and-security` after `build-image`, and every test job `needs:` lint before starting (test jobs may still run in parallel with each other). Locally, the wrapper scripts use `PIPELINE_STAGE=all` (unset), so one invocation runs that same lint-then-tests sequence (lint tools concurrently via background shell jobs; pytest uses a parallel `-n auto` bulk pass plus a separate serial pass for timing-sensitive concurrency tests, then merges coverage/JUnit data before the 90% gate and badge generation).
+
+Caching: the Docker build itself uses `docker buildx build --cache-from/--cache-to=type=local` under `.docker-build-cache/` (mirroring CI's `type=gha`) so repeat local builds are fast even when a layer must re-execute. Local wrappers export cache to `.docker-build-cache.new` and atomically replace `.docker-build-cache` afterward — writing `cache-to` into the same directory used for `cache-from` can fail with `mkdir: cannot create directory ''` while buildx finalizes the local OCI cache. A named Docker volume (`whisper-pro-asr-tool-cache`) persists ESLint/Stylelint/ruff/pytest run-time caches across separate local `docker run` invocations (build-time cache mounts alone never reach the running container). Requires a `docker-container`-driver buildx builder (created automatically by the wrapper scripts) since the default driver does not support local cache export.
+
+**Hard requirement**: `.dockerignore` MUST exclude `.docker-build-cache`, `.docker-build-cache.new`, `.docker-build-cache.old`, and `.buildx-cache`. Those dirs live under the project root as BuildKit cache destinations; if they are not ignored, `docker buildx build ... .` recursively ships tens of GB of cache back into the build context (the exact failure mode that turns a normal build into a multi-minute 50GB+ context transfer).
+
 ### 3. Resolve Test Failures & Coverage
 
 If tests fail:
 
-- Test-stage order contract: `tests/run_suite.sh` runs Radon complexity summary + rank-A enforcement before starting pytest and coverage generation.
+- Test-stage order contract: `tests/run_suite.sh` finishes the full lint stage (including Radon complexity summary + rank-A enforcement) before any test stage. Within `python-tests`, pytest and coverage generation run only after lint has already passed.
 - Radon source discovery in the test container must use filesystem enumeration (`find`) rather than `git ls-files`, because `.git` metadata is unavailable in Docker test images.
-- Review `reports/pytest.xml` or `reports/coverage_output.txt` for specific test failures after Docker-backed parity runs.
+- Review `reports/pytest.xml` or `reports/coverage_output.txt` for specific test failures after Docker-backed parity runs. Quiet pytest progress (via `tests/class_progress.py` + xdist `--dist=loadscope`) writes each `module.py::TestClass` line through pytest's terminal writer **when that class finishes** (all of its results received on the controller), with one result character per test (`.`/`F`/`s`). It does not wait for an xdist worker to drain and does not dump unfinished groups at session end. Do not use `-v` in the pipeline — it dumps every node id. Final `coverage_output.txt` includes a pytest-cov-style `coverage:` header so GitHub's coverage-comment action can parse it on pull requests.
 - Fix broken assertions or environment-specific mocks.
 - If coverage is below 90%, add missing test cases in the `tests/` directory to ensure all paths are verified before refactoring.
 - Local parity pipeline contract: wrappers are fail-fast across the Docker test image build and execution path. If the image build or any in-container quality gate fails, the wrapper exits immediately with a non-zero status.

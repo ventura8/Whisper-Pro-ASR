@@ -36,9 +36,11 @@ services:
     # The application performs automated detection of both Intel and NVIDIA hardware.
     
     # 1. Intel NPU / iGPU / Arc
-    # Linux Intel hosts:
+    # Linux Intel hosts — set HOST_INTEL_RENDER_GID explicitly (no silent default):
+    #   echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD128)" >> .env
+    #   # or: echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD* | head -n 1)" >> .env
     # group_add:
-    #   - "991"
+    #   - "${HOST_INTEL_RENDER_GID:?set HOST_INTEL_RENDER_GID from host render GID}"
     # devices:
     #   - /dev/dri:/dev/dri # Intel Integrated GPU / Arc (all render nodes)
     #   - /dev/accel:/dev/accel # Intel NPU (all accel nodes)
@@ -47,6 +49,9 @@ services:
     #   - /dev/dxg:/dev/dxg # WSL GPU bridge
     #   - /dev/dri:/dev/dri # Optional if WSL exposes DRM render nodes
     #   - /dev/accel:/dev/accel # Optional if WSL exposes Intel NPU accel nodes
+    # Optional WSL2 telemetry access (only if intel_gpu_top/npu_busy_time PMU/sysfs
+    # access is blocked by container isolation): see the full docker-compose.yml
+    # snippet and "Intel telemetry container-access note" in docs/SETUP.md.
 
     # 2. NVIDIA Silicon (CUDA)
     # deploy:

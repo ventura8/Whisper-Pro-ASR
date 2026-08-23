@@ -1,8 +1,9 @@
 # Stage 0: Swagger UI Assets
-FROM swaggerapi/swagger-ui:v5.32.6 AS swagger-ui-source
+FROM swaggerapi/swagger-ui:v5.32.14@sha256:3d93169968848d371a6a56ca1ab18b47a8906ba461b8eba0688866354f5431d5 AS swagger-ui-source
 
-# Start with OpenVINO runtime which has verified Intel NPU/GPU drivers
-FROM openvino/ubuntu24_runtime:2026.2.1
+# Start with OpenVINO runtime which has verified Intel NPU/GPU drivers.
+# OpenVINO 2026.3.1: validated against the Intel GPU runtime on the target host.
+FROM openvino/ubuntu24_runtime:2026.3.1
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -12,12 +13,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 ARG POETRY_VERSION=2.4.1
+# Keep in sync with PIP_VERSION in scripts/ci/dependencies.env
 ARG PIP_VERSION=26.2.1
-ARG FFMPEG_VERSION=8.1.2
+ARG FFMPEG_VERSION=9.0.1
 ARG FFMPEG_TARBALL=ffmpeg-${FFMPEG_VERSION}.tar.xz
 ARG FFMPEG_URL=https://ffmpeg.org/releases/${FFMPEG_TARBALL}
 ARG FFMPEG_SIG_URL=${FFMPEG_URL}.asc
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
+ENV PIP_DEFAULT_TIMEOUT=300
 ENV INTEL_OPENVINO_DIR=/opt/intel/openvino
 ENV PATH=/opt/rocm/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/lib/wsl/lib:/opt/rocm/lib:/opt/intel/openvino/runtime/lib/intel64:/opt/intel/openvino/runtime/3rdparty/tbb/lib:/opt/intel/openvino/runtime/3rdparty/omp/lib:${LD_LIBRARY_PATH}
@@ -134,9 +137,9 @@ WORKDIR /app
 COPY pip.conf /etc/pip.conf
 COPY pyproject.toml poetry.lock* ./
 
-# Upgrade pip (safe in this environment)
+# Upgrade pip first, then install Poetry (safe in this environment)
 RUN --mount=type=cache,target=/root/.cache \
-  python3 -m pip install --no-cache-dir "pip==${PIP_VERSION}"
+  python3 -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}"
 
 # Install Python dependencies via Poetry (no requirements.txt)
 ENV POETRY_VIRTUALENVS_CREATE=false
@@ -150,7 +153,7 @@ RUN --mount=type=cache,target=/root/.cache \
   python3 -m pip install --no-cache-dir "onnxruntime~=1.27.0" --target /app/libs/cpu --no-dependencies && \
   # Segregated Install: NVIDIA CUDA Support\
   mkdir -p /app/libs/nvidia && \
-  python3 -m pip install --no-cache-dir "onnxruntime-gpu~=1.25.0" --target /app/libs/nvidia --no-dependencies && \
+  python3 -m pip install --no-cache-dir "onnxruntime-gpu~=1.29.0" --target /app/libs/nvidia --no-dependencies && \
   # Segregated Install: Intel OpenVINO Support\
   mkdir -p /app/libs/intel && \
   python3 -m pip install --no-cache-dir "onnxruntime-openvino~=1.24.0" --target /app/libs/intel --no-dependencies && \
@@ -158,10 +161,51 @@ RUN --mount=type=cache,target=/root/.cache \
   mkdir -p /app/libs/amd && \
   python3 -m pip install --no-cache-dir "onnxruntime-rocm==1.22.2.post3" --target /app/libs/amd --no-dependencies
 
+# Segregated Install: WhisperX (isolated stack)
+#
+# WhisperX 3.8.6 (latest published release) hard-pins torch~=2.8.0,
+# torchaudio~=2.8.0, torchvision~=0.23.0 and huggingface-hub<1.0.0, which is
+# incompatible with the main environment's transformers/huggingface-hub/torch
+# versions above. It is installed into its own directory with its own full
+# dependency set (not --no-dependencies, unlike the onnxruntime variants
+# above, since this needs to be a complete self-contained stack) and run in
+# an isolated subprocess started with PYTHONPATH pointed at this directory
+# before any import happens — see modules/inference/engines/whisperx_worker.py
+# for the full rationale and modules/inference/engines/whisperx_worker_client.py
+# for how the main app talks to it. Never add this directory to the main
+# PYTHONPATH/sys.path.
+#
+# Install is fully pinned via requirements/whisperx.lock.txt (--require-hashes),
+# including transitive deps such as ctranslate2, faster-whisper, pyannote-audio,
+# torchcodec, and triton.
+COPY requirements/whisperx.lock.txt /tmp/whisperx.lock.txt
+RUN --mount=type=cache,target=/root/.cache \
+  mkdir -p /app/libs/whisperx && \
+  python3 -m pip install --no-cache-dir --require-hashes \
+  --target /app/libs/whisperx \
+  -r /tmp/whisperx.lock.txt
+ENV WHISPERX_LIB_PATH=/app/libs/whisperx
+
 ENV ROCBLAS_TENSILE_LIBPATH=/usr/lib/x86_64-linux-gnu/rocblas/current/library
 
-# Fix CTranslate2 executable stack issues
-RUN find /usr/local/lib/python3.*/ -name "*.so*" -exec patchelf --clear-execstack {} \;
+# Clear executable-stack flags while preserving an explicit failure audit. There
+# are currently no known-safe failures; add a precise path here before allowing one.
+RUN set -eu; \
+  known_safe_files=""; \
+  failures=""; \
+  library_list=/tmp/shared-libraries; \
+  find /usr/local/lib/python3.*/ /app/libs/whisperx/ -name "*.so*" -print > "$library_list"; \
+  while IFS= read -r library; do \
+    if ! patchelf --clear-execstack "$library"; then \
+      case " $known_safe_files " in *" $library "*) ;; *) failures="$failures $library" ;; esac; \
+    fi; \
+  done < "$library_list"; \
+  for library in $failures; do echo "Failed to clear executable stack: $library" >&2; done; \
+  test -z "$failures"; \
+  while IFS= read -r library; do \
+    test "$(patchelf --print-execstack "$library")" != "execstack: X" || { echo "Executable stack remains: $library" >&2; exit 1; }; \
+  done < "$library_list"; \
+  rm -f "$library_list"
 
 # Set Hugging Face cache location under /app for non-root runtime ownership.
 ENV HF_HOME=/app/.cache/huggingface
@@ -170,7 +214,7 @@ ENV HF_HOME=/app/.cache/huggingface
 # We use cache mounts for both pip and the model directories to speed up rebuilds
 COPY scripts/preload_model.py ./scripts/
 RUN --mount=type=cache,target=/root/.cache \
-  PYTHONPATH=/app/libs/cpu python3 scripts/preload_model.py --skip-intel-whisper
+  PYTHONPATH=/app/libs/cpu python3 scripts/preload_model.py
 
 
 

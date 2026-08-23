@@ -226,7 +226,8 @@ def test_generate_srt_highlight_words():
         ]
     }
 
-    srt = utils.generate_srt(res, highlight_words=True)
+    with mock.patch("modules.core.config.SUBTITLE_PROMO_ENABLED", False):
+        srt = utils.generate_srt(res, highlight_words=True)
     assert "1\n00:00:00,500 --> 00:00:01,000" in srt
     assert '<font color="#E0E0E0">Hello</font> world' in srt
     assert "2\n00:00:01,000 --> 00:00:02,000" in srt
@@ -246,7 +247,8 @@ def test_generate_vtt_highlight_words():
         ]
     }
 
-    vtt = utils.generate_vtt(res, highlight_words=True)
+    with mock.patch("modules.core.config.SUBTITLE_PROMO_ENABLED", False):
+        vtt = utils.generate_vtt(res, highlight_words=True)
     assert "WEBVTT" in vtt
     assert "00:00:00.500 --> 00:00:02.000" in vtt
     assert "<00:00:00.500>Hello <00:00:01.000>world" in vtt
@@ -265,7 +267,8 @@ def test_generate_vtt_highlight_words_handles_none_word_start():
         ]
     }
 
-    vtt = utils.generate_vtt(res, highlight_words=True)
+    with mock.patch("modules.core.config.SUBTITLE_PROMO_ENABLED", False):
+        vtt = utils.generate_vtt(res, highlight_words=True)
     assert "<00:00:00.500>Hello <00:00:01.000>world" in vtt
 
 
@@ -285,7 +288,8 @@ def test_generate_srt_highlight_words_handles_none_word_timestamps():
         ]
     }
 
-    srt = utils.generate_srt(res, highlight_words=True)
+    with mock.patch("modules.core.config.SUBTITLE_PROMO_ENABLED", False):
+        srt = utils.generate_srt(res, highlight_words=True)
     assert "1\n00:00:00,500 --> 00:00:02,000" in srt
     assert "2\n00:00:01,000 --> 00:00:02,000" in srt
 
@@ -299,6 +303,7 @@ def test_thread_context_reset():
     # Check that accessing filename now raises AttributeError since context was cleared
     with pytest.raises(AttributeError):
         _ = utils.THREAD_CONTEXT.filename
+    assert utils.get_tracked_files() == []
 
 
 def test_parse_ffmpeg_progress_updates_dashboard_stage_with_percentage():

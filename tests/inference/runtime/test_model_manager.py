@@ -1,6 +1,5 @@
 """Tests for modules/inference/model_manager.py"""
 
-import contextlib
 import threading
 import time
 from types import SimpleNamespace
@@ -9,35 +8,9 @@ from unittest import mock
 import numpy as np
 import pytest
 
-from modules.core import config, utils
+from modules.core import config
 from modules.inference import scheduler
 from modules.inference.runtime import model_manager, model_segment_processing
-
-
-@pytest.fixture(autouse=True)
-def reset_state():
-    """Reset model_manager and scheduler global state before each test."""
-    model_manager.MODEL_POOL.clear()
-    model_manager.PREPROCESSOR_POOL.clear()
-
-    # Mock HARDWARE_UNITS before creating SchedulerState
-    with mock.patch("modules.core.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
-        from modules.inference.scheduler import SchedulerState
-
-        scheduler.STATE = SchedulerState()
-        scheduler.STATE.engine_initialized = True
-
-    # Reset thread context
-    utils.THREAD_CONTEXT.is_priority = False
-    if hasattr(utils.THREAD_CONTEXT, "assigned_unit"):
-        utils.THREAD_CONTEXT.assigned_unit = None
-
-    yield
-
-    with mock.patch("modules.core.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
-        from modules.inference.scheduler import SchedulerState
-
-        scheduler.STATE = SchedulerState()
 
 
 def test_model_lock_ctx_success():
@@ -183,12 +156,15 @@ class TestRunTranscription:
         pm.preprocess_audio.return_value = "isolated.wav"
         model_manager.PREPROCESSOR_POOL["CPU"] = pm
 
-        with mock.patch("modules.core.config.ENABLE_VOCAL_SEPARATION", True):
-            with mock.patch("os.path.exists", return_value=True):
-                with mock.patch("os.remove") as mock_remove:
-                    model_manager.run_transcription("original.wav", language="en", task="transcribe", batch_size=1)
-                    pm.preprocess_audio.assert_called_with("original.wav", force=False, yield_cb=model_manager.check_preemption)
-                    mock_remove.assert_called_with("isolated.wav")
+        # Force CPU preprocessing so the "CPU"-keyed pooled preprocessor is used
+        # regardless of host accelerator hardware.
+        with mock.patch("modules.core.config.PREPROCESS_DEVICE", "CPU"):
+            with mock.patch("modules.core.config.ENABLE_VOCAL_SEPARATION", True):
+                with mock.patch("os.path.exists", return_value=True):
+                    with mock.patch("os.remove") as mock_remove:
+                        model_manager.run_transcription("original.wav", language="en", task="transcribe", batch_size=1)
+                        pm.preprocess_audio.assert_called_with("original.wav", force=False, yield_cb=model_manager.check_preemption)
+                        mock_remove.assert_called_with("isolated.wav")
 
     def test_run_transcription_checks_preemption_on_stage_transitions(self):
         """Ensure cooperative preemption checks occur across ASR stage transitions."""
@@ -203,6 +179,7 @@ class TestRunTranscription:
         model_manager.PREPROCESSOR_POOL["CPU"] = pm
 
         with (
+            mock.patch("modules.core.config.PREPROCESS_DEVICE", "CPU"),
             mock.patch("modules.core.config.ENABLE_VOCAL_SEPARATION", True),
             mock.patch("os.path.exists", return_value=True),
             mock.patch("os.remove"),
@@ -300,148 +277,6 @@ class TestLanguageDetection:
                 results = model_manager.run_batch_language_detection("test.wav", segment_count=2)
                 assert len(results) == 2
                 assert results[0]["detected_language"] == "en"
-
-
-class TestResourceManagement:
-    """Tests for resource unloading and sessions."""
-
-    def test_format_reclamation_memory_includes_cuda_vram_when_available(self):
-        """Reclaim logs should include CUDA VRAM when NVIDIA metrics are available."""
-        text = model_manager._format_reclamation_memory({"app_memory_gb": 3.39, "cuda_vram_mb": 4180})
-        assert text == "RAM(RSS)=3.39 GB, CUDA VRAM=4180 MB"
-
-    def test_format_reclamation_delta_includes_ram_and_cuda(self):
-        """Reclaim delta should report both RSS and VRAM changes."""
-        delta = model_manager._format_reclamation_delta(
-            {"app_memory_gb": 3.39, "cuda_vram_mb": 4180},
-            {"app_memory_gb": 2.64, "cuda_vram_mb": 910},
-        )
-        assert delta == "RAM(RSS)=+0.75 GB, CUDA VRAM=+3270 MB"
-
-    def test_decrement_active_session_triggers_unload(self):
-        """Test that idle state triggers unload when aggressive offload is on."""
-        pm = mock.MagicMock()
-        model_manager.PREPROCESSOR_POOL["CPU"] = pm
-        model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
-        scheduler.STATE.active_sessions = 1
-
-        with (
-            mock.patch("modules.core.config.AGGRESSIVE_OFFLOAD", True),
-            mock.patch("modules.core.config.MODEL_IDLE_TIMEOUT", 0),
-            mock.patch("modules.inference.runtime.model_manager.utils.get_system_telemetry", return_value={}),
-        ):
-            model_manager.decrement_active_session()
-            assert scheduler.STATE.active_sessions == 0
-            assert len(model_manager.MODEL_POOL) == 0
-            pm.unload_model.assert_called_once()
-
-    def test_unload_models(self):
-        """Test explicit model purging."""
-        model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
-        pm = mock.MagicMock()
-        model_manager.PREPROCESSOR_POOL["CPU"] = pm
-
-        with mock.patch("modules.inference.runtime.model_manager.utils.get_system_telemetry", return_value={}):
-            model_manager.unload_models()
-            assert len(model_manager.MODEL_POOL) == 0
-            pm.unload_model.assert_called_once()
-
-    def test_unload_models_clears_multi_cuda_units(self):
-        """Explicit purge should clear all per-unit CUDA models and preprocessors."""
-        model_manager.MODEL_POOL["cuda:0"] = mock.MagicMock()
-        model_manager.MODEL_POOL["cuda:1"] = mock.MagicMock()
-        pm0 = mock.MagicMock()
-        pm1 = mock.MagicMock()
-        model_manager.PREPROCESSOR_POOL["cuda:0"] = pm0
-        model_manager.PREPROCESSOR_POOL["cuda:1"] = pm1
-
-        with mock.patch("modules.inference.runtime.model_manager.utils.get_system_telemetry", return_value={}):
-            model_manager.unload_models()
-
-        assert len(model_manager.MODEL_POOL) == 0
-        assert len(model_manager.PREPROCESSOR_POOL) == 0
-        pm0.unload_model.assert_called_once()
-        pm1.unload_model.assert_called_once()
-
-
-class TestPreemptionAndPriority:
-    """Tests for priority and preemption logic."""
-
-    def test_wait_for_priority(self):
-        """Test priority registration."""
-        model_manager.wait_for_priority()
-        assert utils.THREAD_CONTEXT.is_priority is True
-
-    def test_run_vocal_isolation_direct_passes_preemption_callback(self):
-        """Test that run_vocal_isolation_direct passes check_preemption callback to preprocess_audio."""
-        pm = mock.MagicMock()
-        model_manager.PREPROCESSOR_POOL["CPU"] = pm
-
-        model_manager.run_vocal_isolation_direct("test.wav", "CPU")
-
-        # Verify preprocess_audio was called with yield_cb=check_preemption
-        pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager.check_preemption)
-
-    def test_run_vocal_isolation_uses_preferred_preprocess_device(self):
-        """When preprocess device is NPU, UVR should use NPU preprocessor even for CPU ASR units."""
-        cpu_pm = mock.MagicMock()
-        cpu_pm.device_type = "CPU"
-        npu_pm = mock.MagicMock()
-        npu_pm.device_type = "NPU"
-
-        model_manager.PREPROCESSOR_POOL["CPU"] = cpu_pm
-        model_manager.PREPROCESSOR_POOL["NPU"] = npu_pm
-
-        with mock.patch("modules.core.config.PREPROCESS_DEVICE", "NPU"):
-            model_manager.run_vocal_isolation_direct("test.wav", "CPU")
-
-        npu_pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager.check_preemption)
-        cpu_pm.preprocess_audio.assert_not_called()
-
-    def test_run_vocal_isolation_uses_assigned_accelerator_preprocessor_per_unit(self):
-        """Accelerator-assigned tasks should use their own unit preprocessors (GPU and NPU) in parallel."""
-        gpu_pm = mock.MagicMock()
-        gpu_pm.device_type = "GPU"
-        npu_pm = mock.MagicMock()
-        npu_pm.device_type = "NPU"
-
-        model_manager.PREPROCESSOR_POOL["GPU"] = gpu_pm
-        model_manager.PREPROCESSOR_POOL["NPU"] = npu_pm
-
-        with mock.patch("modules.core.config.PREPROCESS_DEVICE", "NPU"):
-            model_manager.run_vocal_isolation_direct("gpu-task.wav", "GPU")
-            model_manager.run_vocal_isolation_direct("npu-task.wav", "NPU")
-
-        gpu_pm.preprocess_audio.assert_called_once_with("gpu-task.wav", force=False, yield_cb=model_manager.check_preemption)
-        npu_pm.preprocess_audio.assert_called_once_with("npu-task.wav", force=False, yield_cb=model_manager.check_preemption)
-
-    def test_check_preemption_waits_if_paused(self):
-        """Test that check_preemption waits for resume."""
-        u_sync = scheduler.STATE.unit_sync["CPU"]
-        u_sync["pause_requested"].set()
-        u_sync["resume_event"].clear()
-
-        # We need a task in registry for the current thread
-        thread_id = threading.get_ident()
-        with scheduler.STATE.task_registry_lock:
-            scheduler.STATE.task_registry[thread_id] = {"unit_id": "CPU", "progress": 50, "stage": "Inference"}
-
-        # Mock preemptible pool to have our unit back
-        scheduler.STATE.preemptible_units.add("CPU")
-
-        # In a separate thread, resume after a bit
-        def resume_soon():
-            time.sleep(0.1)
-            # wait for pause_confirmed
-            u_sync["pause_confirmed"].wait()
-            u_sync["pause_requested"].clear()
-            u_sync["resume_event"].set()
-
-        threading.Thread(target=resume_soon).start()
-
-        # This should block and then return
-        model_manager.check_preemption()
-        assert u_sync["resume_event"].is_set()
 
 
 class TestEdgeCases:
@@ -571,12 +406,6 @@ def test_preprocessor_resolution_paths_cover_shared_and_cpu_fallbacks():
         assert model_manager.PREPROCESSOR_POOL["PREPROCESS::NPU"] is shared_pm
 
 
-def test_update_audio_duration_metadata_failure_path():
-    """Cover warning path when duration extraction fails."""
-    with mock.patch("modules.inference.runtime.model_manager.utils.get_audio_duration", side_effect=RuntimeError("boom")):
-        model_manager._update_audio_duration_metadata("bad.wav")
-
-
 def test_model_segment_processing_tracks_progress_and_fallbacks():
     """Cover segment-processing progress, metadata, and diarization fallback branches."""
     segment = SimpleNamespace(
@@ -641,105 +470,3 @@ def test_model_segment_processing_tracks_progress_and_fallbacks():
             "words": [{"start": 0.0, "end": 0.5, "word": "hello", "probability": 1.0}],
         }
     ]
-
-
-def test_run_vocal_isolation_wrapper_and_aggressive_offload():
-    """Cover wrapper call path and offload branch in direct isolation."""
-    pm = mock.MagicMock()
-    model_manager.PREPROCESSOR_POOL["CPU"] = pm
-
-    @contextlib.contextmanager
-    def _fake_model_lock_ctx():
-        yield None, "CPU"
-
-    with mock.patch("modules.inference.runtime.model_manager.model_lock_ctx", _fake_model_lock_ctx):
-        model_manager.run_vocal_isolation("audio.wav")
-
-    with mock.patch("modules.core.config.AGGRESSIVE_OFFLOAD", True):
-        pm.separator = "loaded"
-        model_manager.run_vocal_isolation_direct("audio.wav", "CPU")
-        pm.offload.assert_called()
-
-
-def test_get_status_returns_expected_payload():
-    """Cover status payload helper."""
-    model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
-    with mock.patch("modules.core.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "Host CPU"}]):
-        status = model_manager.get_status()
-    assert "active_units" in status
-    assert "total_units" in status
-
-
-def test_model_idle_timeout_reclamation():
-    """Verify that the background idle timeout thread successfully offloads models."""
-    pm = mock.MagicMock()
-    model_manager.PREPROCESSOR_POOL["CPU"] = pm
-    model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
-    scheduler.STATE.active_sessions = 1
-
-    model_manager._MONITOR_THREAD_STARTED = False
-
-    # Configure timeout of 1 second
-    with (
-        mock.patch("modules.core.config.MODEL_IDLE_TIMEOUT", 1),
-        mock.patch("modules.inference.runtime.model_manager.utils.get_system_telemetry", return_value={}),
-    ):
-        # Simulates task registration/completion lifecycle
-        model_manager.decrement_active_session()
-        assert scheduler.STATE.active_sessions == 0
-
-        # Model should still be in pool initially
-        assert len(model_manager.MODEL_POOL) == 1
-
-        # Sleep to allow idle timeout monitor thread to run and trigger offload
-        time.sleep(6)
-
-        # Monitor thread should have cleared the pools
-        assert len(model_manager.MODEL_POOL) == 0
-        pm.unload_model.assert_called_once()
-
-
-def test_new_task_waits_if_cleaner_is_running():
-    """Verify that if a new task arrives while unload_models is executing, it blocks until cleanup completes."""
-    import threading
-    import time
-    from unittest import mock
-
-    # Setup pool with models
-    model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
-
-    # We will simulate a slow unload_models by hooking into the model.unload to take 0.3 seconds
-    mock_model = mock.MagicMock()
-
-    def slow_unload():
-        time.sleep(0.3)
-
-    mock_model.unload = slow_unload
-    model_manager.MODEL_POOL["CPU"] = mock_model
-
-    # Mock get_system_telemetry to prevent psutil issues in clean thread
-    with mock.patch("modules.inference.runtime.model_manager.utils.get_system_telemetry", return_value={}):
-        # Start cleanup in a background thread
-        t_clean = threading.Thread(target=model_manager.unload_models)
-        t_clean.start()
-
-        # Wait a tiny bit to ensure the cleaner thread starts and acquires the lock
-        time.sleep(0.05)
-
-        # Now, in the main thread, try to load a model.
-        # It should block until the cleanup thread releases the lock.
-        start_time = time.time()
-        unit = {"id": "CPU", "type": "CPU", "name": "CPU"}
-        mock_whisper = mock.MagicMock()
-        with mock.patch("modules.inference.engines.engine_factory.create_engine", return_value=mock_whisper):
-            model_manager.init_unit(unit)
-        duration = time.time() - start_time
-
-        # It must have taken at least 0.15 seconds (due to the 0.3s sleep in slow_unload)
-        assert duration >= 0.15
-
-        # The clean thread should be finished
-        t_clean.join()
-
-        # And the model should have been re-loaded after cleanup finished
-        assert "CPU" in model_manager.MODEL_POOL

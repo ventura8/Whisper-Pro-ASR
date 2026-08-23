@@ -7,7 +7,7 @@
 - **Concurrency Priority #1**: Deadlock/livelock prevention and bounded progress always take precedence over performance tuning and feature additions in scheduler/resource code.
 - **File Size Constraint**: Never have a `.py` file larger than **500 lines**. If a file grows beyond this limit, refactor and modularize into smaller files within the `modules/` directory.
 - **Logging Standard**: Use the project's central logger (`logging`) instead of `print()` statements for all modules and scripts.
-- **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST strictly respect the thread limits set in `modules.config` (`ASR_THREADS`, `PREPROCESS_THREADS`, `FFMPEG_THREADS`). Language-detection work must honor those configured thread limits on each hardware unit it uses; do not exceed per-unit thread budgets when multiple units are active.
+- **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST strictly respect the thread limits set in `modules.core.config` (`ASR_THREADS`, `PREPROCESS_THREADS`, `FFMPEG_THREADS`). Language-detection work must honor those configured thread limits on each hardware unit it uses; do not exceed per-unit thread budgets when multiple units are active.
 - **Media Standardization**: All audio ingested MUST be converted to **16kHz, Mono, 16-bit PCM**. Always use `utils.STANDARD_AUDIO_FLAGS` and `utils.STANDARD_NORMALIZATION_FILTERS` for FFmpeg commands to ensure pipeline consistency.
 - **Efficiency Optimization**: For non-ASR tasks (identification/status), ALWAYS favor segmented FFmpeg extraction (`-ss` / `-t`) from the source media over full-file normalization. Avoid using `soundfile` (`sf.read`) directly on non-WAV video containers as it causes expensive full-file probes.
 - **Resource Cleanup & Stability**: All temporary files and system resources (file descriptors, locks) MUST be managed using `try...finally` blocks to ensure absolute cleanup even on catastrophic failures. Use the project's unified `decrement_active_session()` helper to ensure synchronized resource reclamation and VRAM offloading.
@@ -33,6 +33,7 @@
 | [docs/API.md](docs/API.md) | API endpoint reference (diarization, ASR params, subtitle layout) |
 | [docs/TUNING.md](docs/TUNING.md) | Performance optimization guide (idle timeout, initial prompt) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical module documentation (pipelines, caching, lifecycle) |
+| [docs/releases/](releases/) | Curated GitHub Release bodies (`vX.Y.Z_github_description.md`); tag-push CI publishes them |
 
 ## Key Features
 
@@ -46,7 +47,7 @@
     | **Whisper ASR** | ✅ | ✅ | ❌ (CPU Fallback) | ❌ (CPU Fallback) |
     | **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ |
 
-- **Hybrid Device Support**: Simultaneously utilize multiple accelerators via per-task assignment (e.g., one task uses Intel NPU/iGPU for UVR vocal isolation while another uses NVIDIA GPU for Whisper ASR transcription, concurrently and independently). Intel units accelerate preprocessing only; Whisper ASR falls back to CPU on Intel and AMD units.
+- **Hybrid Device Support**: Simultaneously utilize multiple accelerators via per-task assignment (e.g., different Intel NPU/iGPU units run UVR vocal isolation for separate tasks in parallel). Intel units accelerate preprocessing only; Whisper ASR falls back to CPU on Intel and AMD units. Exception: when ASR runs on NVIDIA CUDA, preprocessing is forced onto CUDA too instead of an independent Intel OpenVINO context — mixing a CUDA context with an OpenVINO GPU/NPU context in the same process crashes on the observed driver stack (see `modules/core/config.py`), so Intel-preprocessing-alongside-NVIDIA-ASR concurrency does not apply in that specific combination.
 - **Advanced Preprocessing Stack**: Integrated **UVR/MDX-NET** (Vocal Isolation) with hardware acceleration and dedicated thread pooling (`PREPROCESS_THREADS`).
 - **OpenAI Compatible**: Native support for `/v1/audio/transcriptions` and `/v1/audio/translations` OpenAI API format.
 - **Swagger Documentation**: Interactive API testing available at `/docs`.
@@ -84,7 +85,7 @@ Powered by **Faster-Whisper**. Supports **CPU** (Intel MKL/OpenMP) and **NVIDIA 
 ### Vocal Separation (Preprocessing)
 
 Powered by **ONNX Runtime (patched for OpenVINO)**. Supports **CPU**, **NVIDIA CUDA**, **Intel GPU**, and **Intel NPU**.
-*This allows for per-task accelerator assignment, where one task can run entirely on an Intel iGPU/NPU while another task runs entirely on your NVIDIA card, concurrently and independently.*
+*This allows per-task accelerator assignment across multiple Intel GPU/NPU units concurrently. When ASR runs on NVIDIA CUDA, preprocessing is redirected to CUDA as well rather than an independent Intel OpenVINO context, since mixing a CUDA context with an OpenVINO GPU/NPU context in the same process crashes on the observed driver stack.*
 
 ## Quick Start
 
@@ -125,13 +126,13 @@ You can run the full test and lint suite locally using Docker to mirror the CI e
 
 Local parity scripts (`scripts/ci/build-and-test.sh` and `scripts/ci/build-and-test.ps1`) only build and run the Docker test image and consume its artifacts/results. They do not execute quality gates directly on the host.
 The wrappers record the Docker test image run exit code, then always run the coverage-badge stage before exiting with that recorded code. If `coverage.xml` is missing or empty, the badge stage fails the pipeline; otherwise `assets/coverage.svg` is regenerated from `coverage.xml` even when tests failed.
-The Docker test image runs Radon before pytest using filesystem discovery (`find ... -name '*.py'`) instead of `git ls-files`, because `.git` metadata is not available inside the test image.
+The Docker test image runs all lint/security gates first (including Radon rank-A via filesystem discovery `find ... -name '*.py'`, because `.git` metadata is not available inside the test image), then tests in order: JS unit → pytest/coverage → Playwright E2E.
 
 ```bash
 # Verify poetry.lock first when dependency metadata changed.
 # CI fails if poetry.lock is missing or out of sync.
 # Local parity scripts can regenerate when missing/stale.
-docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace python:3.12-slim /bin/bash -lc "export HOME=/tmp && python -m pip install --quiet --user poetry && if [ ! -f poetry.lock ] || ! python -m poetry check --lock; then echo 'poetry.lock is missing or out of sync. Please run poetry lock locally and commit the changes.' && exit 1; fi"
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace python:3.12-slim /bin/bash -lc 'export HOME=/tmp && export PATH="/tmp/.local/bin:$PATH" && export PIP_ROOT_USER_ACTION=ignore && python -m pip install --quiet --user --upgrade "pip==26.2.1" && python -m pip install --quiet --user "poetry==2.4.1" && if [ ! -f poetry.lock ] || ! python -m poetry check --lock; then echo "poetry.lock is missing or out of sync. Please run poetry lock locally and commit the changes." && exit 1; fi'
 
 # Build the test image (cached layers from production are used automatically)
 docker build -t whisper-npu-test -f Dockerfile.test .

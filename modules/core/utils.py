@@ -30,6 +30,7 @@ from modules.core.subtitles import (
     generate_vtt,
     wrap_text,
 )
+from modules.core.utils_helpers import build_stream_alignment_directives as get_stream_alignment_directives
 from modules.core.utils_helpers import (
     cleanup_old_files,
     get_pretty_model_name,
@@ -48,6 +49,7 @@ _unused_api = (
     cleanup_old_files,
     purge_temporary_assets,
     get_nvidia_vram_usage_mb,
+    get_stream_alignment_directives,
 )
 
 _reexports = (
@@ -115,6 +117,10 @@ class ContextVarProxy:
         """Reset the context to a new empty dictionary to ensure request isolation."""
         self._cv.set({})
         TRACKED_FILES_VAR.set(None)
+        # Keep one mutable registry in the request context. anyio copies the
+        # context into worker threads, so those workers and the route finally
+        # block share this list instead of each seeing a separate fallback list.
+        REQUEST_TRACKED_FILES_VAR.set([])
         FILENAME_VAR.set(NOT_SET)
         SOURCE_PATH_VAR.set(NOT_SET)
         INPUT_FLAGS_VAR.set(None)
@@ -326,11 +332,19 @@ STANDARD_AUDIO_FLAGS = ["-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1
 HQ_AUDIO_FLAGS = ["-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2"]
 
 
-def convert_to_wav(source_path, input_flags=None):
+def convert_to_wav(source_path, input_flags=None, *, stream_index=None, delay_filter=None):
     """
     Standardize media into 1-channel, 16kHz PCM WAV.
     """
-    return _convert_base(source_path, STANDARD_AUDIO_FLAGS, 16000, 1, input_flags=input_flags)
+    return _convert_base(
+        source_path,
+        STANDARD_AUDIO_FLAGS,
+        16000,
+        1,
+        input_flags=input_flags,
+        stream_index=stream_index,
+        delay_filter=delay_filter,
+    )
 
 
 def prepare_for_uvr(source_path, yield_cb=None, input_flags=None):
@@ -350,7 +364,18 @@ def prepare_for_uvr(source_path, yield_cb=None, input_flags=None):
     )
 
 
-def _convert_base(source_path, flags, rate, channels, tag="Prep", *, yield_cb=None, input_flags=None):
+def _convert_base(
+    source_path,
+    flags,
+    rate,
+    channels,
+    tag="Prep",
+    *,
+    yield_cb=None,
+    input_flags=None,
+    stream_index=None,
+    delay_filter=None,
+):
     """Internal base for audio conversion."""
     if not _validate_source_path_for_conversion(source_path, tag):
         return None
@@ -373,6 +398,8 @@ def _convert_base(source_path, flags, rate, channels, tag="Prep", *, yield_cb=No
             flags=flags,
             input_flags=input_flags,
             yield_cb=yield_cb,
+            stream_index=stream_index,
+            delay_filter=delay_filter,
         )
         _run_optional_yield(yield_cb)
         logger.info("[%s] Normalization sequence completed successfully.", tag)
@@ -413,7 +440,17 @@ def _log_and_cleanup_conversion_failure(tag: str, err: Exception, output_path: s
             pass
 
 
-def _run_ffmpeg_standardization(source_path, output_path, duration, flags=None, *, input_flags=None, yield_cb=None):
+def _run_ffmpeg_standardization(
+    source_path,
+    output_path,
+    duration,
+    flags=None,
+    *,
+    input_flags=None,
+    yield_cb=None,
+    stream_index=None,
+    delay_filter=None,
+):
     """Compatibility wrapper delegating FFmpeg standardization to utils_helpers."""
     ffmpeg_env = {
         "cfg": config,
@@ -432,6 +469,8 @@ def _run_ffmpeg_standardization(source_path, output_path, duration, flags=None, 
         flags=flags,
         input_flags=input_flags,
         yield_cb=yield_cb,
+        stream_index=stream_index,
+        delay_filter=delay_filter,
     )
 
 

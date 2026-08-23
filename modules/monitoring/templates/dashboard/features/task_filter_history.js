@@ -184,18 +184,17 @@ function _pathFromRequestJsonKeys(req) {
     return null;
 }
 
-function _resolveHistoryFilename(h) {
-    if (!_isGenericHistoryFilename(h.filename)) {
-        return h.filename;
-    }
-    const req = h.request_json || {};
+function _historyFilenameBasename(raw) {
+    const base = raw.replace(/^.*[\\/]/, '');
+    return base && !_isGenericHistoryFilename(base) ? base : null;
+}
+
+function _filenameFromPathKeys(req) {
     const pathFromKeys = _pathFromRequestJsonKeys(req);
-    if (pathFromKeys) {
-        const base = pathFromKeys.replace(/^.*[\\/]/, '');
-        if (base && !_isGenericHistoryFilename(base)) {
-            return base;
-        }
-    }
+    return pathFromKeys ? _historyFilenameBasename(pathFromKeys) : null;
+}
+
+function _filenameFromCandidates(req) {
     const candidates = [
         req.video_file,
         req.local_path,
@@ -205,15 +204,26 @@ function _resolveHistoryFilename(h) {
         req.audio_file
     ];
     for (const val of candidates) {
-        if (typeof val !== 'string' || !val.trim()) {
-            continue;
-        }
-        const base = val.trim().replace(/^.*[\\/]/, '');
-        if (base && !_isGenericHistoryFilename(base)) {
-            return base;
+        const usable = typeof val === 'string' && val.trim();
+        const found = usable ? _historyFilenameBasename(val.trim()) : null;
+        if (found) {
+            return found;
         }
     }
-    return h.filename || 'Unknown Media';
+    return null;
+}
+
+function _resolveHistoryFilenameFallback(h) {
+    return _isGenericHistoryFilename(h.filename) ? 'Unknown Media' : h.filename;
+}
+
+function _resolveHistoryFilename(h) {
+    if (!_isGenericHistoryFilename(h.filename)) {
+        return h.filename;
+    }
+    const req = h.request_json || {};
+    const resolved = _filenameFromPathKeys(req) || _filenameFromCandidates(req);
+    return resolved || _resolveHistoryFilenameFallback(h);
 }
 
 function _buildHistoryCardData(h, i) {
@@ -307,34 +317,46 @@ function _historyLanguageBadge(result) {
     return `<span class="badge badge-lang" style="margin-left:auto;">${escapeHtml(code.toUpperCase())}</span>`;
 }
 
-function _historyHardwareTag(h) {
-    const historyUnitId = h.history_unit_id || h.unit_id;
-    if (historyUnitId) {
-        const hw = getHwIconAndLabel(historyUnitId);
-        if (hw.label !== 'Queued') {
-            return `<span class="meta-tag" title="Hardware"><span class="material-icons-sharp" style="font-size:12px;color:var(--md-sys-color-primary)">${hw.icon}</span>${hw.label}</span>`;
-        }
-    }
+function _historyHardwareTagMarkup(icon, label) {
+    return `<span class="meta-tag" title="Hardware"><span class="material-icons-sharp" style="font-size:12px;color:var(--md-sys-color-primary)">${icon}</span>${escapeHtml(label)}</span>`;
+}
 
+function _historyHardwareTagFromLiveUnit(h) {
+    const historyUnitId = h.history_unit_id || h.unit_id;
+    if (!historyUnitId) {
+        return null;
+    }
+    const hw = getHwIconAndLabel(historyUnitId);
+    return hw.label !== 'Queued' ? _historyHardwareTagMarkup(hw.icon, hw.label) : null;
+}
+
+function _historyHardwareTagFromMeta(h) {
     const fallbackType = h.history_unit_type || h.unit_type;
     const fallbackName = h.history_unit_name || h.unit_name;
     if (!fallbackType && !fallbackName) {
         return '';
     }
-
     const icon = _historyHardwareIconForType(fallbackType);
     const label = _historyHardwareLabelFromMeta(fallbackType, fallbackName);
-    return `<span class="meta-tag" title="Hardware"><span class="material-icons-sharp" style="font-size:12px;color:var(--md-sys-color-primary)">${icon}</span>${escapeHtml(label)}</span>`;
+    return _historyHardwareTagMarkup(icon, label);
 }
+
+function _historyHardwareTag(h) {
+    return _historyHardwareTagFromLiveUnit(h) || _historyHardwareTagFromMeta(h);
+}
+
+const _HISTORY_HARDWARE_ICON_PREFIXES = [
+    ['CUDA', 'rocket_launch'],
+    ['NPU', 'psychology_alt'],
+    ['GPU', 'developer_board'],
+    ['AMD', 'bolt']
+];
 
 function _historyHardwareIconForType(unitType) {
     const type = String(unitType || '').toUpperCase();
-    if (type.startsWith('CUDA')) return 'rocket_launch';
-    if (type.startsWith('NPU')) return 'psychology_alt';
-    if (type.startsWith('GPU')) return 'developer_board';
-    if (type.startsWith('AMD')) return 'bolt';
     if (type === 'CPU') return 'settings_input_component';
-    return 'memory';
+    const match = _HISTORY_HARDWARE_ICON_PREFIXES.find(([prefix]) => type.startsWith(prefix));
+    return match ? match[1] : 'memory';
 }
 
 function _historyHardwareLabelFromMeta(unitType, unitName) {
