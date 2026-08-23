@@ -412,34 +412,36 @@ function _resolveLegacyUnitMetricValue(unitId, primaryValue, secondaryValue) {
     return 0;
 }
 
+function _pickLegacyUnitMetricFromArray(unitId, value) {
+    const idx = _resolveUnitIndex(unitId);
+    return idx < value.length ? _legacyNvidiaMetricValue(value[idx]) : null;
+}
+
+function _pickLegacyUnitMetricFromMap(unitId, value) {
+    if (unitId && value[unitId] !== undefined) {
+        return _legacyNvidiaMetricValue(value[unitId]);
+    }
+    const idxKey = String(_resolveUnitIndex(unitId));
+    return value[idxKey] !== undefined ? _legacyNvidiaMetricValue(value[idxKey]) : null;
+}
+
 function _pickLegacyUnitMetric(unitId, value) {
-    if (value === undefined || value === null) {
+    if (value === null || value === undefined) {
         return null;
     }
+    return _pickLegacyUnitMetricByType(unitId, value);
+}
 
+function _pickLegacyUnitMetricByType(unitId, value) {
     if (typeof value === 'number') {
         return value;
     }
-
     if (Array.isArray(value)) {
-        const idx = _resolveUnitIndex(unitId);
-        if (idx < value.length) {
-            return _legacyNvidiaMetricValue(value[idx]);
-        }
-        return null;
+        return _pickLegacyUnitMetricFromArray(unitId, value);
     }
-
     if (typeof value === 'object') {
-        if (unitId && value[unitId] !== undefined) {
-            return _legacyNvidiaMetricValue(value[unitId]);
-        }
-        const idx = _resolveUnitIndex(unitId);
-        const idxKey = String(idx);
-        if (value[idxKey] !== undefined) {
-            return _legacyNvidiaMetricValue(value[idxKey]);
-        }
+        return _pickLegacyUnitMetricFromMap(unitId, value);
     }
-
     return null;
 }
 
@@ -495,28 +497,41 @@ function updateHardwareLegend(hwDatasets) {
     });
 }
 
+function _hardwareLegendColor(dataset) {
+    return dataset.color || '#006495';
+}
+
+function _hardwareLegendLabelText(dataset) {
+    return dataset.label || dataset.unitName || dataset.unitId || 'Hardware Unit';
+}
+
+function _applyLegendLinePattern(line, linePattern) {
+    if (!linePattern.pattern) {
+        return;
+    }
+    line.style.setProperty('--legend-line-pattern', linePattern.pattern);
+    line.style.setProperty('--legend-line-size', linePattern.size);
+}
+
 function _buildHardwareLegendItem(dataset) {
+    const color = _hardwareLegendColor(dataset);
     const item = document.createElement('div');
     item.className = 'hw-legend-item';
 
     const swatch = document.createElement('span');
     swatch.className = 'hw-legend-swatch';
-    swatch.style.setProperty('--legend-color', dataset.color || '#006495');
+    swatch.style.setProperty('--legend-color', color);
 
     const line = document.createElement('span');
     line.className = 'hw-legend-line';
-    const linePattern = _legendLinePattern(dataset.dashArray || 0, dataset.color || '#006495');
-    if (linePattern.pattern) {
-        line.style.setProperty('--legend-line-pattern', linePattern.pattern);
-        line.style.setProperty('--legend-line-size', linePattern.size);
-    }
+    _applyLegendLinePattern(line, _legendLinePattern(dataset.dashArray || 0, color));
 
     const marker = document.createElement('span');
     marker.className = `hw-legend-marker hw-marker-${dataset.markerShape || 'circle'}`;
 
     const label = document.createElement('span');
     label.className = 'hw-legend-label';
-    label.textContent = dataset.label || dataset.unitName || dataset.unitId || 'Hardware Unit';
+    label.textContent = _hardwareLegendLabelText(dataset);
 
     swatch.appendChild(line);
     swatch.appendChild(marker);
@@ -678,22 +693,37 @@ function _seriesMarkerStyles(id, datasets) {
     };
 }
 
+function _hardwareMarkerPointCount(dataset) {
+    return Array.isArray(dataset.data) ? dataset.data.length : 0;
+}
+
+function _hardwareMarkerTemplate(dataset, seriesIndex) {
+    const color = dataset.color || '#006495';
+    return {
+        seriesIndex: seriesIndex,
+        fillColor: color,
+        strokeColor: color,
+        size: dataset.markerSize || 4,
+        shape: dataset.markerShape || 'circle'
+    };
+}
+
+function _buildMarkersForDataset(dataset, seriesIndex) {
+    const points = _hardwareMarkerPointCount(dataset);
+    const step = Math.max(1, dataset.markerStep || 4);
+    const offset = Math.max(0, dataset.markerOffset || 0);
+    const template = _hardwareMarkerTemplate(dataset, seriesIndex);
+    const markers = [];
+    for (let pointIndex = offset; pointIndex < points; pointIndex += step) {
+        markers.push({ ...template, dataPointIndex: pointIndex });
+    }
+    return markers;
+}
+
 function _buildDiscreteHardwareMarkers(datasets) {
     const markers = [];
     datasets.forEach((dataset, seriesIndex) => {
-        const points = Array.isArray(dataset.data) ? dataset.data.length : 0;
-        const step = Math.max(1, dataset.markerStep || 4);
-        const offset = Math.max(0, dataset.markerOffset || 0);
-        for (let pointIndex = offset; pointIndex < points; pointIndex += step) {
-            markers.push({
-                seriesIndex: seriesIndex,
-                dataPointIndex: pointIndex,
-                fillColor: dataset.color || '#006495',
-                strokeColor: dataset.color || '#006495',
-                size: dataset.markerSize || 4,
-                shape: dataset.markerShape || 'circle'
-            });
-        }
+        markers.push(..._buildMarkersForDataset(dataset, seriesIndex));
     });
     return markers;
 }
@@ -709,18 +739,21 @@ function _buildChartYaxis(percent, yaxisMax) {
     };
 }
 
+function _datasetLineStyleParts(d) {
+    return [d.color || '', d.dashArray || 0, d.strokeWidth || 2];
+}
+
+function _datasetMarkerStyleParts(d) {
+    return [d.markerShape || 'circle', d.markerSize || 0, d.markerStep || 0, d.markerOffset || 0];
+}
+
+function _datasetStyleSignatureParts(d) {
+    return [d.label, ..._datasetLineStyleParts(d), ..._datasetMarkerStyleParts(d)];
+}
+
 function _datasetStyleSignature(datasets) {
     return datasets
-        .map((d) => [
-            d.label,
-            d.color || '',
-            d.dashArray || 0,
-            d.strokeWidth || 2,
-            d.markerShape || 'circle',
-            d.markerSize || 0,
-            d.markerStep || 0,
-            d.markerOffset || 0
-        ].join('|'))
+        .map((d) => _datasetStyleSignatureParts(d).join('|'))
         .join('||');
 }
 

@@ -3,12 +3,12 @@
 ## Global Rules
 
 - **Mandatory Pre-Task Agent Review**: Before starting any implementation, read `.agent/instructions.md`, `.agent/skills/SKILLS_CATALOG.md`, and every directly relevant skill/workflow file. Do not begin coding until this review is complete.
-- **Mandatory Markdown Update (Every Task)**: Every time you work on this project, you MUST update all relevant markdown files in the same task. Never ship code-only changes. Before closing work, sync every impacted file among `README.md`, `docs/*.md`, and `.agent/*.md` so they describe the current implementation. A task is incomplete until relevant docs are updated.
+- **Mandatory Markdown Update (Every Task, No Exceptions)**: Every time you work on this project, you MUST update all relevant markdown files in the same task. Never ship code-only changes. This applies to every kind of change, including CI/CD, Docker, and other infrastructure/tooling work, not just application code. Before closing work, sync every impacted file among `README.md`, `docs/*.md`, and `.agent/*.md` so they describe the current implementation. A task is incomplete until relevant docs are updated.
 - **Concurrency Correctness Priority #1**: For scheduler/resource/lifecycle work, deadlock/livelock prevention and bounded progress are mandatory and take precedence over throughput optimizations.
 - **Preserve Helpful Comments**: Never delete comments that explain logic, especially around synchronization, error handling, or non-obvious code paths. Code clarity and maintainability take precedence over aggressive line count reduction.
 - **Strict File Size Limit**: Any `.py` file MUST NOT exceed **500 lines**.
 - **Logging Only**: Use `logger` (logging module) for all output. No `print()` calls allowed.
-- **Hardware Agnostic**: Ensure code works across NPU, GPU (Intel/NVIDIA), and CPU. Use `modules.config` for device selection.
+- **Hardware Agnostic**: Ensure code works across NPU, GPU (Intel/NVIDIA), and CPU. Use `modules.core.config` for device selection.
 - **Agent Asset Maintenance (Mandatory)**: Whenever code, architecture, CI flow, testing strategy, release process, or operational behavior changes, update all affected agent assets in `.agent/` during the same task. This includes `instructions.md`, relevant files in `.agent/skills/`, and `.agent/workflows/` so agent guidance stays accurate.
 - **Frontend Gate Maintenance (Mandatory)**: Whenever dashboard HTML/JS/CSS changes, run and keep aligned the frontend quality gates (`npm run quality:frontend`) and update related documentation/skills if commands or thresholds change.
 - **Frontend Security Gate (Mandatory)**: CI and local build parity scripts must fail on any npm audit vulnerability using `npm audit --audit-level=low` after `npm ci`.
@@ -43,7 +43,7 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 ## Resource Management
 
 - **Priority Wait Semantics**: Critical priority/preemption synchronization paths require explicit wait steps for hardware/preemption handoff instead of failing immediately on simple scheduler timeouts; waits remain indefinite under saturation.
-- **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST respect the thread limits set in `modules.config` (`ASR_THREADS`, `PREPROCESS_THREADS`, `FFMPEG_THREADS`).
+- **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST respect the thread limits set in `modules.core.config` (`ASR_THREADS`, `PREPROCESS_THREADS`, `FFMPEG_THREADS`).
 - **FFmpeg Parallelization**: Prefer parallelizing across segments (as seen in `language_detection.py`) rather than relying on high thread counts for single-file filters, as some FFmpeg filters are inherently single-threaded.
 - **Library Patching**: If a third-party library (e.g., `audio-separator`) does not expose thread configuration, use monkey-patching on the underlying engine (e.g., `onnxruntime`) to enforce limits.
 - **Stability & Cleanup**: ALL temporary files, file descriptors, and memory-intensive assets MUST be managed using `try...finally` blocks.
@@ -64,7 +64,7 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 
 ## Speaker Diarization
 
-- **WhisperX Pipeline**: Speaker diarization uses `whisperx` (alignment → diarization → speaker assignment). The pipeline caches alignment and diarization models in `_ALIGN_POOL` and `_DIARIZE_POOL` per hardware unit.
+- **WhisperX Pipeline**: Speaker diarization uses `whisperx` (alignment → diarization → speaker assignment) inside an isolated worker subprocess (`whisperx_worker.py` via `multiprocessing` `spawn`; `whisper_pro_asr.py` and package inits are spawn-safe so the child does not import the main torch stack before isolation). The parent caches opaque handles in `ALIGN_POOL` and `DIARIZE_POOL` per hardware unit; RPC access is serialized on one shared worker (`WHISPERX_WORKER_CALL_TIMEOUT_SEC` defaults to `0` / no deadline).
 - **DIARIZATION_HF_TOKEN Requirement**: Diarization requires a valid Hugging Face token (`DIARIZATION_HF_TOKEN` environment variable) for access to PyAnnote speaker segmentation models.
 - **Graceful Fallback**: If diarization fails or `DIARIZATION_HF_TOKEN` is missing, the system must fall back to standard transcription without speaker labels.
 
@@ -82,8 +82,8 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 ## Security & Access Control
 
 - **CORS Allowlist Requirement**: Never enable wildcard CORS (`*`) by default. CORS origins must be configured explicitly via `CORS_ORIGINS` or explicitly opted into via `CORS_ALLOW_ALL=true`.
-- **Model Supply Chain Guarding**: Dynamic model loading via `/settings` must be validated against `is_valid_model_name()` to prevent arbitrary external downloads and path traversals (`..`).
-- **Administrative Endpoint Protection**: State-changing administrative endpoints (`/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`) must require `ADMIN_API_KEY` authentication when configured. If no key is configured, Origin/Referer validation is used only as anti-CSRF protection (not as the primary authorization mechanism).
+- **Model Supply Chain Guarding**: Dynamic model loading via `/system/settings` must be validated against `is_valid_model_name()` to prevent arbitrary external downloads and path traversals (`..`).
+- **Administrative Endpoint Protection**: State-changing administrative endpoints (`/system/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`) must require `ADMIN_API_KEY` authentication when configured. If no key is configured, Origin/Referer validation is used only as anti-CSRF protection (not as the primary authorization mechanism).
 - **Audit Logging**: All administrative mutations and purges must be recorded with client IP and User-Agent using `security.audit_log_admin_action()`.
 
 ## Code Style

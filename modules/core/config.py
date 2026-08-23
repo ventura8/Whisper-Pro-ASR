@@ -91,6 +91,28 @@ if ASR_PREPROCESS_DEVICE_ENV == "AUTO":
 else:
     PREPROCESS_DEVICE = ASR_PREPROCESS_DEVICE_ENV
 
+# Initializing an OpenVINO GPU/NPU (Level-Zero/OpenCL) context in the same
+# process as an already-active CUDA context has been observed to crash/hang
+# natively on Intel iGPU hardware (confirmed via direct testing: mixing
+# CUDA-ASR with Intel-OpenVINO-targeted UVR preprocessing in one process).
+# This can arise both from an explicit ASR_PREPROCESS_DEVICE override and
+# from AUTO hardware detection on hybrid NVIDIA+Intel machines (detect_hardware
+# in config_helpers.py can select CUDA for ASR while independently selecting
+# Intel GPU/NPU for preprocessing). There is no known Python-side fix for the
+# underlying driver-level crash, so this combination is disallowed outright.
+# Preprocessing still gets GPU acceleration — just from the same vendor (CUDA)
+# as ASR instead of a cross-vendor OpenVINO context; the CUDA/CPU dispatch in
+# provider.py already falls back to CPU on its own if CUDA isn't actually
+# usable in onnxruntime.
+if DEVICE == "CUDA" and PREPROCESS_DEVICE in ("GPU", "NPU", "INTEL", "OPENVINO"):
+    logger.warning(
+        "[Config] ASR_DEVICE=CUDA with Intel OpenVINO preprocessing (%s) is unsupported: mixing a "
+        "CUDA context with an OpenVINO GPU/NPU context in the same process crashes on this driver "
+        "stack. Forcing preprocessing to CUDA instead.",
+        PREPROCESS_DEVICE,
+    )
+    PREPROCESS_DEVICE = "CUDA"
+
 # --- [ENGINE SELECTION] ---
 # ASR_ENGINE can be: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
 _resolution_parts = []

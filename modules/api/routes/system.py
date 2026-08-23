@@ -237,6 +237,7 @@ def get_settings(request: Request):
         "ASR_DEVICE": config.ASR_DEVICE,
         "ASR_ENGINE": config.ASR_ENGINE,
         "TELEMETRY_RETENTION_HOURS": int(os.environ.get("TELEMETRY_RETENTION_HOURS", 24)),
+        "LOG_RETENTION_DAYS": int(os.environ.get("LOG_RETENTION_DAYS", config.LOG_RETENTION_DAYS)),
     }
 
 

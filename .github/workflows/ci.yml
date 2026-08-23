@@ -23,18 +23,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Core Verification & Deployment
+  build-image:
+    name: Build & Cache Test Image
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      checks: write
+      contents: read
+      actions: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Enforce Up-to-date Poetry Lock File
+        env:
+          PIP_VERSION: "26.2.1"
+          POETRY_VERSION: "2.4.1"
         run: |
           docker run --rm \
             -u "$(id -u):$(id -g)" \
@@ -42,21 +45,49 @@ jobs:
             -v "$PWD/poetry.lock:/workspace/poetry.lock" \
             -w /workspace \
             python:3.12-slim \
-            /bin/bash -lc '
+            /bin/bash -lc "
               export HOME=/tmp
-              python -m pip install --quiet --user poetry==2.4.1
+              export PATH=\"/tmp/.local/bin:\$PATH\"
+              export PIP_ROOT_USER_ACTION=ignore
+              export PIP_NO_WARN_SCRIPT_LOCATION=1
+              python -m pip install --quiet --user --upgrade \"pip==${PIP_VERSION}\"
+              python -m pip install --quiet --user \"poetry==${POETRY_VERSION}\"
               python -m poetry config virtualenvs.create false
               if [ ! -f poetry.lock ] || ! python -m poetry check --lock; then
-                echo "poetry.lock is missing or out of sync. Please run poetry lock locally and commit the changes."
+                echo \"poetry.lock is missing or out of sync. Please run poetry lock locally and commit the changes.\"
                 exit 1
               fi
-            '
+            "
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
-      - name: Prepare Test Environment (Docker)
-        uses: docker/build-push-action@v7
+      - name: Build & Push Test Image Cache (GHA)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test
+          load: false
+          cache-from: type=gha,scope=whisper-pro-asr-test
+          cache-to: type=gha,mode=max,scope=whisper-pro-asr-test
+
+  lint-and-security:
+    name: Lint & Security
+    needs: build-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Load Test Image (cache-hit rebuild)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: Dockerfile.test
@@ -64,16 +95,68 @@ jobs:
           load: true
           tags: whisper-pro-asr-test
           cache-from: type=gha,scope=whisper-pro-asr-test
-          cache-to: type=gha,mode=max,scope=whisper-pro-asr-test
 
-      - name: Orchestrate Test Suite (Integration)
+      - name: Run Lint & Security Stage
+        run: |
+          mkdir -p reports
+          chmod 0777 reports
+          docker run --rm \
+            -e CI=true \
+            -e PIPELINE_STAGE=lint \
+            -v "$PWD/reports:/reports" \
+            -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
+            whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh"
+
+      - name: Export Complexity Summary
+        if: success() || failure()
+        run: |
+          {
+            echo "### Cyclomatic Complexity Summary"
+            echo '```text'
+            if [ -f reports/complexity_output.txt ]; then
+              cat reports/complexity_output.txt
+            else
+              echo "reports/complexity_output.txt not found"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  python-tests:
+    name: Python Tests & Coverage
+    needs: [build-image, lint-and-security]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Load Test Image (cache-hit rebuild)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test
+          load: true
+          tags: whisper-pro-asr-test
+          cache-from: type=gha,scope=whisper-pro-asr-test
+
+      - name: Run Python Tests Stage
         run: |
           mkdir -p assets reports
           chmod 0777 assets reports
           docker run --rm \
             -e CI=true \
+            -e PIPELINE_STAGE=python-tests \
             -v "$PWD/assets:/app/assets" \
             -v "$PWD/reports:/reports" \
+            -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
             whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; TEST_EXIT_CODE=\$?; \
               [ -f coverage.xml ] && cp coverage.xml /reports/coverage.xml || true; \
               [ -f coverage_output.txt ] && cp coverage_output.txt /reports/coverage_output.txt || true; \
@@ -81,7 +164,7 @@ jobs:
               [ -f pytest.xml ] && cp pytest.xml /reports/pytest.xml || true; \
               exit \$TEST_EXIT_CODE"
 
-      - name: Export Coverage & Complexity to Job Summary
+      - name: Export Coverage Summary
         if: success() || failure()
         run: |
           {
@@ -102,26 +185,134 @@ jobs:
               echo "reports/coverage_output.txt not found"
             fi
             echo '```'
-            echo "### Cyclomatic Complexity Summary"
-            echo '```text'
-            if [ -f reports/complexity_output.txt ]; then
-              cat reports/complexity_output.txt
-            else
-              echo "reports/complexity_output.txt not found"
-            fi
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate PR Coverage Comment
         if: success() || failure()
-        uses: MishaKav/pytest-coverage-comment@v1
+        uses: MishaKav/pytest-coverage-comment@d46d9d594f3e1d11008ed19939deb7a139b18751  # v1.11.1
         with:
           pytest-coverage-path: ./reports/coverage_output.txt
           junitxml-path: ./reports/pytest.xml
 
+  js-unit-tests:
+    name: JS Unit Tests
+    needs: [build-image, lint-and-security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Load Test Image (cache-hit rebuild)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test
+          load: true
+          tags: whisper-pro-asr-test
+          cache-from: type=gha,scope=whisper-pro-asr-test
+
+      - name: Run JS Unit Tests Stage
+        run: |
+          docker run --rm \
+            -e CI=true \
+            -e PIPELINE_STAGE=js-unit-tests \
+            -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
+            whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh"
+
+  e2e-fixture:
+    name: E2E (Fixture Backend)
+    needs: [build-image, lint-and-security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Load Test Image (cache-hit rebuild)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test
+          load: true
+          tags: whisper-pro-asr-test
+          cache-from: type=gha,scope=whisper-pro-asr-test
+
+      - name: Run E2E (Fixture Backend) Stage
+        run: |
+          docker run --rm \
+            -e CI=true \
+            -e PIPELINE_STAGE=e2e-fixture \
+            -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
+            whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh"
+
+  e2e-real:
+    name: E2E (Real Backend)
+    needs: [build-image, lint-and-security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Load Test Image (cache-hit rebuild)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.test
+          target: test
+          load: true
+          tags: whisper-pro-asr-test
+          cache-from: type=gha,scope=whisper-pro-asr-test
+
+      - name: Run E2E (Real Backend) Stage
+        run: |
+          docker run --rm \
+            -e CI=true \
+            -e PIPELINE_STAGE=e2e-real \
+            -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
+            whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh"
+
+  publish:
+    name: Publish & Release
+    needs:
+      - build-image
+      - lint-and-security
+      - python-tests
+      - js-unit-tests
+      - e2e-fixture
+      - e2e-real
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
       - name: Resolve Docker Metadata & Tags
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
         with:
           images: ventura8/whisper-pro-asr
           tags: |
@@ -131,7 +322,7 @@ jobs:
             type=sha,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Verify Release Notes File Exists
+      - name: Verify GitHub Release Description Exists
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           TAG_NAME: ${{ github.ref_name }}
@@ -140,11 +331,20 @@ jobs:
             echo "Error: tag '$TAG_NAME' does not match the expected 'vMAJOR.MINOR.PATCH' format."
             exit 1
           fi
-          notes_path="docs/releases/GITHUB_RELEASE_${TAG_NAME}.md"
+          # Curated GitHub Release body (same pattern as asus-zenbook-linux-tools).
+          notes_path="docs/releases/${TAG_NAME}_github_description.md"
           if [ ! -f "$notes_path" ]; then
-            echo "Error: release notes file '$notes_path' is missing. Add it before tagging a release."
+            echo "Error: GitHub release description '$notes_path' is missing. Add it before tagging a release."
             exit 1
           fi
+
+          # Prefer the description H1 as the GitHub Release title; fail if missing.
+          release_name=$(sed -n 's/^#[[:space:]]\{1,\}//p' "$notes_path" | head -n 1)
+          if [ -z "$release_name" ]; then
+            echo "Error: '$notes_path' has no H1 heading to use as the GitHub Release title."
+            exit 1
+          fi
+          echo "RELEASE_NAME=$release_name" >> "$GITHUB_ENV"
 
           # Guard against tagging a version the shipped code doesn't actually match
           # (e.g. tag v1.2.2 pushed while config.py/pyproject.toml/package.json still say 1.2.1).
@@ -178,7 +378,7 @@ jobs:
           github.ref == 'refs/heads/main' ||
           startsWith(github.ref, 'refs/heads/release/') ||
           startsWith(github.ref, 'refs/tags/v')
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -188,7 +388,7 @@ jobs:
           github.ref == 'refs/heads/main' ||
           startsWith(github.ref, 'refs/heads/release/') ||
           startsWith(github.ref, 'refs/tags/v')
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           push: true
@@ -203,17 +403,22 @@ jobs:
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e  # v3
-        with:
-          name: ${{ github.ref_name }}
-          body_path: docs/releases/GITHUB_RELEASE_${{ github.ref_name }}.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Use the curated docs/releases/vX.Y.Z_github_description.md body -- do not
+          # substitute auto-generated notes.
+          RELEASE_NOTES_PATH: docs/releases/${{ github.ref_name }}_github_description.md
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${RELEASE_NAME}" \
+            --notes-file "${RELEASE_NOTES_PATH}"
 
       - name: Update Docker Hub Description
         if: >
           github.ref == 'refs/heads/main' ||
           startsWith(github.ref, 'refs/heads/release/') ||
           startsWith(github.ref, 'refs/tags/v')
-        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa  # v5.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

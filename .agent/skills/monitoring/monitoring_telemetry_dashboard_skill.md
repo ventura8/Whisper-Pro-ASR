@@ -77,6 +77,7 @@ Dashboard task list MUST always render in this **exact** order:
 - Dashboard rendering must continue to read `telemetry.hardware_util` keyed by unit id, with legacy singleton fields treated as compatibility-only fallback paths.
 - Telemetry history snapshots should preserve `hardware_util` so the hardware chart can replay per-unit GPU/NPU/CUDA usage instead of flattening history to legacy aggregate fields.
 - History cards should display the hardware unit used for execution. If runtime `unit_id` is cleared during post-processing, the dashboard must fall back to persisted history hardware fields (for example `history_unit_id`).
+- History hardware tag markup (`_historyHardwareTagMarkup`) must HTML-escape labels before `innerHTML` interpolation so unknown/family labels derived from `unitId` cannot inject markup. Callers (`getHwIconAndLabel` live path and meta fallback) pass raw labels into the helper.
 
 ### 5. Live Progress Updates
 

@@ -194,7 +194,7 @@ On hardware with very limited resources (e.g., 1-CPU systems), the service autom
 When `diarize=true` is passed to `/asr`, the diarization pipeline runs **within the same claimed hardware unit** as the main transcription, via a non-locking "_direct" sub-stage entry point rather than re-acquiring the lock. This ensures:
 
 - **No additional hardware claims**: Alignment and diarization share the unit already claimed for transcription.
-- **Cache isolation**: Each hardware unit maintains its own `_ALIGN_POOL` and `_DIARIZE_POOL` entries, preventing cross-unit cache collisions.
+- **Cache isolation**: Each hardware unit maintains its own `ALIGN_POOL` and `DIARIZE_POOL` entries, preventing cross-unit cache collisions.
 - **Preemption safety**: Diarization stages respect the same `_check_preemption()` cooperative yielding checks as transcription.
 - **Diarization fallback contract**: If diarization fails or `DIARIZATION_HF_TOKEN` is missing, the request still completes using standard transcription (no speaker labels). The diarization stage must not abort the overall `/asr` response.
 

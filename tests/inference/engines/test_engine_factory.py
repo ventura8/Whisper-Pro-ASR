@@ -124,88 +124,124 @@ def test_openai_whisper_detect_language_path_and_probs():
 
 
 def test_whisperx_engine():
-    mock_whisperx = mock.MagicMock()
-    mock_model = mock_whisperx.load_model.return_value
-    mock_model.transcribe.return_value = {
-        "language": "en",
-        "segments": [{"start": 1.0, "end": 3.0, "text": "whisperx"}],
-    }
-    mock_whisperx.load_audio.return_value = "audio_data"
+    """WhisperXEngine should delegate model load/transcribe to the isolated worker process,
+    and unload() must actually invoke the worker's unload_model cleanup call (not merely
+    drop the local model_handle attribute)."""
+    with mock.patch("modules.inference.engines.whisperx_engine.worker") as mock_worker:
+        mock_worker.call_with_generation.return_value = ("handle-1", 0)
+        mock_worker.generation.return_value = 0
+        mock_worker.call.side_effect = [
+            {"language": "en", "segments": [{"start": 1.0, "end": 3.0, "text": "whisperx"}]},
+            None,
+        ]
 
-    orig_duration = engine_factory.utils.get_audio_duration
-    engine_factory.utils.get_audio_duration = mock.MagicMock(return_value=10.0)
-    try:
-        with mock.patch("importlib.import_module", return_value=mock_whisperx):
+        orig_duration = engine_factory.utils.get_audio_duration
+        engine_factory.utils.get_audio_duration = mock.MagicMock(return_value=10.0)
+        try:
             engine = engine_factory.WhisperXEngine(model_id="test-model", device="cpu", compute_type="int8")
-            loaded_model = engine.model
+            model_handle = engine.model_handle
             segs, info = engine.transcribe("dummy.wav", language="en")
             seg_list = list(segs)
             engine.unload()
             assert (
-                loaded_model is mock_model,
+                model_handle,
                 info.language,
                 info.duration,
                 len(seg_list),
                 seg_list[0].text,
-                hasattr(engine, "model"),
-            ) == (True, "en", 10.0, 1, "whisperx", False)
-    finally:
-        engine_factory.utils.get_audio_duration = orig_duration
+                hasattr(engine, "model_handle"),
+            ) == ("handle-1", "en", 10.0, 1, "whisperx", False)
+            mock_worker.call_with_generation.assert_called_once_with(
+                "load_model",
+                model_id="test-model",
+                device="cpu",
+                compute_type="int8",
+            )
+            assert [c.args[0] for c in mock_worker.call.call_args_list] == ["transcribe", "unload_model"]
+            mock_worker.call.assert_called_with("unload_model", model_handle="handle-1")
+        finally:
+            engine_factory.utils.get_audio_duration = orig_duration
 
 
-def test_whisperx_detect_language_prefers_inner_model():
-    """WhisperX detect_language should use inner model.detect_language when available."""
-    mock_whisperx = mock.MagicMock()
-    mock_model = mock_whisperx.load_model.return_value
-    if hasattr(mock_model, "model"):
-        mock_model.model.detect_language.return_value = ("ro", 0.88, [("ro", 0.88), ("en", 0.12)])
+def _configure_whisperx_reload_worker(mock_worker) -> None:
+    mock_worker.call_with_generation.side_effect = [
+        ("handle-1", 1),  # load_model at __init__
+        ("handle-2", 2),  # load_model reload after generation changes
+    ]
+    mock_worker.call.side_effect = [
+        {"language": "en", "segments": [{"start": 0.0, "end": 1.0, "text": "first"}]},
+        {"language": "en", "segments": [{"start": 0.0, "end": 1.0, "text": "second"}]},
+    ]
+    mock_worker.generation.side_effect = [1, 2]
 
-    with mock.patch("importlib.import_module", return_value=mock_whisperx):
+
+def _run_whisperx_reload_transcriptions(engine) -> tuple:
+    after_init = (engine.model_handle, engine._generation)
+    list(engine.transcribe("dummy.wav", language="en")[0])
+    after_stable_call = (engine.model_handle, engine._generation)
+    list(engine.transcribe("dummy.wav", language="en")[0])
+    after_reload_call = (engine.model_handle, engine._generation)
+    return after_init, after_stable_call, after_reload_call
+
+
+def _whisperx_reload_assertion_payload(mock_worker, snapshots: tuple) -> tuple:
+    after_init, after_stable_call, after_reload_call = snapshots
+    load_model_calls = [c for c in mock_worker.call_with_generation.call_args_list if c.args[0] == "load_model"]
+    transcribe_handles = [c.kwargs["model_handle"] for c in mock_worker.call.call_args_list if c.args[0] == "transcribe"]
+    return (
+        after_init,
+        after_stable_call,
+        after_reload_call,
+        len(load_model_calls),
+        load_model_calls[1].kwargs["model_id"],
+        transcribe_handles,
+    )
+
+
+def test_whisperx_engine_reloads_model_handle_after_worker_restart():
+    """_ensure_current_model_handle must reload model_handle (a second load_model call)
+    when worker.generation() returns a different value than what was recorded at load
+    time -- signaling the isolated worker process crashed and respawned, which means
+    the old handle's `objects` dict no longer exists. A stable generation across calls
+    must NOT trigger a reload (test_whisperx_engine above already covers that path)."""
+    with mock.patch("modules.inference.engines.whisperx_engine.worker") as mock_worker:
+        _configure_whisperx_reload_worker(mock_worker)
+        orig_duration = engine_factory.utils.get_audio_duration
+        engine_factory.utils.get_audio_duration = mock.MagicMock(return_value=5.0)
+        try:
+            engine = engine_factory.WhisperXEngine(model_id="test-model", device="cpu", compute_type="int8")
+            snapshots = _run_whisperx_reload_transcriptions(engine)
+        finally:
+            engine_factory.utils.get_audio_duration = orig_duration
+
+    assert _whisperx_reload_assertion_payload(mock_worker, snapshots) == (
+        ("handle-1", 1),
+        ("handle-1", 1),
+        ("handle-2", 2),
+        2,
+        "test-model",
+        ["handle-1", "handle-2"],
+    )
+
+
+def test_whisperx_detect_language_routes_through_worker():
+    """WhisperX detect_language should forward to the isolated worker and return its result verbatim."""
+    with mock.patch("modules.inference.engines.whisperx_engine.worker") as mock_worker:
+        mock_worker.call_with_generation.return_value = ("handle-1", 0)
+        mock_worker.generation.return_value = 0
+        mock_worker.call.return_value = ("ro", 0.88, [("ro", 0.88), ("en", 0.12)])
         engine = engine_factory.WhisperXEngine(model_id="test-model", device="cpu", compute_type="int8")
-        lang, prob, all_probs = engine.detect_language("audio-data")
+        lang, prob, all_probs = engine.detect_language("audio-data.wav")
 
     assert (lang, prob, all_probs[0]) == ("ro", 0.88, ("ro", 0.88))
+    mock_worker.call.assert_called_with("detect_language", model_handle="handle-1", audio_path="audio-data.wav")
 
 
-def test_whisperx_detect_language_uses_direct_method():
-    """WhisperX detect_language should use direct detect_language when inner model is absent."""
-    mock_whisperx = mock.MagicMock()
-    mock_model = mock_whisperx.load_model.return_value
-    if hasattr(mock_model, "model"):
-        del mock_model.model
-    mock_model.detect_language.return_value = ("es", 0.77, [("es", 0.77), ("en", 0.23)])
-
-    with mock.patch("importlib.import_module", return_value=mock_whisperx):
-        engine = engine_factory.WhisperXEngine(model_id="test-model", device="cpu", compute_type="int8")
-        lang, prob, all_probs = engine.detect_language("audio-data")
-
-    assert (lang, prob) == ("es", 0.77)
-    assert all_probs[0] == ("es", 0.77)
-
-
-def test_whisperx_detect_language_falls_back_to_transcribe():
-    """WhisperX detect_language should infer language from transcribe fallback when no API exists."""
-    mock_whisperx = mock.MagicMock()
-    mock_model = mock_whisperx.load_model.return_value
-    if hasattr(mock_model, "model"):
-        del mock_model.model
-    if hasattr(mock_model, "detect_language"):
-        del mock_model.detect_language
-    mock_model.transcribe.return_value = {"language": "it"}
-
-    with mock.patch("importlib.import_module", return_value=mock_whisperx):
-        engine = engine_factory.WhisperXEngine(model_id="test-model", device="cpu", compute_type="int8")
-        lang, prob, all_probs = engine.detect_language("audio-data")
-
-    assert (lang, prob, all_probs) == ("it", 1.0, [("it", 1.0)])
-
-
-def _engine_import_side_effect(mock_intel_module, mock_openai_module, mock_whisperx_module, mock_faster_module):
+def _engine_import_side_effect(mock_intel_module, mock_openai_module, mock_faster_module):
     """Return the importlib side effect used by the create_engine tests."""
     module_map = {
         "modules.inference.engines.intel_engine": mock_intel_module,
         "whisper": mock_openai_module,
-        "whisperx": mock_whisperx_module,
         "faster_whisper": mock_faster_module,
     }
     return lambda name: module_map.get(name, mock.MagicMock())
@@ -216,12 +252,11 @@ def test_create_engine_intel_whisper_npu():
     mock_intel_module = mock.MagicMock()
     mock_intel_engine = mock_intel_module.IntelWhisperEngine.return_value
     mock_openai_module = mock.MagicMock()
-    mock_whisperx_module = mock.MagicMock()
     mock_faster_module = mock.MagicMock()
 
     with mock.patch(
         "importlib.import_module",
-        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_whisperx_module, mock_faster_module),
+        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_faster_module),
     ):
         unit_intel = {"id": "npu:0", "type": "NPU", "name": "Intel NPU"}
         engine = engine_factory.create_engine("INTEL-WHISPER", "test-model", unit_intel)
@@ -234,12 +269,11 @@ def test_create_engine_intel_whisper_cuda_falls_back():
     """Intel Whisper on CUDA should fall back to Faster Whisper."""
     mock_intel_module = mock.MagicMock()
     mock_openai_module = mock.MagicMock()
-    mock_whisperx_module = mock.MagicMock()
     mock_faster_module = mock.MagicMock()
 
     with mock.patch(
         "importlib.import_module",
-        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_whisperx_module, mock_faster_module),
+        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_faster_module),
     ):
         unit_cuda = {"id": "cuda:0", "type": "CUDA", "name": "NVIDIA GPU"}
         engine = engine_factory.create_engine("INTEL-WHISPER", "test-model", unit_cuda)
@@ -252,12 +286,11 @@ def test_create_engine_openai_whisper_cuda():
     """OpenAI Whisper on CUDA should create an OpenAI engine with CUDA device."""
     mock_intel_module = mock.MagicMock()
     mock_openai_module = mock.MagicMock()
-    mock_whisperx_module = mock.MagicMock()
     mock_faster_module = mock.MagicMock()
 
     with mock.patch(
         "importlib.import_module",
-        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_whisperx_module, mock_faster_module),
+        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_faster_module),
     ):
         unit_cuda = {"id": "cuda:0", "type": "CUDA", "name": "NVIDIA GPU"}
         engine = engine_factory.create_engine("OPENAI-WHISPER", "test-model", unit_cuda)
@@ -268,15 +301,8 @@ def test_create_engine_openai_whisper_cuda():
 
 def test_create_engine_whisperx_cpu():
     """WhisperX on CPU should create a WhisperX engine with cpu device."""
-    mock_intel_module = mock.MagicMock()
-    mock_openai_module = mock.MagicMock()
-    mock_whisperx_module = mock.MagicMock()
-    mock_faster_module = mock.MagicMock()
-
-    with mock.patch(
-        "importlib.import_module",
-        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_whisperx_module, mock_faster_module),
-    ):
+    with mock.patch("modules.inference.engines.whisperx_engine.worker") as mock_worker:
+        mock_worker.call_with_generation.return_value = ("handle-1", 0)
         unit_cpu = {"id": "cpu", "type": "CPU", "name": "Intel CPU"}
         engine = engine_factory.create_engine("WHISPERX", "test-model", unit_cpu)
 
@@ -288,12 +314,11 @@ def test_create_engine_faster_whisper_cuda():
     """Faster Whisper on CUDA should create a Faster Whisper engine."""
     mock_intel_module = mock.MagicMock()
     mock_openai_module = mock.MagicMock()
-    mock_whisperx_module = mock.MagicMock()
     mock_faster_module = mock.MagicMock()
 
     with mock.patch(
         "importlib.import_module",
-        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_whisperx_module, mock_faster_module),
+        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_faster_module),
     ):
         unit_cuda = {"id": "cuda:0", "type": "CUDA", "name": "NVIDIA GPU"}
         engine = engine_factory.create_engine("FASTER-WHISPER", "test-model", unit_cuda)
@@ -305,12 +330,11 @@ def test_create_engine_faster_whisper_cpu_fallback():
     """Faster Whisper should still create a Faster Whisper engine for GPU fallback units."""
     mock_intel_module = mock.MagicMock()
     mock_openai_module = mock.MagicMock()
-    mock_whisperx_module = mock.MagicMock()
     mock_faster_module = mock.MagicMock()
 
     with mock.patch(
         "importlib.import_module",
-        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_whisperx_module, mock_faster_module),
+        side_effect=_engine_import_side_effect(mock_intel_module, mock_openai_module, mock_faster_module),
     ):
         unit_gpu = {"id": "gpu:0", "type": "GPU", "name": "Intel GPU"}
         engine = engine_factory.create_engine("FASTER-WHISPER", "test-model", unit_gpu)

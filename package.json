@@ -7,33 +7,34 @@
     "fix:md": "markdownlint-cli2 --fix",
     "lint:md": "markdownlint-cli2",
     "lint:html": "htmlhint \"modules/monitoring/templates/*.html\" && html-validate --max-warnings 0 \"modules/monitoring/templates/*.html\"",
-    "lint:js": "eslint --max-warnings 0 --no-inline-config --report-unused-disable-directives modules/monitoring/templates/**/*.js tests/js/**/*.js",
-    "lint:js:complexity": "eslint --max-warnings 0 --no-inline-config --report-unused-disable-directives modules/monitoring/templates/dashboard/**/*.js modules/monitoring/templates/analytics/**/*.js",
-    "lint:css": "stylelint --max-warnings 0 --report-needless-disables --report-invalid-scope-disables --report-descriptionless-disables \"static/**/*.css\" \"modules/monitoring/templates/**/*.css\"",
+    "lint:js": "eslint --cache --cache-location /var/cache/whisper-pro-asr-tools/eslint/lint-js.cache --max-warnings 0 --no-inline-config --report-unused-disable-directives modules/monitoring/templates/**/*.js tests/js/**/*.js",
+    "lint:js:complexity": "eslint --cache --cache-location /var/cache/whisper-pro-asr-tools/eslint/lint-js-complexity.cache --max-warnings 0 --no-inline-config --report-unused-disable-directives modules/monitoring/templates/dashboard/**/*.js modules/monitoring/templates/analytics/**/*.js",
+    "lint:css": "stylelint --cache --cache-location /var/cache/whisper-pro-asr-tools/stylelint/cache --max-warnings 0 --report-needless-disables --report-invalid-scope-disables --report-descriptionless-disables \"static/**/*.css\" \"modules/monitoring/templates/**/*.css\"",
     "lint:toml": "taplo fmt --check && taplo lint",
     "test:js": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:filters": "playwright test tests/e2e/dashboard-filters.spec.cjs",
-    "quality:frontend": "npm run lint:html && npm run lint:js && npm run lint:js:complexity && npm run lint:css && npm run lint:toml && npm run test:js && npm run test:e2e"
+    "test:e2e:real": "playwright test --config=playwright.real.config.cjs",
+    "quality:frontend": "npm run lint:html && npm run lint:js && npm run lint:js:complexity && npm run lint:css && npm run lint:toml && npm audit --audit-level=low && npm run test:js && npm run test:e2e && npm run test:e2e:real"
   },
   "devDependencies": {
-    "@playwright/mcp": "^0.0.78",
-    "@playwright/test": "^1.61.1",
-    "@vitest/coverage-v8": "4.1.10",
-    "esbuild": "0.28.1",
-    "eslint": "10.7.0",
-    "globals": "17.7.0",
-    "html-validate": "11.5.6",
+    "@playwright/mcp": "^0.0.79",
+    "@playwright/test": "^1.62.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "esbuild": "0.28.2",
+    "eslint": "10.9.0",
+    "globals": "17.11.0",
+    "html-validate": "11.10.0",
     "htmlhint": "1.9.2",
-    "jsdom": "29.1.1",
-    "markdownlint-cli2": "^0.23.1",
-    "stylelint": "17.14.0",
+    "jsdom": "30.0.1",
+    "markdownlint-cli2": "^0.23.2",
+    "stylelint": "17.14.1",
     "stylelint-config-standard": "40.0.0",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "overrides": {
-    "esbuild": "0.28.1",
-    "fast-uri": "3.1.5",
+    "esbuild": "0.28.2",
+    "fast-uri": "4.1.3",
     "glob": "13.0.6"
   }
 }

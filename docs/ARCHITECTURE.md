@@ -91,16 +91,18 @@ graph TD
 
 ```mermaid
 graph LR
-    SEG["Raw Segments"] --> ALIGN["whisperx.align()"]
+    SEG["Raw Segments"] --> ALIGN["whisperx.align() (in worker process)"]
     ALIGN --> DIAR["DiarizationPipeline (DIARIZATION_HF_TOKEN)"]
     DIAR --> ASSIGN["assign_word_speakers()"]
     ASSIGN --> LABELED["Speaker-Labeled Segments"]
     
     subgraph CACHE ["Model Cache Pools"]
-    AP["_ALIGN_POOL (per unit)"]
-    DP["_DIARIZE_POOL (per unit)"]
+    AP["ALIGN_POOL (per unit)"]
+    DP["DIARIZE_POOL (per unit)"]
     end
 ```
+
+**WhisperX Process Isolation**: `whisperx` is not imported in the main service process. WhisperX 3.8.6 hard-pins a torch/torchaudio/torchvision/huggingface-hub stack that is incompatible with the versions the rest of the application uses, and that stack cannot be safely reloaded inside one live interpreter. `whisperx_engine.py` instead calls `whisperx_worker_client.call(...)` / `call_with_generation(...)`, which lazily spawns and owns a dedicated child process (`whisperx_worker.py`, launched via `multiprocessing.get_context("spawn")` against the isolated install at `WHISPERX_LIB_PATH`). Spawn re-imports app `__main__` as `__mp_main__`; `whisper_pro_asr.py` skips FastAPI/torch construction on that path, and `modules` / `modules.inference.engines` package inits stay lazy so importing `whisperx_worker` does not pull the main stack before `_activate_isolated_lib_path()` runs. `diarization.py` talks to alignment/diarization models through this client using opaque handles instead of live Python objects. `ALIGN_POOL`/`DIARIZE_POOL` still track per-unit handles in the main process; the underlying models live in the worker. Load paths that cache handles use `call_with_generation(...)`, which returns `(result, generation)` under the same `_LOCK` so the stamped generation cannot race a mid-load worker respawn. Parent-side access remains serialized under one shared `_LOCK` (a deliberate single-worker design for this isolation layer; concurrent WhisperX across distinct scheduler hardware units is not multiplexed yet). Callers that block beyond `WHISPERX_WORKER_LOCK_WARN_SEC` (default 5s) emit an operational warning identifying the waiting operation (`call`/`generation`/`shutdown`) without changing lock semantics. RPC deadlines are off by default (`WHISPERX_WORKER_CALL_TIMEOUT_SEC=0`); set a positive value only to enforce a hung-worker ceiling. The isolated install is pinned with hashes via `requirements/whisperx.lock.txt` (`pip install --require-hashes`) in the production Dockerfile. Releasing GPU/VRAM for these models (`unload_models()` / idle cleanup) shuts down and respawns the worker rather than just dropping references. A `WhisperXWorkerError` from the client falls back to unlabeled segments rather than failing the whole transcription.
 
 ### Priority Detection Flow (/detect-language)
 
@@ -212,7 +214,7 @@ The system features a thread-aware logging and telemetry engine designed for ind
 - **AMD GPU (ROCm/DirectML)**: Leverages `/dev/kfd` and `/dev/dri` on Linux; uses `/dev/dxg` (WSL GPU bridge) on Windows. `onnxruntime-rocm` is isolated under `/app/libs/amd` and loaded automatically when AMD hardware is detected. Whisper ASR runs on CPU while UVR vocal isolation offloads to the AMD GPU via ONNX Runtime ROCm/DirectML.
 - **SSD Optimization**: All transient I/O is redirected to a RAM-backed `tmpfs` volume to prevent physical wear.
 - **Standardization Layer**: All incoming media (MKV, AVI, MP4, etc.) is standardized to 16kHz Mono WAV before entering the pipeline, ensuring consistent results across all formats.
-- **Diarization Models**: WhisperX alignment and PyAnnote diarization models are cached per hardware unit in `_ALIGN_POOL` and `_DIARIZE_POOL`. These are purged alongside Whisper models during `unload_models()`.
+- **Diarization Models**: WhisperX alignment and PyAnnote diarization models are cached per hardware unit in `ALIGN_POOL` and `DIARIZE_POOL`. These are purged alongside Whisper models during `unload_models()`.
 
 ---
 
@@ -231,7 +233,7 @@ graph TD
     KEY_CHK -->|Authorized| ROUTE["Protected Handler"]
     
     AUTH -->|No Keys Set (Local Mode)| CSRF{"State Changing Endpoint?"}
-    CSRF -->|Yes: /settings, /system/...|     ORIGIN_CHK{"Origin / Referer Present And Match Host?"}
+    CSRF -->|Yes: /system/settings, /system/...|     ORIGIN_CHK{"Origin / Referer Present And Match Host?"}
     ORIGIN_CHK -->|Missing Headers Or Cross-Origin Mismatch| REJ_CSRF["403 Forbidden (CSRF)"]
     ORIGIN_CHK -->|Trusted / Same-Host| AUDIT["Audit Logger"]
     CSRF -->|No: Read-Only| ROUTE
@@ -250,7 +252,7 @@ graph TD
 ### 2. Dual-Tier Authentication & Anti-CSRF
 
 - **`API_KEY`**: Authenticates general API usage (`/asr`, `/detect-language`, `/status`, `/history`).
-- **`ADMIN_API_KEY`**: Authenticates administrative endpoints (`/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`).
+- **`ADMIN_API_KEY`**: Authenticates administrative endpoints (`/system/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`).
 - **Anti-CSRF Origin Validation**: In unauthenticated/local setups, state-modifying administrative endpoints require Origin or Referer and verify the value against the request host or CORS allowlist. Missing both headers, or a cross-origin mismatch, returns `403` to prevent browser drive-by data destruction.
 
 ### 3. Model Supply Chain & Parameter Hardening
@@ -282,7 +284,7 @@ graph TD
 │   │   ├── routes/          # Endpoint modules
 │   │   │   ├── asr.py       # /asr, /v1/audio/transcriptions, /v1/audio/translations
 │   │   │   ├── detect.py    # /detect-language
-│   │   │   └── system.py    # /dashboard, /status, /settings, /analytics, /history
+│   │   │   └── system.py    # /dashboard, /status, /system/settings, /analytics, /history
 │   │   └── support/         # Shared route helpers
 │   │       ├── request_utils.py
 │   │       ├── security.py  # CORS, API key auth, admin endpoint protection
@@ -316,7 +318,9 @@ graph TD
 │   │       ├── faster_whisper_engine.py
 │   │       ├── openai_whisper_engine.py
 │   │       ├── intel_engine.py
-│   │       └── whisperx_engine.py
+│   │       ├── whisperx_engine.py
+│   │       ├── whisperx_worker.py         # Isolated child-process entrypoint (spawn)
+│   │       └── whisperx_worker_client.py  # Parent-side client that owns the worker
 │   └── monitoring/          # Dashboard, Telemetry & Metrics
 │       ├── dashboard.py     # Dashboard entry point
 │       ├── dashboard_ui.py  # Material Design dashboard renderer (loads from templates)

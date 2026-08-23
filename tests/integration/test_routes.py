@@ -9,7 +9,7 @@ from unittest import mock
 from fastapi import FastAPI
 
 from modules.api.routes import asr as routes_asr
-from modules.api.routes import detect as routes_detect
+from modules.api.routes import detect_coalescing
 from modules.api.routes.asr import get_request_params
 from modules.api.support.request_utils import cleanup_files
 from modules.core import config, utils
@@ -149,10 +149,13 @@ class TestDetectLanguageEndpoint:
         test_file = tmp_path / "test.mp3"
         test_file.write_bytes(b"fake audio data")
 
-        _build_dedupe_key = routes_detect.__dict__["_build_dedupe_key"]
-        inflight_detect_by_path = routes_detect.__dict__["_INFLIGHT_DETECT_BY_PATH"]
+        _build_dedupe_key = detect_coalescing.build_dedupe_key
+        inflight_detect_by_path = detect_coalescing.__dict__["_INFLIGHT_DETECT_BY_PATH"]
 
-        with mock.patch("modules.api.routes.detect.model_manager") as mock_mm:
+        with (
+            mock.patch("modules.api.routes.detect.model_manager") as mock_mm,
+            mock.patch("modules.api.routes.detect_coalescing.model_manager", mock_mm),
+        ):
             mock_mm.is_engine_initialized.return_value = True
             future = concurrent.futures.Future()
             shared_result = {
@@ -187,7 +190,7 @@ class TestDetectLanguageEndpoint:
         shared_future = concurrent.futures.Future()
         shared_future.set_result((None, ("boom", 500)))
 
-        _await_shared_result = routes_detect.__dict__["_await_shared_result"]
+        _await_shared_result = detect_coalescing.__dict__["_await_shared_result"]
         response = asyncio.run(_await_shared_result(shared_future))
 
         assert response.status_code == 500
@@ -198,24 +201,28 @@ class TestDetectLanguageEndpoint:
         """Leader helper should publish exceptions to waiters and return a normalized error response."""
         shared_future = concurrent.futures.Future()
         dedupe_key = "local_path::/tmp/test.mp3"
-        inflight_detect_by_path = routes_detect.__dict__["_INFLIGHT_DETECT_BY_PATH"]
-        _run_leader_detection = routes_detect.__dict__["_run_leader_detection"]
+        inflight_detect_by_path = detect_coalescing.__dict__["_INFLIGHT_DETECT_BY_PATH"]
+        _run_leader_detection = detect_coalescing.__dict__["_run_leader_detection"]
         inflight_detect_by_path[dedupe_key] = shared_future
 
-        with mock.patch("modules.api.routes.detect._run_detection_internal", side_effect=Exception("kaboom")):
-            with mock.patch("modules.api.routes.detect.routes_utils.handle_error", return_value=("Error", 500)):
-                response = asyncio.run(
-                    _run_leader_detection(
-                        shared_future,
-                        dedupe_key,
-                        {
-                            "resolved_local_path": "/tmp/test.mp3",
-                            "uploaded_file": None,
-                            "filename": "test.mp3",
-                            "start_time": 0.0,
-                        },
-                    )
+        async def _raising_run_detection_internal(*_args, **_kwargs):
+            raise RuntimeError("kaboom")
+
+        with mock.patch("modules.api.routes.detect_coalescing.routes_utils.handle_error", return_value=("Error", 500)):
+            response = asyncio.run(
+                _run_leader_detection(
+                    shared_future,
+                    dedupe_key,
+                    {
+                        "resolved_local_path": "/tmp/test.mp3",
+                        "uploaded_file": None,
+                        "filename": "test.mp3",
+                        "start_time": 0.0,
+                        "worker_context": {},
+                    },
+                    run_detection_internal=_raising_run_detection_internal,
                 )
+            )
 
         assert response.status_code == 500
         assert shared_future.done()
@@ -226,8 +233,8 @@ class TestDetectLanguageEndpoint:
         test_file = tmp_path / "test.mp3"
         test_file.write_bytes(b"fake audio data")
 
-        _build_dedupe_key = routes_detect.__dict__["_build_dedupe_key"]
-        inflight_detect_by_path = routes_detect.__dict__["_INFLIGHT_DETECT_BY_PATH"]
+        _build_dedupe_key = detect_coalescing.build_dedupe_key
+        inflight_detect_by_path = detect_coalescing.__dict__["_INFLIGHT_DETECT_BY_PATH"]
 
         stale_future = concurrent.futures.Future()
         stale_future.set_result(

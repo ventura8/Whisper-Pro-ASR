@@ -19,10 +19,21 @@ logger = logging.getLogger(__name__)
 ErrorInfo = tuple[str, int]
 
 
-def _run_convert_to_wav(source_path: str, input_flags: list[str]) -> tuple[Optional[str], Optional[ErrorInfo]]:
+def _run_convert_to_wav(
+    source_path: str,
+    input_flags: list[str],
+    *,
+    stream_index: Optional[int] = None,
+    delay_filter: Optional[str] = None,
+) -> tuple[Optional[str], Optional[ErrorInfo]]:
     """Run FFmpeg normalization to standardized 16kHz mono WAV."""
     try:
-        clean_wav = utils.convert_to_wav(source_path, input_flags=input_flags)
+        clean_wav = utils.convert_to_wav(
+            source_path,
+            input_flags=input_flags,
+            stream_index=stream_index,
+            delay_filter=delay_filter,
+        )
         if not clean_wav:
             return None, ("FFmpeg conversion failed - invalid media format", 400)
         return clean_wav, None
@@ -103,32 +114,74 @@ def _corrupt_file_error(source_path: str) -> tuple[None, ErrorInfo] | None:
     return None
 
 
-def _raw_pcm_source_or_error(
+def _log_stream_alignment_probe_start(source_path: str, language: Optional[str]) -> None:
+    logger.info(
+        "[Prep] Server-side Bazarr replication: probing %s for audio-track selection "
+        "(target language=%s) and playback-delay correction, same as Bazarr's own "
+        "client-side get_audio_delay/encode_audio_stream would do before uploading.",
+        source_path,
+        language or "none",
+    )
+
+
+def _log_stream_alignment_result(stream_index: Optional[int], delay_filter: Optional[str]) -> None:
+    if stream_index is None and delay_filter is None:
+        logger.info("[Prep] Server-side Bazarr replication result: no adjustment needed (single/default track, no delay).")
+        return
+    logger.info(
+        "[Prep] Server-side Bazarr replication result: stream_index=%s (-map 0:%s), delay_filter=%s",
+        stream_index,
+        stream_index,
+        delay_filter or "none",
+    )
+
+
+def _resolve_stream_alignment(
     source_path: str,
-) -> tuple[Optional[str], Optional[ErrorInfo]]:
-    corrupt = _corrupt_file_error(source_path)
-    if corrupt is not None:
-        return corrupt
-    return source_path, None
+    language: Optional[str],
+    apply_stream_alignment: bool,
+) -> tuple[Optional[int], Optional[str]]:
+    """Replicate real Bazarr's client-side audio-track selection + delay correction,
+    but only for a raw local media file WE resolve directly (local_path/video_file) --
+    never for an uploaded audio_file, which Bazarr has already corrected on its end.
+    See utils.get_stream_alignment_directives / utils_helpers.build_stream_alignment_directives."""
+    if not apply_stream_alignment:
+        return None, None
+    _log_stream_alignment_probe_start(source_path, language)
+    stream_index, delay_filter = utils.get_stream_alignment_directives(source_path, language)
+    _log_stream_alignment_result(stream_index, delay_filter)
+    return stream_index, delay_filter
 
 
 def get_clean_wav_or_error(
     source_path: str,
     input_flags: Optional[list[str]] = None,
+    *,
+    language: Optional[str] = None,
+    apply_stream_alignment: bool = False,
 ) -> tuple[Optional[str], Optional[ErrorInfo]]:
     """Normalize input media to 16kHz mono WAV.
 
-    If input_flags is truthy (raw-PCM / encode=false path), FFmpeg normalization is
-    bypassed and the caller receives the source_path directly, after a corruption
-    sanity check.
+    input_flags (raw-PCM / encode=false path) is still run through FFmpeg here,
+    not bypassed: faster-whisper's decode_audio() opens the file via PyAV's
+    generic container auto-probing (av.open(), no format hint), which cannot
+    identify headerless raw PCM on its own -- only FFmpeg, given the explicit
+    `-f s16le -ar 16000 -ac 1` input flags Bazarr's encode=false implies, can
+    correctly interpret it. A prior version of this function returned the raw
+    .raw path unmodified for this case, which is what get_audio_duration()
+    (which does thread input_flags through to ffprobe) already handled
+    correctly, but the ASR engine received the same unmodified path with no
+    input_flags applied anywhere downstream -- silently breaking real Bazarr
+    raw-PCM transcription requests. FFmpeg still does effectively minimal work
+    here since the input is already at the target 16kHz/mono/s16le format.
+
+    apply_stream_alignment=True additionally probes the source for multi-audio-track
+    selection and playback-delay correction (see _resolve_stream_alignment) -- callers
+    must only set this for a server-resolved local_path/video_file source, never for
+    genuine uploaded audio content.
     """
     flags = _resolve_input_flags(input_flags)
     model_manager.update_task_progress(0, "Standardizing Audio")
-
-    if flags:
-        logger.info("[Prep] Skipping FFmpeg normalization (raw PCM / encode=false).")
-        return _raw_pcm_source_or_error(source_path)
-
     logger.info("[Prep] Normalizing audio stream (FFmpeg)...")
     start = time.time()
 
@@ -136,7 +189,8 @@ def get_clean_wav_or_error(
     if corrupt is not None:
         return corrupt
 
-    clean_wav, err = _run_convert_to_wav(source_path, flags or [])
+    stream_index, delay_filter = _resolve_stream_alignment(source_path, language, apply_stream_alignment)
+    clean_wav, err = _run_convert_to_wav(source_path, flags or [], stream_index=stream_index, delay_filter=delay_filter)
     if err:
         return None, err
 

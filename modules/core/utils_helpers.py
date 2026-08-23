@@ -3,6 +3,7 @@ Utility Helper Functions for Whisper Pro ASR
 """
 
 import importlib
+import json
 import logging
 import os
 import shutil
@@ -11,6 +12,10 @@ import time
 from modules.core import config, process_exec
 
 logger = logging.getLogger(__name__)
+
+#: Mirrors real Bazarr's own encode_audio_stream()/get_audio_delay() threshold: ignore
+#: delays smaller than 20ms (close to 1 frame at 60fps) to avoid unnecessary filtering.
+_STREAM_ALIGNMENT_SYNC_THRESHOLD_MS = 20
 
 
 def run_ffmpeg_standardization(
@@ -22,6 +27,8 @@ def run_ffmpeg_standardization(
     input_flags=None,
     flags=None,
     yield_cb=None,
+    stream_index=None,
+    delay_filter=None,
 ):
     """Execute FFmpeg command with progress tracking."""
     cfg = ffmpeg_env["cfg"]
@@ -48,6 +55,8 @@ def run_ffmpeg_standardization(
             flags,
             standard_normalization_filters,
             input_flags,
+            stream_index=stream_index,
+            delay_filter=delay_filter,
         )
         ffmpeg_timeout = _compute_ffmpeg_timeout(duration)
         _execute_ffmpeg_with_watchdog(command, duration, ffmpeg_timeout, format_duration, yield_cb=yield_cb)
@@ -78,6 +87,9 @@ def _build_ffmpeg_standardization_cmd(
     flags,
     standard_normalization_filters,
     input_flags=None,
+    *,
+    stream_index=None,
+    delay_filter=None,
 ) -> list[str]:
     command = [
         "ffmpeg",
@@ -101,8 +113,136 @@ def _build_ffmpeg_standardization_cmd(
     if input_flags:
         input_args.extend(input_flags)
     input_args.extend(["-i", source_path])
-    command.extend(input_args + ["-progress", "pipe:1"] + flags + ["-af", standard_normalization_filters, output_path])
+    # -map is an output-side arg (associated with the -i just added), never an input_flag --
+    # only set for server-resolved local_path/video_file sources (see
+    # build_stream_alignment_directives), never for uploaded audio_file content.
+    output_args = ["-progress", "pipe:1"]
+    if stream_index is not None:
+        output_args.extend(["-map", f"0:{stream_index}"])
+    af_value = standard_normalization_filters
+    if delay_filter:
+        # Delay/trim correction must run before loudness normalization on audio that
+        # hasn't been time-shifted yet -- mirrors Bazarr's own encode_audio_stream()
+        # filter ordering (f"adelay=...,{their_downstream_filter}").
+        af_value = f"{delay_filter},{standard_normalization_filters}"
+    command.extend(input_args + output_args + flags + ["-af", af_value, output_path])
     return command
+
+
+def _probe_streams_and_packets(source_path: str) -> dict:
+    """Single ffprobe call returning both audio-stream metadata (index + language tag)
+    and the first ~30s of audio packet PTS data, mirroring real Bazarr's own combined
+    ffprobe invocation. Returns {} on any failure -- callers must treat that as "no
+    alignment data available" and fall back to today's unmodified behavior."""
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-read_intervals",
+            "%+30",
+            "-show_entries",
+            "stream=index:stream_tags=language:packet=stream_index,pts_time",
+            "-of",
+            "json",
+            source_path,
+        ]
+        return json.loads(process_exec.check_output_text(cmd, timeout=10))
+    except tuple([Exception]):
+        return {}
+
+
+def _stream_language_matches(stream: dict, target_short: str) -> bool:
+    language = stream.get("language")
+    return bool(language) and target_short in str(language).lower()
+
+
+def _find_matching_stream(streams: list[dict], target_short: str) -> dict | None:
+    return next((stream for stream in streams if _stream_language_matches(stream, target_short)), None)
+
+
+def _select_audio_stream_index(streams: list[dict], target_language: str | None) -> int | None:
+    """Pick the audio stream whose language tag matches the target language (substring
+    match on the first 2 characters, mirroring Bazarr's `target_lang_short in stream_lang`).
+    Returns None (no -map, ffmpeg's own default stream selection) when there's no target
+    language or no match -- deliberately does NOT fall back to streams[0], since that
+    changes nothing from ffmpeg's implicit default."""
+    if not streams or not target_language:
+        return None
+    match = _find_matching_stream(streams, str(target_language)[:2].lower())
+    return match.get("index") if match else None
+
+
+def _extract_audio_streams(probe_result: dict) -> list[dict]:
+    streams = probe_result.get("streams") or []
+    return [{"index": s.get("index"), "language": (s.get("tags") or {}).get("language")} for s in streams]
+
+
+def _packet_matches_stream(packet: dict, stream_index: int | None) -> bool:
+    return stream_index is None or packet.get("stream_index") == stream_index
+
+
+def _parse_pts(pts) -> float | None:
+    try:
+        return float(pts) if pts is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_packet_pts_for_stream(probe_result: dict, stream_index: int | None) -> float | None:
+    packets = probe_result.get("packets") or []
+    packet = next((p for p in packets if _packet_matches_stream(p, stream_index)), None)
+    return _parse_pts(packet.get("pts_time")) if packet else None
+
+
+def _delay_filter_for_ms(delay_ms: int) -> str | None:
+    """Mirrors Bazarr's encode_audio_stream(): positive delay (audio starts late) inserts
+    silence via adelay; negative delay (audio starts early) trims the leading offset via
+    atrim. Delays within the sync threshold are left uncorrected."""
+    if delay_ms > _STREAM_ALIGNMENT_SYNC_THRESHOLD_MS:
+        # all=1 applies the delay to every channel regardless of channel count --
+        # a hardcoded two-value "delay|delay" form only covers stereo and silently
+        # leaves extra channels on a multi-channel source (e.g. 5.1) undelayed.
+        return f"adelay={delay_ms}:all=1"
+    if delay_ms < -_STREAM_ALIGNMENT_SYNC_THRESHOLD_MS:
+        trim_start = abs(delay_ms) / 1000.0
+        return f"atrim=start={trim_start},asetpts=PTS-STARTPTS"
+    return None
+
+
+def _should_skip_delay_probe(stream_index: int | None, streams: list[dict]) -> bool:
+    """With multiple audio streams and no explicit selection, the "first packet" in
+    the interleaved probe output could belong to any of them -- computing a delay
+    from it and applying that delay to the whole (ffmpeg-default-track) output
+    would silently mis-align a stream we never actually measured."""
+    return stream_index is None and len(streams) > 1
+
+
+def build_stream_alignment_directives(source_path: str, target_language: str | None) -> tuple[int | None, str | None]:
+    """Replicate real Bazarr's client-side audio-track selection + delay correction
+    (subliminal_patch/providers/whisperai.py's get_audio_delay/encode_audio_stream),
+    server-side, for a raw local media file we're about to FFmpeg-process ourselves.
+
+    Returns (stream_index_to_map, delay_filter) -- either or both may be None, meaning
+    "no adjustment", which produces a byte-for-byte identical ffmpeg command to today's.
+    Never raises: any probing failure degrades silently to (None, None)."""
+    try:
+        probe_result = _probe_streams_and_packets(source_path)
+        if not probe_result:
+            return None, None
+        streams = _extract_audio_streams(probe_result)
+        stream_index = _select_audio_stream_index(streams, target_language)
+        if _should_skip_delay_probe(stream_index, streams):
+            return None, None
+        pts = _first_packet_pts_for_stream(probe_result, stream_index)
+        if pts is None:
+            return stream_index, None
+        delay_ms = int(pts * 1000)
+        return stream_index, _delay_filter_for_ms(delay_ms)
+    except tuple([Exception]):
+        return None, None
 
 
 def _compute_ffmpeg_timeout(duration: float) -> float:

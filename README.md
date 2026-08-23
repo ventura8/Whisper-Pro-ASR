@@ -95,20 +95,29 @@ services:
 
 ## Frontend Quality Gates
 
-Dashboard UI quality is validated with ESLint, Stylelint, Vitest coverage gates, and mandatory Playwright E2E tests.
+Dashboard UI quality is validated with ESLint, Stylelint, Vitest coverage gates, and mandatory Playwright E2E tests. All of these run exclusively inside the Docker test image via the repository's Docker quality wrapper — never directly on the host:
 
 ```bash
-npx playwright install --with-deps chromium
-npm run lint:js
-npm run lint:css
-npm run test:js
-npm run test:e2e
-npm run quality:frontend
+scripts/ci/build-and-test.sh
 ```
+
+```powershell
+./scripts/ci/build-and-test.ps1
+```
+
+These build `Dockerfile.test` and run `tests/run_suite.sh` inside it, which executes each step of the frontend gate list individually (HTML/JS/JS-complexity/CSS/TOML lint, `npm audit --audit-level=low`, Vitest, fixture-mock Playwright, and the real-backend Playwright project) — the same steps as the `npm run quality:frontend` aggregate script, run one by one rather than via that single command.
+
+A second, real-backend Playwright project (`tests/e2e/real/`) runs the same dashboard/analytics/docs UI against the actual FastAPI app (`tests/e2e/real_backend/serve_real_app.py`) instead of the fixture mock server — only ASR inference and language-detection are patched to deterministic fakes, so routing, history/telemetry persistence, settings, and the auth middleware are exercised for real. Like the rest of the Playwright suite, this must run inside the Docker test image via the repository's Docker quality wrapper (`scripts/ci/build-and-test.sh` / `scripts/ci/build-and-test.ps1`, which build `Dockerfile.test` and run `tests/run_suite.sh` inside it) rather than `npm run test:e2e:real` directly on the host.
+
+By default `tests/run_suite.sh` always runs this real-backend project (`npm run test:e2e:real`). Setting `SKIP_REAL_E2E=1` in the environment skips just that step, leaving every other gate (lint, Vitest, fixture-mock Playwright, coverage, etc.) mandatory; it's intended for local iteration only — CI and release workflows never set it, so the real-backend project always runs there.
+
+### CI Parallelization & Caching
+
+`tests/run_suite.sh` is stage-selectable via the `PIPELINE_STAGE` environment variable (`all` by default — used by the local wrappers above — or one of `lint`, `python-tests`, `js-unit-tests`, `e2e-fixture`, `e2e-real`). `.github/workflows/ci.yml` uses this to run each stage as its own parallel job (all depending on a `build-image` job that populates a shared `type=gha` BuildKit cache), instead of one long sequential job — a `publish` job then gates release/production-image steps on every stage job succeeding, same as before. The `lint` stage's ~24 independent tools also run concurrently against each other (not just across jobs) via background shell jobs. A named Docker volume (`whisper-pro-asr-tool-cache`) persists ESLint/Stylelint/ruff/pytest run-time caches across separate local runs; local Docker builds use `docker buildx build --cache-from/--cache-to=type=local` (mirroring CI's `type=gha` cache) so repeat local builds are fast too.
 
 ## Python Quality Gates
 
-Backend quality checks run in CI and local parity scripts with a strict lint stack.
+Backend quality checks run in CI and local parity scripts with a strict lint stack. Like the frontend gates above, these run exclusively inside the Docker test image via `scripts/ci/build-and-test.sh` / `scripts/ci/build-and-test.ps1` (which build `Dockerfile.test` and run `tests/run_suite.sh` inside it) — the commands below are the actual steps `tests/run_suite.sh` executes in-container, shown for reference, not meant to be run directly on the host.
 
 Local parity pipeline runs (`scripts/ci/build-and-test.sh` and `scripts/ci/build-and-test.ps1`) always regenerate and overwrite `assets/coverage.svg` from the latest successful coverage results.
 
@@ -128,6 +137,16 @@ pwsh -NoLogo -NoProfile -Command "$issues = Invoke-ScriptAnalyzer -Path scripts 
 Cyclomatic complexity policy is strict: any Radon result with rank `B` or worse fails CI and local parity build pipelines. Required baseline is 100% rank `A` (complexity <= 5).
 
 Ruff and Flake8 policy are strict at `140` columns, with no ignore directives.
+
+## GitHub Releases
+
+Pushing a semver tag `vMAJOR.MINOR.PATCH` runs `.github/workflows/ci.yml`, which:
+
+1. Verifies `docs/releases/vMAJOR.MINOR.PATCH_github_description.md` exists.
+2. Checks the tag version matches `pyproject.toml`, `package.json`, and `modules/core/config.py`.
+3. Publishes the Docker image, then creates the GitHub Release via `gh release create` with that file as `--notes-file` (title = first `#` heading).
+
+Do not rely on auto-generated GitHub release notes; curate the description before tagging.
 
 Coverage policy for monitored dashboard and analytics JavaScript files (`modules/monitoring/templates/dashboard/**/*.js` and `modules/monitoring/templates/analytics/**/*.js`):
 

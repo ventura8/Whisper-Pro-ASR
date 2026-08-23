@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any, Optional
 from unittest import mock
 
 import pytest
@@ -50,6 +51,20 @@ def _configure_bazarr_mocks(mock_mm_asr, mock_mm_det, mock_ld):
     mock_mm_det.decrement_active_session.return_value = None
     mock_ld.return_value = _BAZARR_DETECTION_RESULT
     mock_mm_asr.run_transcription.return_value = _BAZARR_TRANSCRIPTION_RESULT
+
+
+def mock_asr_manager_for_transcription(
+    mock_mm: mock.MagicMock,
+    result: Optional[dict[str, Any]] = None,
+) -> None:
+    """Wire up a mocked ``modules.api.routes.asr.model_manager`` for a single
+    successful transcription call, without also patching the detect-language
+    manager/voting function (unlike ``_configure_bazarr_mocks``) — for tests
+    that only exercise the transcription routes directly."""
+    mock_mm.is_engine_initialized.return_value = True
+    mock_mm.increment_active_session.return_value = None
+    mock_mm.decrement_active_session.return_value = None
+    mock_mm.run_transcription.return_value = result if result is not None else _BAZARR_TRANSCRIPTION_RESULT
 
 
 @pytest.fixture()

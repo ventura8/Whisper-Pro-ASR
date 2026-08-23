@@ -9,7 +9,7 @@ import time
 from typing import Any
 from unittest import mock
 
-from modules.api.routes import detect
+from modules.api.routes import detect_coalescing
 from modules.core import utils
 from modules.inference import scheduler
 from modules.inference.runtime import model_manager
@@ -158,10 +158,16 @@ def test_edge_request_coalescing_with_preemption(sample_wav: str):
     count_lock = threading.Lock()
     followers_entered = threading.Event()
 
-    orig_leader = getattr(detect, "_run_leader_detection")
-    orig_follower = getattr(detect, "_await_shared_result_with_dashboard_task")
+    orig_leader = getattr(detect_coalescing, "_run_leader_detection")
+    orig_follower = getattr(detect_coalescing, "_await_shared_result_with_dashboard_task")
 
-    async def wrapped_leader(*args: Any, **kwargs: Any) -> Any:
+    async def wrapped_leader(
+        shared_future: concurrent.futures.Future[Any],
+        dedupe_key: str,
+        request_context: dict,
+        *,
+        run_detection_internal: Any,
+    ) -> Any:
         nonlocal leader_count
         is_first_leader = False
         with count_lock:
@@ -176,7 +182,7 @@ def test_edge_request_coalescing_with_preemption(sample_wav: str):
             while follower_count < expected_followers and not followers_entered.is_set() and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
 
-        return await orig_leader(*args, **kwargs)
+        return await orig_leader(shared_future, dedupe_key, request_context, run_detection_internal=run_detection_internal)
 
     async def wrapped_follower(
         shared_future: concurrent.futures.Future[Any],
@@ -193,8 +199,8 @@ def test_edge_request_coalescing_with_preemption(sample_wav: str):
         return await orig_follower(shared_future, dedupe_key, filename, worker_context=worker_context)
 
     with (
-        mock.patch("modules.api.routes.detect._run_leader_detection", side_effect=wrapped_leader),
-        mock.patch("modules.api.routes.detect._await_shared_result_with_dashboard_task", side_effect=wrapped_follower),
+        mock.patch("modules.api.routes.detect_coalescing._run_leader_detection", side_effect=wrapped_leader),
+        mock.patch("modules.api.routes.detect_coalescing._await_shared_result_with_dashboard_task", side_effect=wrapped_follower),
         run_concurrency_test_harness(HW_TOPOLOGY_2_DUAL, confidence=0.99) as client,
     ):
         specs = [{"endpoint": "/detect-language", "local_path": sample_wav} for _ in range(10)]

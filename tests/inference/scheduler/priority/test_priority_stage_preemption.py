@@ -123,6 +123,44 @@ def _exercise_ffmpeg_stage_priority_scenario():
         confirm_thread.join(timeout=2.0)
 
 
+def _thread_was_started(thread: threading.Thread | None) -> bool:
+    """True only after Thread.start(); join() raises RuntimeError otherwise."""
+    return thread is not None and thread.ident is not None
+
+
+def _join_if_started(thread: threading.Thread | None, timeout: float) -> None:
+    """Join a thread only when it was actually started."""
+    if _thread_was_started(thread):
+        thread.join(timeout=timeout)
+
+
+def _join_straggler_if_alive(thread: threading.Thread | None, timeout: float) -> None:
+    """Bounded follow-up join for a still-running started thread."""
+    if _thread_was_started(thread) and thread.is_alive():
+        thread.join(timeout=timeout)
+
+
+def _join_scenario_threads(
+    t_std: threading.Thread | None, t_prio: threading.Thread | None, primary_timeout: float = 8.0, straggler_timeout: float = 30.0
+) -> None:
+    """Join scenario threads, with a bounded follow-up wait for stragglers."""
+    # Callers invoke this from finally even if start() failed — skip unstarted
+    # threads so cleanup does not mask the original failure with RuntimeError.
+    _join_if_started(t_std, primary_timeout)
+    _join_if_started(t_prio, primary_timeout)
+    # Belt-and-suspenders: if either thread is still running past the primary
+    # timeout, keep waiting (bounded, so a true deadlock still eventually surfaces
+    # as a test failure/CI timeout rather than hanging forever) instead of letting
+    # the caller's `with` block exit and restore patched globals while a straggler
+    # thread is still executing against them.
+    _join_straggler_if_alive(t_std, straggler_timeout)
+    _join_straggler_if_alive(t_prio, straggler_timeout)
+    if _thread_was_started(t_std):
+        assert not t_std.is_alive(), "t_std did not terminate before patched globals are restored"
+    if _thread_was_started(t_prio):
+        assert not t_prio.is_alive(), "t_prio did not terminate before patched globals are restored"
+
+
 def _exercise_vocal_separation_stage_scenario():
     """Run the vocal-separation yield scenario and return the observed state."""
     _setup_units(
@@ -163,22 +201,33 @@ def _exercise_vocal_separation_stage_scenario():
         finally:
             model_manager.decrement_active_session()
 
-    with mock.patch("modules.inference.runtime.model_manager._check_preemption", side_effect=fake_check_preemption):
+    # Force a non-accelerated PREPROCESS_DEVICE so _resolve_preprocessor_for_unit
+    # takes its direct unit_id lookup (PREPROCESSOR_POOL.get(unit_id)) instead of
+    # its accelerated-device_type-matching branch, which would otherwise ignore
+    # the "NPU.0"-keyed mock configured above whenever the machine running this
+    # test happens to have real accelerator hardware (making config.PREPROCESS_DEVICE
+    # resolve to e.g. "GPU").
+    with (
+        mock.patch("modules.core.config.PREPROCESS_DEVICE", "CPU"),
+        mock.patch("modules.inference.runtime.model_manager._check_preemption", side_effect=fake_check_preemption),
+    ):
         t_std = threading.Thread(target=run_vocal_stage)
-        t_std.start()
-        assert vocal_started.wait(timeout=2.0)
+        t_prio = None
+        try:
+            t_std.start()
+            assert vocal_started.wait(timeout=2.0)
 
-        t_prio = threading.Thread(target=_run_priority_detectlang, args=(events, "vocal", 0.03))
-        t_prio.start()
-
-        t_std.join(timeout=8.0)
-        t_prio.join(timeout=8.0)
+            t_prio = threading.Thread(target=_run_priority_detectlang, args=(events, "vocal", 0.03))
+            t_prio.start()
+        finally:
+            # Join before patches restore even if vocal_started.wait() or start fails.
+            _join_scenario_threads(t_std, t_prio)
 
     return {
         "events": events,
         "hook_calls": len(hook_calls),
         "standard_alive": t_std.is_alive(),
-        "priority_alive": t_prio.is_alive(),
+        "priority_alive": t_prio.is_alive() if t_prio is not None else False,
     }
 
 

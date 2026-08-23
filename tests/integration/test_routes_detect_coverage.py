@@ -3,12 +3,34 @@
 import asyncio
 import concurrent.futures
 import contextlib
+import io
 import json
 from unittest import mock
 
 from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from modules.api.routes import detect as routes_detect
+from modules.api.routes import detect_coalescing
+
+
+def test_build_request_params_excludes_real_uploaded_file_objects():
+    """Regression: `await request.form()` (Starlette) yields plain
+    starlette.datastructures.UploadFile instances, never the fastapi.UploadFile
+    subclass -- checking `isinstance(v, fastapi.UploadFile)` always failed for real
+    uploads, so the file object's raw repr (e.g. "UploadFile(filename='audio_file', ...")
+    leaked into the request_json audit payload instead of being skipped."""
+    real_upload = StarletteUploadFile(file=io.BytesIO(b"pcm bytes"), filename="audio_file")
+    request = mock.MagicMock()
+    request.query_params = {}
+    form_data = {"audio_file": real_upload, "encode": "false", "video_file": "/tv/show.avi"}
+
+    _build_request_params = routes_detect.__dict__["_build_request_params"]
+    params = _build_request_params(request, form_data)
+
+    assert "audio_file" not in params
+    assert params["encode"] == "false"
+    assert params["video_file"] == "/tv/show.avi"
 
 
 def _sample_worker_context() -> dict:
@@ -23,11 +45,11 @@ def _sample_worker_context() -> dict:
 def test_await_shared_result_handles_wrap_future_exception():
     """Shared-result await should normalize exceptions from asyncio.wrap_future."""
     shared_future = concurrent.futures.Future()
-    _await_shared_result = routes_detect.__dict__["_await_shared_result"]
+    _await_shared_result = detect_coalescing.__dict__["_await_shared_result"]
 
     with (
-        mock.patch("modules.api.routes.detect.asyncio.wrap_future", side_effect=RuntimeError("future-error")),
-        mock.patch("modules.api.routes.detect.routes_utils.handle_error", return_value=("Error", 500)),
+        mock.patch("modules.api.routes.detect_coalescing.asyncio.wrap_future", side_effect=RuntimeError("future-error")),
+        mock.patch("modules.api.routes.detect_coalescing.routes_utils.handle_error", return_value=("Error", 500)),
     ):
         response = asyncio.run(_await_shared_result(shared_future))
 
@@ -42,7 +64,7 @@ def test_await_shared_result_returns_success_payload():
     payload = {"detected_language": "en"}
     shared_future.set_result((payload, None))
 
-    _await_shared_result = routes_detect.__dict__["_await_shared_result"]
+    _await_shared_result = detect_coalescing.__dict__["_await_shared_result"]
     response = asyncio.run(_await_shared_result(shared_future))
     assert response == payload
 
@@ -66,11 +88,11 @@ def test_await_shared_result_with_dashboard_sync_handles_future_exception():
     """Coalesced follower worker path should map leader future exceptions."""
     shared_future = concurrent.futures.Future()
     shared_future.set_exception(RuntimeError("leader-failed"))
-    _sync_wait = routes_detect.__dict__["_await_shared_result_with_dashboard_task_sync"]
+    _sync_wait = detect_coalescing.__dict__["_await_shared_result_with_dashboard_task_sync"]
 
     with (
-        mock.patch("modules.api.routes.detect.model_manager.early_task_registration", return_value=contextlib.nullcontext()),
-        mock.patch("modules.api.routes.detect.routes_utils.handle_error", return_value=("Error", 500)),
+        mock.patch("modules.api.routes.detect_coalescing.model_manager.early_task_registration", return_value=contextlib.nullcontext()),
+        mock.patch("modules.api.routes.detect_coalescing.routes_utils.handle_error", return_value=("Error", 500)),
     ):
         response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3", worker_context=_sample_worker_context())
 
@@ -83,9 +105,9 @@ def test_await_shared_result_with_dashboard_sync_handles_error_tuple():
     """Coalesced follower worker path should return err tuple payloads."""
     shared_future = concurrent.futures.Future()
     shared_future.set_result((None, ("boom", 500)))
-    _sync_wait = routes_detect.__dict__["_await_shared_result_with_dashboard_task_sync"]
+    _sync_wait = detect_coalescing.__dict__["_await_shared_result_with_dashboard_task_sync"]
 
-    with mock.patch("modules.api.routes.detect.model_manager.early_task_registration", return_value=contextlib.nullcontext()):
+    with mock.patch("modules.api.routes.detect_coalescing.model_manager.early_task_registration", return_value=contextlib.nullcontext()):
         response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3", worker_context=_sample_worker_context())
 
     assert response.status_code == 500
@@ -97,11 +119,11 @@ def test_await_shared_result_with_dashboard_sync_marks_failed_for_json_error():
     """Coalesced follower worker path should record failure metadata for JSON error responses."""
     shared_future = concurrent.futures.Future()
     shared_future.set_result((JSONResponse(content={"error": "bad"}, status_code=500), None))
-    _sync_wait = routes_detect.__dict__["_await_shared_result_with_dashboard_task_sync"]
+    _sync_wait = detect_coalescing.__dict__["_await_shared_result_with_dashboard_task_sync"]
 
     with (
-        mock.patch("modules.api.routes.detect.model_manager.early_task_registration", return_value=contextlib.nullcontext()),
-        mock.patch("modules.api.routes.detect.model_manager.record_task_failure") as mock_record,
+        mock.patch("modules.api.routes.detect_coalescing.model_manager.early_task_registration", return_value=contextlib.nullcontext()),
+        mock.patch("modules.api.routes.detect_coalescing.model_manager.record_task_failure") as mock_record,
     ):
         response = _sync_wait(shared_future, "local_path::/tmp/a.mp3", "a.mp3", worker_context=_sample_worker_context())
 

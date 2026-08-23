@@ -12,13 +12,27 @@ from unittest import mock
 import pytest
 
 from tests.conftest import FlaskCompatibleClient
-from tests.integration.conftest import _BAZARR_TRANSCRIPTION_RESULT
+from tests.integration.conftest import (
+    _BAZARR_TRANSCRIPTION_RESULT,
+    mock_asr_manager_for_transcription,
+)
 
 
 class TestBazarrLocalPathVolumeMapping:
-    """Bazarr zero-copy flow: local_path points to a volume-mapped file readable by the container."""
+    """local_path optimization: a caller-supplied path points to a volume-mapped
+    file readable by the container, avoiding a re-upload.
 
-    def test_asr_local_path_srt(self, bazarr_client: FlaskCompatibleClient, bazarr_wav: str):
+    Note: real Bazarr's own client (subliminal_patch/providers/whisperai.py)
+    never sends local_path — it always uploads pre-encoded audio via multipart.
+    See TestRealBazarrWireFormat for tests matching Bazarr's actual wire format;
+    this class covers the local_path optimization as a distinct, intentionally
+    supported feature."""
+
+    def test_asr_local_path_srt(
+        self,
+        bazarr_client: FlaskCompatibleClient,
+        bazarr_wav: str,
+    ):
         """Full /asr request with local_path producing SRT output."""
         with mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav):
             resp = bazarr_client.post(f"/asr?local_path={bazarr_wav}&output=srt")
@@ -203,18 +217,30 @@ class TestBazarrEdgeCases:
             assert resp.status_code == 400
 
     def test_encode_true_default_ffmpeg_pipeline(self, bazarr_client: FlaskCompatibleClient, bazarr_wav: str):
-        """Bazarr default: encode=true triggers FFmpeg pre-processing."""
+        """local_path optimization, encode=true: triggers FFmpeg pre-processing.
+
+        Note: real Bazarr never sends local_path (see TestRealBazarrWireFormat for its
+        actual multipart-upload wire format) — this covers the local_path optimization
+        this codebase separately supports."""
         with mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav) as mock_convert:
             resp = bazarr_client.post(f"/asr?local_path={bazarr_wav}&encode=true&output=srt")
             assert resp.status_code == 200
             mock_convert.assert_called()
 
-    def test_encode_false_bypasses_ffmpeg_for_raw_pcm_input(self, bazarr_client: FlaskCompatibleClient, bazarr_wav: str):
-        """Bazarr encode=false: raw 16kHz mono PCM bypasses FFmpeg normalization."""
+    def test_encode_false_still_runs_ffmpeg_with_raw_pcm_input_flags(self, bazarr_client: FlaskCompatibleClient, bazarr_wav: str):
+        """local_path optimization, encode=false: FFmpeg normalization is NOT bypassed --
+        faster-whisper's decode_audio() (PyAV's av.open(), no format hint) cannot identify
+        headerless raw PCM on its own, so FFmpeg must still run with the raw-PCM input
+        flags (-f s16le -ar 16000 -ac 1) to produce a container faster-whisper can read.
+
+        Note: real Bazarr never sends local_path — see TestRealBazarrWireFormat for its
+        actual multipart-upload wire format with encode=false."""
         with mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav) as mock_convert:
             resp = bazarr_client.post(f"/asr?local_path={bazarr_wav}&encode=false&output=srt")
             assert resp.status_code == 200
-            mock_convert.assert_not_called()
+            mock_convert.assert_called_once_with(
+                bazarr_wav, input_flags=["-f", "s16le", "-ar", "16000", "-ac", "1"], stream_index=None, delay_filter=None
+            )
             assert b"-->" in resp.data
 
     def test_asr_requires_api_key_when_configured(self, bazarr_secured_client: FlaskCompatibleClient, bazarr_wav: str):
@@ -351,10 +377,7 @@ def _post_asr_with_mocked_non_ascii_result(bazarr_client: FlaskCompatibleClient,
         mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav),
         mock.patch("modules.api.routes.asr.model_manager") as mock_mm,
     ):
-        mock_mm.is_engine_initialized.return_value = True
-        mock_mm.increment_active_session.return_value = None
-        mock_mm.decrement_active_session.return_value = None
-        mock_mm.run_transcription.return_value = mocked_result
+        mock_asr_manager_for_transcription(mock_mm, result=mocked_result)
         return bazarr_client.post(f"/asr?local_path={bazarr_wav}&output={output}")
 
 

@@ -11,9 +11,48 @@
 
 ### Method 1: Docker Hub (Recommended)
 
+Create persistent host directories first, and make them writable by the container's runtime UID/GID up front, so task history, telemetry, and model downloads survive container restarts/updates. The image runs as the `nobody` user (UID/GID `65534:65534`) by default — both the CPU-only and Intel commands below run as `65534:65534` (the Intel one just sets `--user` explicitly to the same identity):
+
 ```bash
-docker run -d --name whisper-pro-asr -p 9000:9000 --device /dev/accel --device /dev/dri --user 65534:65534 --group-add 991 ventura8/whisper-pro-asr
+mkdir -p data model_cache
+sudo chown -R 65534:65534 data model_cache
+sudo chmod -R u+rwX data model_cache
 ```
+
+(`sudo` is required since your own user normally doesn't own files as UID 65534. The explicit `chmod` guarantees write access for that UID even if the directories pre-existed with restrictive permissions -- ownership alone doesn't grant write access if the owner-write bit was already cleared.)
+
+CPU-only (works on any host; the service auto-detects hardware and falls back to CPU when no accelerator device is mapped):
+
+```bash
+docker run -d --name whisper-pro-asr -p 9000:9000 \
+  --tmpfs /tmp/whisper:size=2G --tmpfs /tmp/numba-cache:size=128M \
+  -v "$(pwd)/data:/app/data" -v "$(pwd)/model_cache:/app/model_cache" \
+  ventura8/whisper-pro-asr
+```
+
+If the container still reports permission errors writing to `data`/`model_cache` (e.g. you skipped the setup step above), re-run `sudo chown -R 65534:65534 data model_cache && sudo chmod -R u+rwX data model_cache`. `docker compose` (Method 2 below) automates this via its `init-permissions` service.
+
+Intel iGPU/Arc hosts (GPU-only, no NPU) — only if `/dev/dri` and at least one `/dev/dri/renderD*` render node exist on the host (skip this variant, use the CPU-only command above, on NVIDIA/AMD/CPU-only systems; without a renderD* node the `--group-add` derivation below resolves to an empty string and the command fails):
+
+```bash
+docker run -d --name whisper-pro-asr -p 9000:9000 --device /dev/dri --user 65534:65534 \
+  --group-add "$(stat -c '%g' /dev/dri/renderD* 2>/dev/null | head -n 1)" \
+  --tmpfs /tmp/whisper:size=2G --tmpfs /tmp/numba-cache:size=128M \
+  -v "$(pwd)/data:/app/data" -v "$(pwd)/model_cache:/app/model_cache" \
+  ventura8/whisper-pro-asr
+```
+
+Intel NPU hosts — only if `/dev/dri`, `/dev/accel`, and at least one `/dev/dri/renderD*` render node exist on the host:
+
+```bash
+docker run -d --name whisper-pro-asr -p 9000:9000 --device /dev/accel --device /dev/dri --user 65534:65534 \
+  --group-add "$(stat -c '%g' /dev/dri/renderD* 2>/dev/null | head -n 1)" \
+  --tmpfs /tmp/whisper:size=2G --tmpfs /tmp/numba-cache:size=128M \
+  -v "$(pwd)/data:/app/data" -v "$(pwd)/model_cache:/app/model_cache" \
+  ventura8/whisper-pro-asr
+```
+
+Both commands explicitly set `--user 65534:65534` (the same `nobody` identity the container already runs as by default); the `data`/`model_cache` ownership from the setup step above already covers it.
 
 ### Method 2: Local Build
 
@@ -39,7 +78,7 @@ Optional timezone overrides for `docker-compose.yml` can be set via a local `.en
 TZ=America/New_York
 ```
 
-This controls the container timezone (`TZ`) without editing compose YAML. The default compose runtime keeps a non-root identity example in `docker-compose.yml`; Linux Intel hosts should also use `group_add: ["991"]` when their render/accel nodes require it.
+This controls the container timezone (`TZ`) without editing compose YAML. The default compose runtime keeps a non-root identity example in `docker-compose.yml`; Linux Intel hosts should also set `HOST_INTEL_RENDER_GID` in `.env` (derive via `stat -c '%g' /dev/dri/renderD128`, or `stat -c '%g' /dev/dri/renderD* | head -n 1` if multiple render nodes exist) so `group_add: ["${HOST_INTEL_RENDER_GID:?...}"]` matches their host's actual render group when their render/accel nodes require it — there is no silent numeric default.
 
 Before starting, ensure local bind-mount directories exist:
 
@@ -63,7 +102,7 @@ Set `NVIDIA_VISIBLE_DEVICES` in `.env` if you need to target specific GPUs (for 
 
 **Intel Docker access note**: Intel GPU/NPU inference requires device nodes inside the container. The shipped `docker-compose.yml` now documents separate Linux and Windows/WSL2 Intel snippets:
 
-- Linux Intel hosts: uncomment `group_add: ["991"]` plus `/dev/dri:/dev/dri` and `/dev/accel:/dev/accel`.
+- Linux Intel hosts: uncomment `group_add: ["${HOST_INTEL_RENDER_GID:?...}"]` (set `HOST_INTEL_RENDER_GID` in `.env` via `stat -c '%g' /dev/dri/renderD* | head -n 1`; no silent default) plus `/dev/dri:/dev/dri` and `/dev/accel:/dev/accel`.
 - Windows 11 / WSL2 Intel hosts: uncomment `/dev/dxg:/dev/dxg`, and also `/dev/dri:/dev/dri` and `/dev/accel:/dev/accel` when WSL exposes them.
 
 **Intel telemetry container-access note (Ubuntu 24.04)**: Hardware telemetry tools need additional low-level visibility beyond device-node passthrough.

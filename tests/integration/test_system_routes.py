@@ -4,7 +4,10 @@ import json
 import os
 from unittest import mock
 
+import pytest
+
 from modules.core import config
+from tests.conftest import FlaskCompatibleClient
 
 _ADMIN_CSRF_HEADERS = {"Origin": "http://localhost", "Host": "localhost"}
 
@@ -65,6 +68,8 @@ def test_settings_get(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert "ASR_MODEL" in data
+    assert "TELEMETRY_RETENTION_HOURS" in data
+    assert "LOG_RETENTION_DAYS" in data
 
 
 def test_settings_update(client):
@@ -347,3 +352,100 @@ def test_admin_request_without_origin_or_referer_rejected(client):
         assert res.status_code == 403
         data = json.loads(res.data)
         assert "Origin or Referer header required" in data["error"]
+
+
+def test_update_settings_accepts_retention_values_above_ui_slider_cap(client: FlaskCompatibleClient):
+    """Backend allows retention values at the dashboard UI slider max (720h/90d)."""
+    with (
+        mock.patch("modules.core.config.update_env") as mock_update,
+        mock.patch("modules.inference.runtime.model_manager.load_model"),
+    ):
+        payload = {"telemetry_retention_hours": 720, "log_retention_days": 90}
+        response = client.post("/system/settings", data=json.dumps(payload), content_type="application/json", headers=_admin_headers())
+        assert response.status_code == 200
+        updated_values = {call.args[0]: call.args[1] for call in mock_update.call_args_list}
+        assert updated_values == {"TELEMETRY_RETENTION_HOURS": 720, "LOG_RETENTION_DAYS": 90}
+
+
+def test_update_settings_rejects_retention_one_above_backend_max(client: FlaskCompatibleClient):
+    """Values just past the backend's allowed range (720h/90d) must still be rejected."""
+    response = client.post(
+        "/system/settings",
+        data=json.dumps({"telemetry_retention_hours": 721}),
+        content_type="application/json",
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 400
+
+    response_log = client.post(
+        "/system/settings",
+        data=json.dumps({"log_retention_days": 91}),
+        content_type="application/json",
+        headers=_admin_headers(),
+    )
+    assert response_log.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("telemetry_retention_hours", 0),
+        ("telemetry_retention_hours", -1),
+        ("log_retention_days", 0),
+        ("log_retention_days", -1),
+    ],
+)
+def test_update_settings_rejects_zero_and_negative_retention(client: FlaskCompatibleClient, field: str, value: int):
+    """Retention values below the minimum of 1 must be rejected, for both fields."""
+    response = client.post(
+        "/system/settings",
+        data=json.dumps({field: value}),
+        content_type="application/json",
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 400
+
+
+def test_update_settings_rejects_boolean_retention(client: FlaskCompatibleClient):
+    """Booleans must not be silently coerced into valid ints for retention fields."""
+    response = client.post(
+        "/system/settings",
+        data=json.dumps({"telemetry_retention_hours": True}),
+        content_type="application/json",
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 400
+
+    response_log = client.post(
+        "/system/settings",
+        data=json.dumps({"log_retention_days": True}),
+        content_type="application/json",
+        headers=_admin_headers(),
+    )
+    assert response_log.status_code == 400
+
+
+def test_update_settings_rejects_non_dict_json_body(client: FlaskCompatibleClient):
+    """A JSON array/scalar body must be rejected as malformed rather than crash."""
+    response = client.post(
+        "/system/settings",
+        data=json.dumps([1, 2, 3]),
+        content_type="application/json",
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "Malformed JSON" in data["error"]
+
+
+def test_update_settings_rejects_malformed_json_body(client: FlaskCompatibleClient):
+    """Invalid JSON syntax must be rejected with 400, not a 500."""
+    response = client.post(
+        "/system/settings",
+        data="{not valid json",
+        content_type="application/json",
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "Malformed JSON" in data["error"]

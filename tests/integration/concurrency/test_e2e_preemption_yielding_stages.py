@@ -58,6 +58,11 @@ def _execute_uvr_chunk_loop(events: list[str], uvr_started: threading.Event, yie
     events.append("uvr_done")
 
 
+def _thread_was_started(thread: threading.Thread | None) -> bool:
+    """True only after Thread.start(); join() raises RuntimeError otherwise."""
+    return thread is not None and thread.ident is not None
+
+
 def _assert_event_before(events: list[str], earlier: str, later: str) -> None:
     assert earlier in events
     assert later in events
@@ -67,6 +72,12 @@ def _assert_event_before(events: list[str], earlier: str, later: str) -> None:
 def _assert_stage_order(events: list[str], first: str, middle: str, last: str) -> None:
     _assert_event_before(events, first, middle)
     _assert_event_before(events, middle, last)
+
+
+def _join_and_assert_dead(thread: threading.Thread | None, timeout: float, label: str) -> None:
+    if _thread_was_started(thread):
+        thread.join(timeout=timeout)
+        assert not thread.is_alive(), f"{label} did not terminate before cleanup"
 
 
 def _assert_uvr_stage_events(t_asr: threading.Thread, t_prio: threading.Thread, events: list[str]) -> None:
@@ -87,6 +98,16 @@ def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str):
         _execute_uvr_chunk_loop(events, uvr_started, yield_cb)
         return "clean_isolated.wav"
 
+    # Force a non-accelerated PREPROCESS_DEVICE so _resolve_preprocessor_for_unit
+    # takes its direct unit_id lookup (PREPROCESSOR_POOL.get(unit_id)) instead of
+    # its accelerated-device_type-matching branch, which would otherwise ignore
+    # the "NPU.0"-keyed mock configured above whenever the machine running this
+    # test happens to have real accelerator hardware (making config.PREPROCESS_DEVICE
+    # resolve to e.g. "GPU").
+    device_patcher = mock.patch("modules.core.config.PREPROCESS_DEVICE", "CPU")
+    device_patcher.start()
+    t_asr: threading.Thread | None = None
+    t_prio: threading.Thread | None = None
     try:
         model_manager.PREPROCESSOR_POOL["NPU.0"].preprocess_audio = mock_preprocess
 
@@ -102,7 +123,16 @@ def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str):
 
         _assert_uvr_stage_events(t_asr, t_prio, events)
     finally:
-        patcher.stop()
+        # Unconditional (not just the try-path joins above, which are skipped
+        # entirely if _assert_uvr_stage_events raises): both threads must actually
+        # terminate before the patched globals are restored, otherwise a still-running
+        # straggler thread would keep executing against unpatched config/hooks.
+        try:
+            _join_and_assert_dead(t_asr, 30.0, "t_asr")
+            _join_and_assert_dead(t_prio, 30.0, "t_prio")
+        finally:
+            device_patcher.stop()
+            patcher.stop()
 
 
 def _mock_segment_generator(events: list[str], infer_started: threading.Event) -> Generator[mock.MagicMock, None, None]:

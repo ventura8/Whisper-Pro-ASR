@@ -31,6 +31,8 @@ no direct JS equivalent) and apply to `tests/**/*.py`, not to `tests/js/*.test.j
 - **Zip length validation** (Python-only): Use `zip(..., strict=True)` (Python 3.10+) when iterating paired actual/expected lists. Silently truncated mismatches hide bugs.
 - **Numeric type assertion** (Python-only): When asserting `isinstance(value, (int, float))`, add an explicit `and not isinstance(value, bool)` guard. `bool` is a subclass of `int` in Python and must be explicitly excluded when numeric intent is required.
 - **Shallow copy snapshots** (Python-only): When capturing a dict from a shared registry (e.g. `task_registry`) for later comparison, return `dict(live_entry)` while still holding the registry lock. A live reference can be mutated after the lock releases, causing false assertions.
+- **Config `importlib.reload` restore** (Python-only): Any test that mutates `os.environ` and calls `importlib.reload(modules.core.config)` MUST restore the original environment and reload again afterward. Leaving reloaded module globals (e.g. `SUBTITLE_PROMO_ENABLED=True`) pollutes later tests on the same pytest-xdist worker. Use the shared `restore_config_after_reload` fixture from `tests/config_reload_helpers.py` (via `@pytest.mark.usefixtures("restore_config_after_reload")` or `pytestmark`). Apply this on every module that reloads config (including `test_config.py`, AMD/SSD/logging/robustness suites), and keep formatter assertions that care about cue indices patched with `SUBTITLE_PROMO_ENABLED=False`.
+- **Preemption pause confirmation** (Python-only): Tests that assert `pause_confirmed` after `check_preemption()` MUST leave at least one `is_priority=True` task in `task_registry`. With no priority work, the runtime self-heals the pause and clears `pause_confirmed` before the main thread can observe it.
 
 ## Priority/Concurrency Test Guidance
 
@@ -52,6 +54,7 @@ For any change affecting scheduler status updates, preemption, or task ordering:
 Add Playwright E2E tests that exercise real user interactions (tabs + filter buttons) against the dashboard while the system is in an active concurrency burst scenario.
 
 Minimum checks that we consider "full interaction" for this UI layer:
+
 - task filter buttons correctly narrow visible task cards (active vs queued vs paused-for-priority vs v1 categories)
 - switching to the history tab shows the correct empty-state (no placeholder/sentinel strings)
 - placeholder-like tokens (`unknown`, `null`, `undefined`, `none`, `(0/0)`) never appear in DOM text during concurrency
@@ -65,26 +68,37 @@ def test_task_status_transitions_during_preemption():
     """Verify queued+paused-stage distinguishes from true hardware-wait during preemption."""
     # Start ASR task on hardware
     asr_task_id = enqueue_asr_task()
-    wait_for_status(asr_task_id, 'active', timeout=5)
-    
+    wait_for_status(asr_task_id, "active", timeout=5)
+
     # Trigger priority detection → should preempt ASR
     priority_task_id = enqueue_priority_task()
-    wait_for_status(priority_task_id, 'queued', timeout=3)
-    
+
+    # Wait on the ASR task itself reaching queued+paused, not on the priority
+    # task reaching queued -- the latter can observably happen a moment before
+    # the scheduler has actually flipped ASR's stage to the paused marker,
+    # making an assertion right after it a race. Poll the actual condition
+    # this test cares about instead of a proxy for it.
+    def _asr_is_queued_and_paused():
+        status_data = get_status()
+        asr_in_queue = next((t for t in status_data["tasks"] if t["task_id"] == asr_task_id), None)
+        return asr_in_queue is not None and asr_in_queue["status"] == "queued" and "Paused for Priority Task" in asr_in_queue["stage"]
+
+    wait_until(_asr_is_queued_and_paused, timeout=3)
+
     # Verify ASR now shows paused stage (not stuck queued)
     status_data = get_status()
-    asr_in_queue = next((t for t in status_data['tasks'] if t['task_id'] == asr_task_id), None)
+    asr_in_queue = next((t for t in status_data["tasks"] if t["task_id"] == asr_task_id), None)
     assert asr_in_queue is not None, "ASR task missing from queue"
-    assert asr_in_queue['status'] == 'queued', "ASR should be queued during preemption"
-    assert 'Paused for Priority Task' in asr_in_queue['stage'], f"Stage should contain paused marker, got: {asr_in_queue['stage']}"
-    
+    assert asr_in_queue["status"] == "queued", "ASR should be queued during preemption"
+    assert "Paused for Priority Task" in asr_in_queue["stage"], f"Stage should contain paused marker, got: {asr_in_queue['stage']}"
+
     # Wait for priority completion
-    wait_for_status(priority_task_id, 'completed', timeout=10)
-    
+    wait_for_status(priority_task_id, "completed", timeout=10)
+
     # Verify ASR resumes to active
-    wait_for_status(asr_task_id, 'active', timeout=5)
+    wait_for_status(asr_task_id, "active", timeout=5)
     asr_resumed = get_task_status(asr_task_id)
-    assert asr_resumed['status'] == 'active', "ASR should resume to active after priority completion"
+    assert asr_resumed["status"] == "active", "ASR should resume to active after priority completion"
 ```
 
 ### 2. Ordering Determinism Test

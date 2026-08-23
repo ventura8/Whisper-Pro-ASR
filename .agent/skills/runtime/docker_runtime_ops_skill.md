@@ -19,7 +19,7 @@ Ensure stable containerized operation across CPU, Intel, NVIDIA, and AMD hosts.
    - `state`/`data` for history, telemetry, logs
 3. Confirm temp-path configuration and fallback thresholds.
 4. Confirm environment flags align with desired engine/device behavior.
-5. Confirm compose build cache configuration remains enabled (`build.cache_from/cache_to` using `.buildx-cache`) and `.dockerignore` excludes volatile artifacts.
+5. Confirm compose build cache configuration remains enabled (`build.cache_from/cache_to` using `.buildx-cache`) and `.dockerignore` excludes volatile artifacts **including** `.docker-build-cache` / `.buildx-cache` (local BuildKit cache dirs under the project root must never enter the build context).
 6. Confirm build-time integrity checks:
    - ROCm apt repository key is checksum-validated before dearmor/install.
    - UVR model + Silero VAD ONNX downloads are SHA-256 verified before replacing target files.

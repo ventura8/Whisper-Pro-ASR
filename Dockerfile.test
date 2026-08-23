@@ -1,10 +1,16 @@
 # Stage 1: Base - Install system dependencies
-FROM hadolint/hadolint:v2.12.0-debian AS hadolint-bin
-FROM koalaman/shellcheck:v0.10.0 AS shellcheck-bin
-FROM rhysd/actionlint:1.7.7 AS actionlint-bin
-FROM mvdan/shfmt:v3.10.0 AS shfmt-bin
-FROM zricethezav/gitleaks:v8.23.1 AS gitleaks-bin
-FROM mcr.microsoft.com/powershell:7.5-ubuntu-22.04 AS powershell-bin
+# hadolint/hadolint:v2.15.1-debian
+FROM hadolint/hadolint@sha256:9a3944b7fddcb947d1ffd90829ac1a6e5c30479223358f249d8b96c7d0019e27 AS hadolint-bin
+# koalaman/shellcheck:v0.11.0
+FROM koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d AS shellcheck-bin
+# rhysd/actionlint:1.7.12
+FROM rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 AS actionlint-bin
+# mvdan/shfmt:v3.13.1
+FROM mvdan/shfmt@sha256:f22f3936140be1ba02d493b5d2b91d0e8b4af93fd903e7f46c477822bca4a3be AS shfmt-bin
+# zricethezav/gitleaks:v8.30.1
+FROM zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f AS gitleaks-bin
+# mcr.microsoft.com/powershell:7.5-ubuntu-24.04
+FROM mcr.microsoft.com/powershell@sha256:042240d57ec9e47e511033b92625a8d95875ee5860af3015992c248b58a8be81 AS powershell-bin
 
 FROM python:3.13-slim AS base
 
@@ -13,8 +19,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV PYTHONUNBUFFERED=1
 
 ARG POETRY_VERSION=2.4.1
+# Keep in sync with PIP_VERSION in scripts/ci/dependencies.env
 ARG PIP_VERSION=26.2.1
-ARG SETUPTOOLS_VERSION=83.0.0
+ARG SETUPTOOLS_VERSION=84.0.0
 ARG NPM_VERSION=12.0.2
 ARG FFMPEG_VERSION=8.1.2
 ARG FFMPEG_TARBALL=ffmpeg-${FFMPEG_VERSION}.tar.xz
@@ -22,13 +29,16 @@ ARG FFMPEG_URL=https://ffmpeg.org/releases/${FFMPEG_TARBALL}
 ARG FFMPEG_SIG_URL=${FFMPEG_URL}.asc
 ARG PSSCRIPTANALYZER_VERSION=1.25.0
 
+ENV CCACHE_DIR=/root/.ccache
+ENV CCACHE_MAXSIZE=2G
+
 # Install Node.js from the official node image and upgrade npm
 COPY --from=node:24-slim /usr/local/ /usr/local/
 RUN npm install -g "npm@${NPM_VERSION}"
 
 # Install system dependencies (cached)
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=whisper-pro-asr-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=whisper-pro-asr-apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     wget=* \
     gnupg=* \
@@ -38,6 +48,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     nasm=* \
     pkg-config=* \
     git=* \
+    ccache=* \
     && wget --progress=dot:giga -O /tmp/ffmpeg.tar.xz "${FFMPEG_URL}" \
     && wget --progress=dot:giga -O /tmp/ffmpeg.tar.xz.asc "${FFMPEG_SIG_URL}" \
     && wget --progress=dot:giga -O /tmp/ffmpeg-devel.asc https://ffmpeg.org/ffmpeg-devel.asc \
@@ -47,7 +58,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /tmp/ffmpeg-${FFMPEG_VERSION}
 
-RUN ./configure --prefix=/usr/local --disable-debug --disable-doc --disable-static --enable-shared --enable-pic \
+RUN --mount=type=cache,id=whisper-pro-asr-ccache,target=/root/.ccache,sharing=locked \
+    CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local --disable-debug --disable-doc --disable-static --enable-shared --enable-pic --cc="ccache gcc" --cxx="ccache g++" \
     && make -j"$(nproc)" \
     && make install \
     && ldconfig \
@@ -75,7 +87,7 @@ RUN ln -sf /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh
 
 # Keep pip resolver behavior aligned with production image and install Poetry + dependencies
 RUN --mount=type=cache,id=whisper-pro-asr-poetry,target=/root/.cache/pypoetry,sharing=locked \
-    python -m pip install --no-cache-dir "pip==${PIP_VERSION}" "poetry==${POETRY_VERSION}" "setuptools==${SETUPTOOLS_VERSION}" && \
+    python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" "poetry==${POETRY_VERSION}" "setuptools==${SETUPTOOLS_VERSION}" && \
     poetry config virtualenvs.create false && \
     poetry config installer.max-workers 4 && \
     poetry config cache-dir /root/.cache/pypoetry && \
@@ -87,6 +99,12 @@ FROM base AS test
 ENV POETRY_HTTP_TIMEOUT=1800
 ENV PIP_DEFAULT_TIMEOUT=1800
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Marker required by tests/run_suite.sh for real-backend E2E (Docker test image only).
+ENV WHISPER_PRO_ASR_TEST_IMAGE=1
+# Default location for tools (e.g. pylint) that honor the XDG cache spec; the
+# actual persistence across separate `docker run` invocations comes from the
+# whisper-pro-asr-tool-cache volume mounted at this path by the wrapper scripts/CI.
+ENV XDG_CACHE_HOME=/var/cache/whisper-pro-asr-tools/xdg
 
 # Copy frontend dependency manifests first so npm install is source-change resistant.
 COPY package.json package-lock.json ./
@@ -102,8 +120,11 @@ RUN --mount=type=cache,id=whisper-pro-asr-npm,target=/root/.npm,sharing=locked \
 # Copy the rest of the source code after dependency layers.
 COPY . .
 
-# Ensure the test script has Unix line endings and is executable
-RUN sed -i 's/\r$//' tests/run_suite.sh && chmod +x tests/run_suite.sh
+# Drop any leaked bytecode caches so inspect/co_filename cannot retain host paths.
+RUN find /app -type d -name '__pycache__' -prune -exec rm -rf {} + \
+    && find /app -type f -name '*.pyc' -delete \
+    && sed -i 's/\r$//' tests/run_suite.sh \
+    && chmod +x tests/run_suite.sh
 
 # Default command
 CMD ["/bin/bash", "tests/run_suite.sh"]

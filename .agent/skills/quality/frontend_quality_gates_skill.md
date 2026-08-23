@@ -19,13 +19,27 @@ Load-order contract note:
 
 ## Required Gates
 
+All gates below run exclusively inside the Docker test image. Use
+`scripts/ci/build-and-test.sh` / `scripts/ci/build-and-test.ps1` (they build
+`Dockerfile.test` and run `tests/run_suite.sh` inside the container). Do not run
+these npm commands on the host.
+
+Inside `tests/run_suite.sh`, the gates are:
+
 1. HTML lint: `npm run lint:html`
 2. JavaScript lint: `npm run lint:js`
-3. CSS lint: `npm run lint:css`
-4. JS tests + coverage: `npm run test:js`
-5. Playwright E2E: `npm run test:e2e`
-6. Frontend security audit: `npm audit --audit-level=low`
-7. Aggregate gate: `npm run quality:frontend`
+3. JavaScript complexity lint: `npm run lint:js:complexity`
+4. CSS lint: `npm run lint:css`
+5. TOML lint: `npm run lint:toml`
+6. JS tests + coverage: `npm run test:js`
+7. Playwright E2E (fixture-mock backend): `npm run test:e2e`
+8. Playwright E2E (real backend — `tests/e2e/real/`, runs against the actual FastAPI app via `tests/e2e/real_backend/serve_real_app.py` with only ASR inference/language-detection patched): `npm run test:e2e:real`
+9. Frontend security audit: `npm audit --audit-level=low`
+10. Aggregate gate: `npm run quality:frontend`
+
+Note: `npm run quality:frontend` runs both gate 7 (fixture-mock) and gate 8 (real backend). `tests/run_suite.sh` runs each gate individually rather than invoking the aggregate script directly, but covers the same steps; gate 8 requires `WHISPER_PRO_ASR_TEST_IMAGE=1` (from `Dockerfile.test` target `test`), with `SKIP_REAL_E2E=1` as the opt-out.
+
+In CI, gates 2-5 run in the `lint-and-security` job (`PIPELINE_STAGE=lint`) which must complete before any test job starts. Gate 6 runs in `js-unit-tests`, gate 7 in `e2e-fixture`, and gate 8 in `e2e-real` -- each `needs: [build-image, lint-and-security]`. Locally, `build-and-test.sh`/`.ps1` still run every gate in one invocation (`PIPELINE_STAGE` unset/`all`) in lint-then-tests order: lint → js-unit-tests → python-tests → e2e-fixture → e2e-real. ESLint (gates 2-3) and Stylelint (gate 4) run with `--cache --cache-location` pointed at the `whisper-pro-asr-tool-cache` volume so repeat local runs re-lint only changed files.
 
 ## Tooling Policy
 

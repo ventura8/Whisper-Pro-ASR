@@ -1,4 +1,5 @@
 [run]
+parallel = true
 source =
     modules
     whisper_pro_asr.py
@@ -10,7 +11,12 @@ omit =
 
 
 [report]
-fail_under = 90
+# Deliberately no fail_under here: pytest-cov reads this value independently of
+# pytest.ini's own --cov-fail-under and would otherwise fail each partial
+# invocation once the pytest run is split into bulk (-n auto) + serial
+# (timing-sensitive concurrency tests) runs sharing one combined coverage.xml.
+# The 90% gate is enforced exactly once, explicitly, via `coverage report
+# --fail-under=90` in tests/run_suite.sh after `coverage combine`.
 show_missing = true
 exclude_lines =
     pragma: no cover

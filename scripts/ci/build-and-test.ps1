@@ -146,6 +146,35 @@ function Invoke-Docker {
     return $exitCode
 }
 
+# The default buildx driver ("docker") does not support --cache-to=type=local;
+# only the docker-container driver does. Create/reuse a dedicated builder so
+# local iterative builds get the same fast-rebuild cache-export property CI
+# already gets via cache-to=type=gha.
+$buildxBuilderName = "whisper-pro-asr-builder"
+function Initialize-BuildxBuilder {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    if ($dockerExe -eq "sudo") {
+        & sudo docker buildx inspect $buildxBuilderName *> $null
+    } else {
+        & docker buildx inspect $buildxBuilderName *> $null
+    }
+    $inspectExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($inspectExitCode -eq 0) {
+        Invoke-Docker -Arguments @("buildx", "use", $buildxBuilderName)
+    } else {
+        Invoke-Docker -Arguments @("buildx", "create", "--name", $buildxBuilderName, "--driver", "docker-container", "--use")
+    }
+}
+Initialize-BuildxBuilder
+
+# Named volume persisting tool run-time caches (ruff/pylint/eslint/stylelint/
+# pytest) across separate `docker run` invocations on this machine -- build-time
+# cache mounts alone never reach the running container.
+$toolCacheVolume = "whisper-pro-asr-tool-cache"
+
 function Invoke-PoetryLockSync {
     Write-Output "`n--- Verifying Poetry Lock File ---"
 
@@ -169,7 +198,7 @@ function Invoke-PoetryLockSync {
         $PYTHON_IMAGE,
         "/bin/bash",
         "-lc",
-        'export HOME=/tmp && export PATH="/tmp/.local/bin:$PATH" && export PIP_ROOT_USER_ACTION=ignore && export PIP_NO_WARN_SCRIPT_LOCATION=1 && python -m pip install --quiet --user poetry==2.4.1 && python -m poetry config virtualenvs.create false && if [ ! -f poetry.lock ] || ! python -m poetry check --lock >/dev/null 2>&1; then python -m poetry lock --no-interaction; fi'
+        "export HOME=/tmp && export PATH=`"/tmp/.local/bin:`$PATH`" && export PIP_ROOT_USER_ACTION=ignore && export PIP_NO_WARN_SCRIPT_LOCATION=1 && python -m pip install --quiet --user --upgrade `"pip==$PIP_VERSION`" && python -m pip install --quiet --user `"poetry==$POETRY_VERSION`" && python -m poetry config virtualenvs.create false && if [ ! -f poetry.lock ] || ! python -m poetry check --lock >/dev/null 2>&1; then python -m poetry lock --no-interaction; fi"
     )
 
     Invoke-Docker -- @arguments
@@ -177,9 +206,36 @@ function Invoke-PoetryLockSync {
 
 Invoke-PoetryLockSync
 Write-Output "`n--- Building Test Image ---"
-# Build the final test image.
-$testBuildArgs = @("build", "--progress=plain", "-f", "Dockerfile.test", "--target", "test", "-t", "whisper-pro-asr-test", ".")
+# Build the final test image, exporting/importing a local BuildKit cache so
+# repeat builds on this machine are fast even when a layer must re-execute.
+# Export to a fresh dest, then atomically replace — writing cache-to the same
+# directory used for cache-from can fail with mkdir '' while finalizing ingest.
+$dockerBuildCacheDir = Join-Path $root ".docker-build-cache"
+$dockerBuildCacheDirNew = Join-Path $root ".docker-build-cache.new"
+$dockerBuildCacheDirOld = Join-Path $root ".docker-build-cache.old"
+if (Test-Path $dockerBuildCacheDirNew) {
+    Remove-Item -Recurse -Force $dockerBuildCacheDirNew
+}
+New-Item -ItemType Directory -Force -Path $dockerBuildCacheDir | Out-Null
+New-Item -ItemType Directory -Force -Path $dockerBuildCacheDirNew | Out-Null
+$testBuildArgs = @(
+    "buildx", "build", "--progress=plain",
+    "-f", "Dockerfile.test", "--target", "test", "-t", "whisper-pro-asr-test",
+    "--cache-from", "type=local,src=$dockerBuildCacheDir",
+    "--cache-to", "type=local,dest=$dockerBuildCacheDirNew,mode=max",
+    "--load", "."
+)
 Invoke-Docker -Arguments $testBuildArgs
+if (Test-Path $dockerBuildCacheDirOld) {
+    Remove-Item -Recurse -Force $dockerBuildCacheDirOld
+}
+if (Test-Path $dockerBuildCacheDir) {
+    Rename-Item -Path $dockerBuildCacheDir -NewName ".docker-build-cache.old"
+}
+Rename-Item -Path $dockerBuildCacheDirNew -NewName ".docker-build-cache"
+if (Test-Path $dockerBuildCacheDirOld) {
+    Remove-Item -Recurse -Force $dockerBuildCacheDirOld
+}
 
 Write-Output "`n--- Execute Test Suite ---"
 New-Item -ItemType Directory -Force -Path assets | Out-Null
@@ -207,6 +263,7 @@ $runArgs = @(
     "-e", "CI=true",
     "-v", "${root}/assets:/app/assets",
     "-v", "${reportsDir}:/reports",
+    "-v", "${toolCacheVolume}:/var/cache/whisper-pro-asr-tools",
     "whisper-pro-asr-test",
     "/bin/bash",
     "-lc",
@@ -220,6 +277,7 @@ $badgeArgs = @(
     "--rm",
     "-v", "${root}/assets:/app/assets",
     "-v", "${reportsDir}:/reports",
+    "-v", "${toolCacheVolume}:/var/cache/whisper-pro-asr-tools",
     "whisper-pro-asr-test",
     "/bin/bash",
     "-lc",

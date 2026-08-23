@@ -415,17 +415,25 @@ def test_request_pause_for_target_handles_fallback_and_pausing_target():
 
 
 def test_wait_for_pause_confirmation_returns_when_no_active_standard(monkeypatch):
-    """Pause confirmation should not block indefinitely once no active standard task remains."""
+    """Pause confirmation should not block indefinitely once no active standard task remains.
+
+    wait_for_pause_confirmation polls via state.cond.wait(timeout=0.1) (see
+    modules/inference/scheduler/state_helpers.py), not time.sleep -- the hook that
+    flips the task to inactive must fire from that wait call, not a time.sleep patch,
+    or the loop's exit condition never re-evaluates true and this hangs forever."""
     scheduler.STATE.task_registry["std"] = {
         "task_id": "std",
         "status": "active",
         "is_priority": False,
     }
 
-    def _sleep_once(*_args, **_kwargs):
-        scheduler.STATE.task_registry["std"]["status"] = "queued"
+    original_wait = scheduler.STATE.cond.wait
 
-    monkeypatch.setattr(scheduler.time, "sleep", _sleep_once)
+    def _wait_once(*args, **kwargs):
+        scheduler.STATE.task_registry["std"]["status"] = "queued"
+        return original_wait(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler.STATE.cond, "wait", _wait_once)
 
     assert scheduler._wait_for_pause_confirmation("CPU", expected_generation=99) is True
 

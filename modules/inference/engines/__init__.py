@@ -1,17 +1,7 @@
-"""Inference engine implementations and factory exports."""
+"""Inference engine implementations.
 
-from modules.inference.engines.base import BaseASREngine, InferenceInfo, SegmentWrapper
-from modules.inference.engines.engine_factory import create_engine
-from modules.inference.engines.faster_whisper_engine import FasterWhisperEngine
-from modules.inference.engines.openai_whisper_engine import OpenaiWhisperEngine
-from modules.inference.engines.whisperx_engine import WhisperXEngine
-
-__all__ = [
-    "BaseASREngine",
-    "InferenceInfo",
-    "SegmentWrapper",
-    "FasterWhisperEngine",
-    "OpenaiWhisperEngine",
-    "WhisperXEngine",
-    "create_engine",
-]
+Intentionally empty of eager imports so a ``multiprocessing`` ``spawn`` child
+can import ``whisperx_worker`` without loading WhisperXEngine / the parent
+client before the isolated lib path is activated. Import submodules directly
+(e.g. ``from modules.inference.engines.engine_factory import create_engine``).
+"""

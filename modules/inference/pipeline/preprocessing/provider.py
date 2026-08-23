@@ -1,7 +1,6 @@
 """Provider and OpenVINO resolution helpers for preprocessing."""
 
-import os
-
+from modules.core import config
 from modules.inference.pipeline import openvino_provider_dispatch, openvino_resolver
 
 ProviderConfig = tuple[list[str], list[dict[str, object]]]
@@ -62,30 +61,34 @@ def _resolve_openvino_device_type_with_available_devices(
 
 def openvino_provider_config_for_preprocessing(
     device_id: str,
-    ov_cache_dir: str,
+    _ov_cache_dir: str,
     available_devices: list[str],
     _preprocess_threads: int,
 ) -> ProviderConfig:
-    """Return OpenVINO provider config with runtime-resolved device type."""
+    """Return OpenVINO provider config with runtime-resolved device type.
+
+    ``_ov_cache_dir`` is accepted (not just for interface uniformity with sibling
+    provider-config functions sharing this call shape) but deliberately unused:
+    this function omits ``cache_dir`` for the accelerator families (GPU/NPU):
+    a second same-process OpenVINO GPU session that reloads a previously
+    compiled on-disk kernel cache has been observed to SIGSEGV on Intel iGPU
+    hardware (reproduced identically on openvino 2026.2.1 and 2026.3.0, and
+    regardless of whether a CUDA context is also active in the process — a
+    driver-level issue, not something a Python-side fix can patch around).
+    Skipping the on-disk cache means every session recompiles its kernels
+    in-memory instead of risking a reload of a stale/incompatible cache
+    blob, trading a few seconds of extra latency per session for not
+    crashing the whole process.
+    """
     resolved = resolve_openvino_device_type_for_preprocessing(device_id, available_devices)
-    cache_dir = _openvino_uvr_cache_dir(ov_cache_dir, resolved)
     provider_options = openvino_resolver.normalize_openvino_provider_options(
         {
             "device_type": resolved,
-            "cache_dir": cache_dir,
             "num_streams": "1",
         }
     )
 
     return ["OpenVINOExecutionProvider", "CPUExecutionProvider"], [provider_options]
-
-
-def _openvino_uvr_cache_dir(base_cache_dir: str, resolved_device: str) -> str:
-    """Return a family-scoped OpenVINO cache directory for UVR preprocessing."""
-    family = openvino_resolver.openvino_device_family(resolved_device) or "OPENVINO"
-    scoped = os.path.join(base_cache_dir, "uvr", family.lower())
-    os.makedirs(scoped, exist_ok=True)
-    return scoped
 
 
 def _resolve_auto_amd(target_prep: str, available_providers: list[str]) -> ProviderConfig | None:
@@ -204,13 +207,36 @@ def resolve_provider_config_for_preprocessing(
         return openvino_provider_dispatch.cuda_or_cpu_provider_config(device_id, available_providers)
 
     if normalized_type == "AMD":
-        return openvino_provider_dispatch.amd_provider_config(device_id, available_providers)
+        result = openvino_provider_dispatch.amd_provider_config(device_id, available_providers)
+    else:
+        result = _resolve_non_cuda_amd_preprocessing(
+            normalized_type,
+            device_id,
+            available_providers,
+            available_openvino_devices=available_openvino_devices,
+            ov_cache_dir=ov_cache_dir,
+            preprocess_threads=preprocess_threads,
+        )
 
-    return _resolve_non_cuda_amd_preprocessing(
-        normalized_type,
-        device_id,
-        available_providers,
-        available_openvino_devices=available_openvino_devices,
-        ov_cache_dir=ov_cache_dir,
-        preprocess_threads=preprocess_threads,
-    )
+    return _block_openvino_alongside_cuda(result, device_id, available_providers)
+
+
+def _block_openvino_alongside_cuda(result: ProviderConfig, device_id: str, available_providers: list[str]) -> ProviderConfig:
+    """Redirect to CUDA whenever ASR runs on CUDA and this resolution picked OpenVINO.
+
+    Initializing an OpenVINO GPU/NPU (Level-Zero/OpenCL) context in the same
+    process as an already-active CUDA context has been observed to crash/hang
+    natively on Intel iGPU hardware. This is a last-resort safety net that
+    catches every path that can select OpenVINOExecutionProvider (explicit
+    GPU/NPU targeting, AUTO resolution, per-unit preprocessor pooling in
+    modules/inference/runtime/model_manager.py) regardless of which one
+    triggered it — do not rely on upstream device-selection alone to prevent
+    this combination, it has been proven to reach here anyway. Substituting
+    CUDA (same vendor as ASR) rather than CPU keeps preprocessing GPU-accelerated;
+    cuda_or_cpu_provider_config already falls back to CPU on its own if CUDA
+    isn't actually usable in onnxruntime.
+    """
+    providers, _options = result
+    if config.DEVICE == "CUDA" and "OpenVINOExecutionProvider" in providers:
+        return openvino_provider_dispatch.cuda_or_cpu_provider_config(device_id, available_providers)
+    return result
