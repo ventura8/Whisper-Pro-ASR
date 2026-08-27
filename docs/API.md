@@ -315,6 +315,8 @@ When configured via environment variables, the service supports API key authenti
 - **`API_KEY`**: Secures transcription, language detection, status, and history endpoints.
 - **`ADMIN_API_KEY`**: Secures administrative endpoints (`/system/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`). If `ADMIN_API_KEY` is not explicitly set, it defaults to the value of `API_KEY`.
 
+When neither key is set, those surfaces are reachable without authentication on the process bind address. `docker-compose.yml` therefore publishes `127.0.0.1:9000:9000` by default so history, logs, settings, and `/status` are not reachable on the LAN. Other Compose services still use `whisper-pro-asr:9000` on the Docker network. Publishing `"9000:9000"` (all interfaces) requires `API_KEY`. Startup logs a warning when both keys are unset.
+
 Pass the key using either standard header:
 
 ```bash
@@ -331,7 +333,7 @@ curl -H "Authorization: Bearer <KEY>" http://localhost:9000/status
   - This controls what browsers are allowed to read (i.e. it affects CORS response headers such as `Access-Control-Allow-Origin` via CORSMiddleware).
 - **`CORS_ALLOW_ALL`**: Set to `true` to enable wildcard CORS (`*`). Defaults to `false` for defense-in-depth against cross-origin data exfiltration.
   - Wildcard CORS does **not** disable administrative anti-CSRF protection.
-- **Unauthenticated administrative mutations**: If `ADMIN_API_KEY` is not configured, state-changing admin endpoints require an `Origin` or `Referer` header and validate it against the request host / trusted origins; missing both returns `403`.
+- **Unauthenticated administrative mutations**: If `ADMIN_API_KEY` is not configured, state-changing admin endpoints require an `Origin` or `Referer` header and validate it against the request host / trusted origins; missing both returns `403`. CSRF origin checks are not a substitute for authentication; they only block browser drive-by mutations.
 
 ### Model Allowlist & Validation (`ALLOWED_MODELS`)
 
@@ -347,7 +349,7 @@ To prevent arbitrary model downloads and model supply chain attacks, runtime mod
 ## Bazarr Integration
 
 1. Settings → Providers → Whisper
-2. Endpoint: `http://<IP_OR_HOSTNAME>:9000`
+2. Endpoint: `http://<IP_OR_HOSTNAME>:9000` (same-Compose: `http://whisper-pro-asr:9000`; another host: publish `"9000:9000"` and set `API_KEY`)
 3. Read Timeout: `54000` (for long movies)
 
 When Bazarr sends `encode=false`, the service expects raw 16 kHz mono s16le PCM and still runs FFmpeg normalization, using the raw-PCM input flags instead of format auto-detection.

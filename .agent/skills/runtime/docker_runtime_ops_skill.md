@@ -20,7 +20,8 @@ Ensure stable containerized operation across CPU, Intel, NVIDIA, and AMD hosts.
 3. Confirm temp-path configuration and fallback thresholds.
 4. Confirm environment flags align with desired engine/device behavior.
 5. Confirm compose build cache configuration remains enabled (`build.cache_from/cache_to` using `.buildx-cache`) and `.dockerignore` excludes volatile artifacts **including** `.docker-build-cache` / `.buildx-cache` (local BuildKit cache dirs under the project root must never enter the build context).
-6. Confirm build-time integrity checks:
+6. Confirm the default Compose host publish remains `127.0.0.1:9000:9000` (localhost-only) unless the operator explicitly publishes all interfaces and sets `API_KEY`.
+7. Confirm build-time integrity checks:
    - ROCm apt repository key is checksum-validated before dearmor/install.
    - UVR model + Silero VAD ONNX downloads are SHA-256 verified before replacing target files.
    - Streaming HTTP responses are deterministically closed (preload scripts use `requests.get(..., stream=True)` inside a context manager).

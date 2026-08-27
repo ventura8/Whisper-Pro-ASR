@@ -21,10 +21,12 @@ sudo chmod -R u+rwX data model_cache
 
 (`sudo` is required since your own user normally doesn't own files as UID 65534. The explicit `chmod` guarantees write access for that UID even if the directories pre-existed with restrictive permissions -- ownership alone doesn't grant write access if the owner-write bit was already cleared.)
 
+Host ports default to `127.0.0.1:9000:9000` so unauthenticated management data is not reachable on the LAN. Other Compose services still use `whisper-pro-asr:9000` on the Docker network. To publish on all interfaces (`-p 9000:9000` or `"9000:9000"`), set `API_KEY` first.
+
 CPU-only (works on any host; the service auto-detects hardware and falls back to CPU when no accelerator device is mapped):
 
 ```bash
-docker run -d --name whisper-pro-asr -p 9000:9000 \
+docker run -d --name whisper-pro-asr -p 127.0.0.1:9000:9000 \
   --tmpfs /tmp/whisper:size=2G --tmpfs /tmp/numba-cache:size=128M \
   -v "$(pwd)/data:/app/data" -v "$(pwd)/model_cache:/app/model_cache" \
   ventura8/whisper-pro-asr
@@ -35,7 +37,7 @@ If the container still reports permission errors writing to `data`/`model_cache`
 Intel iGPU/Arc hosts (GPU-only, no NPU) — only if `/dev/dri` and at least one `/dev/dri/renderD*` render node exist on the host (skip this variant, use the CPU-only command above, on NVIDIA/AMD/CPU-only systems; without a renderD* node the `--group-add` derivation below resolves to an empty string and the command fails):
 
 ```bash
-docker run -d --name whisper-pro-asr -p 9000:9000 --device /dev/dri --user 65534:65534 \
+docker run -d --name whisper-pro-asr -p 127.0.0.1:9000:9000 --device /dev/dri --user 65534:65534 \
   --group-add "$(stat -c '%g' /dev/dri/renderD* 2>/dev/null | head -n 1)" \
   --tmpfs /tmp/whisper:size=2G --tmpfs /tmp/numba-cache:size=128M \
   -v "$(pwd)/data:/app/data" -v "$(pwd)/model_cache:/app/model_cache" \
@@ -45,7 +47,7 @@ docker run -d --name whisper-pro-asr -p 9000:9000 --device /dev/dri --user 65534
 Intel NPU hosts — only if `/dev/dri`, `/dev/accel`, and at least one `/dev/dri/renderD*` render node exist on the host:
 
 ```bash
-docker run -d --name whisper-pro-asr -p 9000:9000 --device /dev/accel --device /dev/dri --user 65534:65534 \
+docker run -d --name whisper-pro-asr -p 127.0.0.1:9000:9000 --device /dev/accel --device /dev/dri --user 65534:65534 \
   --group-add "$(stat -c '%g' /dev/dri/renderD* 2>/dev/null | head -n 1)" \
   --tmpfs /tmp/whisper:size=2G --tmpfs /tmp/numba-cache:size=128M \
   -v "$(pwd)/data:/app/data" -v "$(pwd)/model_cache:/app/model_cache" \
@@ -185,7 +187,7 @@ Linux Docker containers on Windows WSL2 **cannot accelerate UVR on the AMD GPU**
      whisper-pro-asr:
        image: whisper-pro-asr:latest
        ports:
-         - "9000:9000"
+         - "127.0.0.1:9000:9000"
        devices:
          - /dev/dxg:/dev/dxg # Windows 11 / WSL2 GPU bridge (detection only)
        environment:
@@ -199,7 +201,7 @@ Linux Docker containers on Windows WSL2 **cannot accelerate UVR on the AMD GPU**
    ```bash
    docker run -d \
      --name whisper-pro-asr \
-     -p 9000:9000 \
+     -p 127.0.0.1:9000:9000 \
      --device /dev/dxg \
      -v /usr/lib/wsl:/usr/lib/wsl \
      -e HSA_ENABLE_DXG_DETECTION=1 \
@@ -229,7 +231,7 @@ On native Linux hosts (Ubuntu 22.04+), Docker containers access the AMD GPU dire
      whisper-pro-asr:
        image: whisper-pro-asr:latest
        ports:
-         - "9000:9000"
+         - "127.0.0.1:9000:9000"
        devices:
          - /dev/kfd:/dev/kfd # AMD ROCm Kernel Fusion Driver (Bare-metal Linux only)
          - /dev/dri:/dev/dri # Direct Rendering Manager render nodes
@@ -251,7 +253,7 @@ On native Linux hosts (Ubuntu 22.04+), Docker containers access the AMD GPU dire
    ```bash
    docker run -d \
      --name whisper-pro-asr \
-     -p 9000:9000 \
+     -p 127.0.0.1:9000:9000 \
      --security-opt seccomp=unconfined \
      --device /dev/kfd \
      --device /dev/dri \
@@ -265,7 +267,7 @@ On native Linux hosts (Ubuntu 22.04+), Docker containers access the AMD GPU dire
    ```bash
    docker run -d \
      --name whisper-pro-asr \
-     -p 9000:9000 \
+     -p 127.0.0.1:9000:9000 \
      --security-opt seccomp=unconfined \
      --device /dev/kfd \
      --device /dev/dri \

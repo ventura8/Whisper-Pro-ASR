@@ -30,7 +30,7 @@ services:
     image: ventura8/whisper-pro-asr:latest
     container_name: whisper-pro-asr
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
     restart: unless-stopped
 
     # 1. Intel Silicon (NPU/GPU)
@@ -86,6 +86,8 @@ services:
       - /mnt/nas/tv:/tv
       - /mnt/nas/movies:/movies
 ```
+
+The default host publish is `127.0.0.1:9000:9000` so unauthenticated local-mode data (history, logs, settings, `/status`) is not reachable on the LAN. Other Compose services still reach `whisper-pro-asr:9000` on the Docker network. To publish on all interfaces, use `"9000:9000"` and set `API_KEY`.
 
 1. Save the configuration.
 2. Launch: `docker compose up -d`
@@ -285,7 +287,7 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | `FFMPEG_HWACCEL` | `none` | FFmpeg hardware acceleration target (`cuda`, `vaapi`, `qsv`). |
 | `FFMPEG_FILTER` | `dynaudnorm` | Normalization filter: `dynaudnorm` (Standard) or `loudnorm` (Broadcast). |
 | **Security & Access Control** | | |
-| `API_KEY` / `WHISPER_API_KEY` | *(empty)* | Optional API key to authenticate transcription, language-ID, and telemetry API routes. |
+| `API_KEY` / `WHISPER_API_KEY` | *(empty)* | Authenticates transcription, language-ID, and telemetry routes. Unset is local-mode only; required before publishing beyond localhost. |
 | `ADMIN_API_KEY` | *(empty)* | Admin API key for `/settings`, log downloads, and telemetry purge. Falls back to `API_KEY`. |
 | `CORS_ORIGINS` | *(empty)* | Comma-separated list of allowed CORS origins (e.g. `http://localhost:3000`). |
 | `CORS_ALLOW_ALL` | `false` | Enables wildcard CORS (`*`). Defaults to `false` for cross-origin security. |
@@ -320,7 +322,7 @@ services:
     container_name: whisper-pro-asr
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
  
     # --- [HARDWARE ACCELERATION] ---
     # The application performs automated detection of both Intel and NVIDIA hardware.
@@ -450,7 +452,7 @@ View or dynamically update service configuration (model, device, telemetry reten
 To use this service with **Bazarr**:
 
 1. **Provider**: Choose **Whisper** (or `whisper-asr-webservice`).
-2. **Endpoint**: `http://<YOUR_DOCKER_IP>:9000`
+2. **Endpoint**: `http://whisper-pro-asr:9000` on the same Docker network, or `http://127.0.0.1:9000` on the host. For Bazarr on another machine, publish `"9000:9000"` and set `API_KEY`.
 3. **Timeouts**: Should be set very high (54000) for long movies
 4. **Pass video filename to Whisper**: Should be enabled for volume mapping to work correctly
 5. **Volume Mapping (Highly Recommended)**:

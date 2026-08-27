@@ -17,6 +17,7 @@ Keep Bazarr integration reliable for large media files and mapped-volume workflo
 7. Failed registered tasks must persist dashboard history fields: normalized `request_json.local_path`, `result.error` / `response_json`, and at least one execution log line via `record_task_failure()`.
 8. `encode=false` (Bazarr raw PCM) only bypasses FFmpeg normalization when the mapped audio already matches the uniform ingestion spec: **16kHz, mono (1ch), s16le/16-bit PCM**.
    - If the mapped audio is not in that format, normalize it (run the encode/standardization path) or reject the request so only compliant audio reaches inference.
+9. Default Compose host publish is localhost-only (`127.0.0.1:9000:9000`). Same-network Bazarr uses `http://whisper-pro-asr:9000`. Bazarr on another host requires `"9000:9000"` plus `API_KEY`.
 
 ## Manual Validation
 
