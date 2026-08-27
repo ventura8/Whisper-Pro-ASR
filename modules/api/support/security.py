@@ -203,6 +203,20 @@ def verify_api_request(request: Request) -> Optional[tuple[str, int]]:
     return None
 
 
+UNAUTHENTICATED_EXPOSURE_WARNING = (
+    "[Security] No API_KEY/ADMIN_API_KEY configured. Management and transcription "
+    "data are reachable without authentication on this process bind address. "
+    "Set API_KEY before publishing the service beyond localhost."
+)
+
+
+def log_unauthenticated_exposure_warning() -> None:
+    """Warn at startup when optional auth is unset (local-mode data exposure)."""
+    if get_admin_api_key():
+        return
+    logger.warning(UNAUTHENTICATED_EXPOSURE_WARNING)
+
+
 API_KEY_PROTECTED_PATHS = frozenset(
     {
         "/status",

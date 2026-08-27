@@ -253,7 +253,8 @@ graph TD
 
 - **`API_KEY`**: Authenticates general API usage (`/asr`, `/detect-language`, `/status`, `/history`).
 - **`ADMIN_API_KEY`**: Authenticates administrative endpoints (`/system/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`).
-- **Anti-CSRF Origin Validation**: In unauthenticated/local setups, state-modifying administrative endpoints require Origin or Referer and verify the value against the request host or CORS allowlist. Missing both headers, or a cross-origin mismatch, returns `403` to prevent browser drive-by data destruction.
+- **Default localhost host publish**: `docker-compose.yml` maps `127.0.0.1:9000:9000` so unauthenticated local-mode data (history, logs, settings, `/status`) is not reachable on the LAN. Inter-container access on the Docker network is unchanged. Publishing `9000:9000` (all interfaces) requires `API_KEY`. Startup logs a warning when both keys are unset.
+- **Anti-CSRF Origin Validation**: In unauthenticated/local setups, state-modifying administrative endpoints require Origin or Referer and verify the value against the request host or CORS allowlist. Missing both headers, or a cross-origin mismatch, returns `403` to prevent browser drive-by data destruction. CSRF origin checks are not a substitute for authentication.
 
 ### 3. Model Supply Chain & Parameter Hardening
 

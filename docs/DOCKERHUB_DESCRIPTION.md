@@ -23,7 +23,7 @@ services:
     image: ventura8/whisper-pro-asr:latest
     container_name: whisper-pro-asr
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
     restart: unless-stopped
     environment:
       # --- [SSD WRITE PROTECTION] ---
@@ -87,6 +87,8 @@ services:
       - /mnt/nas/movies:/movies
 ```
 
+The default host publish is `127.0.0.1:9000:9000`. Other Compose services still reach `whisper-pro-asr:9000` on the Docker network. Publishing `"9000:9000"` on all interfaces requires `API_KEY`.
+
 Deploy with: `docker compose up -d`
 
 > [!TIP]
@@ -99,7 +101,7 @@ Deploy with: `docker compose up -d`
 To use this service with **Bazarr**:
 
 1. **Provider**: Choose **Whisper** (or `whisper-asr-webservice`).
-2. **Endpoint**: `http://<IP_OR_HOSTNAME>:9000`
+2. **Endpoint**: `http://whisper-pro-asr:9000` on the same Docker network, or `http://127.0.0.1:9000` on the host. For Bazarr on another machine, publish `"9000:9000"` and set `API_KEY`.
 3. **Timeouts**: Should be set very high (54000) for long movies
 4. **Pass video filename to Whisper**: Should be enabled for volume mapping to work correctly
 5. **Volume Mapping (Highly Recommended)**:

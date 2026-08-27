@@ -34,8 +34,11 @@ services:
     container_name: whisper-pro-asr
     restart: unless-stopped
     user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
+    # Localhost-only host publish. Unauthenticated history/logs/settings
+    # stay off the LAN. Other compose services still use whisper-pro-asr:9000.
+    # LAN/remote host publish: "9000:9000" and set API_KEY.
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
 
     # --- [HARDWARE ACCELERATION (OPTIONAL)] ---
     # The application automatically detects and orchestrates available hardware (NVIDIA CUDA,
@@ -148,6 +151,10 @@ services:
 
       # Speaker diarization token (Hugging Face). Required for PyAnnote speaker segmentation.
       - DIARIZATION_HF_TOKEN=${DIARIZATION_HF_TOKEN:-}
+
+      # Required when publishing beyond localhost (LAN / Bazarr on another host).
+      # - API_KEY=${API_KEY:-}
+      # - ADMIN_API_KEY=${ADMIN_API_KEY:-}
 
       # --- [LIBRARY PATH FIXES] ---
       # 1. ctranslate2 (faster-whisper's backend) dlopen()s libcublas.so.12 /

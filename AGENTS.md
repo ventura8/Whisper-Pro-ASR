@@ -84,6 +84,7 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 - **CORS Allowlist Requirement**: Never enable wildcard CORS (`*`) by default. CORS origins must be configured explicitly via `CORS_ORIGINS` or explicitly opted into via `CORS_ALLOW_ALL=true`.
 - **Model Supply Chain Guarding**: Dynamic model loading via `/system/settings` must be validated against `is_valid_model_name()` to prevent arbitrary external downloads and path traversals (`..`).
 - **Administrative Endpoint Protection**: State-changing administrative endpoints (`/system/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`) must require `ADMIN_API_KEY` authentication when configured. If no key is configured, Origin/Referer validation is used only as anti-CSRF protection (not as the primary authorization mechanism).
+- **Default Localhost Publish**: `docker-compose.yml` must publish `127.0.0.1:9000:9000` by default so unauthenticated management data is not reachable on the LAN. All-interface publish (`9000:9000`) requires `API_KEY`. Startup must warn when both keys are unset.
 - **Audit Logging**: All administrative mutations and purges must be recorded with client IP and User-Agent using `security.audit_log_admin_action()`.
 
 ## Code Style

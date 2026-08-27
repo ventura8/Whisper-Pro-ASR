@@ -22,7 +22,7 @@ Every time you work on this project, you MUST update all relevant markdown files
 ## Global Execution Rules
 
 - Concurrency correctness (deadlock/livelock safety and bounded progress) takes priority over throughput optimizations.
-- Enforce defense-in-depth security: wildcard CORS disabled by default, API/Admin authentication contracts, dynamic model supply chain allowlisting, and CSRF origin verification on administrative endpoints.
+- Enforce defense-in-depth security: wildcard CORS disabled by default, API/Admin authentication contracts, dynamic model supply chain allowlisting, CSRF origin verification on administrative endpoints, and localhost-only Compose host publish by default (`127.0.0.1:9000:9000`) so unauthenticated management data is not reachable on the LAN.
 - Keep endpoint taxonomy contract aligned everywhere:
   - Standard ASR class: `/asr`, `/v1/audio/transcriptions`, `/v1/audio/translations`
   - Priority language-ID class: `/detect-language`, `/detectlang`

@@ -24,6 +24,7 @@ Protect external API compatibility for:
    - `401` for missing/invalid API key when `API_KEY` or `ADMIN_API_KEY` is configured, including `GET /logs/download` when `ADMIN_API_KEY` protection is enabled
    - `403` for untrusted cross-origin requests to administrative endpoints when unauthenticated, including requests with neither Origin nor Referer
    - `GET /logs/download` must require trusted Origin or Referer validation against configured origins when no admin key is configured, and reject both missing headers and untrusted values with `403`
+   - Default Compose host publish is `127.0.0.1:9000:9000`; all-interface `"9000:9000"` requires `API_KEY`. Startup warns when both `API_KEY` and `ADMIN_API_KEY` are unset.
    - `503` for unavailable inference engine
 6. Verify CORS resolution: wildcard CORS disabled by default; origins come from `CORS_ORIGINS`, or from an explicit `CORS_ALLOW_ALL=true` opt-in. Wildcard CORS must not skip administrative CSRF origin checks.
 7. Verify `/status` task ordering guarantees used by dashboard consumers.

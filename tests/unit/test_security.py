@@ -2,6 +2,7 @@
 Unit tests for security, CORS resolution, model allowlist, and access control.
 """
 
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -289,3 +290,39 @@ def test_verify_csrf_origin_requires_origin_or_referer():
         assert err is not None
         assert err[1] == 403
         assert "Origin or Referer header required" in err[0]
+
+
+def test_log_unauthenticated_exposure_warning_when_keys_unset():
+    """Local-mode startup must warn that management data is unauthenticated."""
+    with mock.patch.dict("os.environ", {}, clear=True):
+        with mock.patch.object(security.logger, "warning") as mock_warn:
+            security.log_unauthenticated_exposure_warning()
+    mock_warn.assert_called_once_with(security.UNAUTHENTICATED_EXPOSURE_WARNING)
+
+
+def test_log_unauthenticated_exposure_warning_silent_when_api_key_set():
+    """Configured API_KEY must suppress the unauthenticated-exposure warning."""
+    with mock.patch.dict("os.environ", {"API_KEY": "secret"}, clear=True):
+        with mock.patch.object(security.logger, "warning") as mock_warn:
+            security.log_unauthenticated_exposure_warning()
+    mock_warn.assert_not_called()
+
+
+def test_log_unauthenticated_exposure_warning_silent_when_admin_key_set():
+    """A dedicated ADMIN_API_KEY also means authentication is configured."""
+    with mock.patch.dict("os.environ", {"ADMIN_API_KEY": "admin-secret"}, clear=True):
+        with mock.patch.object(security.logger, "warning") as mock_warn:
+            security.log_unauthenticated_exposure_warning()
+    mock_warn.assert_not_called()
+
+
+def test_compose_publishes_localhost_only_by_default():
+    """Default compose host publish must not expose unauthenticated data on the LAN."""
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    text = compose_path.read_text(encoding="utf-8")
+    assert '"127.0.0.1:9000:9000"' in text
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert stripped != '- "9000:9000"'

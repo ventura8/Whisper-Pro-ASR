@@ -129,6 +129,9 @@ if __name__ != "__mp_main__":
                 allow_headers=["*"],
             )
 
+        if not testing:
+            security.log_unauthenticated_exposure_warning()
+
         def _optional_request_log_suffixes(request: Request) -> tuple[str, str, str]:
             """Build the optional ' | Body:'/' | Params:'/' | Content-Type:' log
             suffixes, each empty when the corresponding header/query data is absent."""

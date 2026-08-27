@@ -92,12 +92,14 @@ Powered by **ONNX Runtime (patched for OpenVINO)**. Supports **CPU**, **NVIDIA C
 ```bash
 docker run -d \
   --name whisper-pro-asr \
-  -p 9000:9000 \
+  -p 127.0.0.1:9000:9000 \
   --device /dev/accel/accel0 \
   --device /dev/dri \
   -v ./model_cache:/app/model_cache \
   ventura8/whisper-pro-asr:latest
 ```
+
+The default publish is `127.0.0.1:9000:9000`. Use `-p 9000:9000` only after setting `API_KEY` if Bazarr or other clients must reach the host from another machine.
 
 > [!TIP]
 > **Autonomous Detection**: The service automatically identifies and utilizes NVIDIA GPUs, Intel NPUs, or Intel iGPUs. Manual device configuration is optional.
