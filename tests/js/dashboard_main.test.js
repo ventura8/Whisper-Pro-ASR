@@ -92,7 +92,7 @@ describe("main.js", () => {
           ],
         };
       }
-      if (url === "/settings") {
+      if (url === "/system/settings") {
         return { ok: true, json: async () => ({}) };
       }
       return {
@@ -282,9 +282,10 @@ describe("main.js", () => {
     expect(alerts.some((msg) => msg.startsWith("Error:"))).toBe(true);
 
     // audit.js additional branches: user-agent provided + expanded open state
+    const auditToggle = context._auditToggleIds("audit-1");
     evalInContext(
       context,
-      "expandedElements.add('audit-1_audit'); expandedElements.add('audit-1_req'); expandedElements.add('audit-1_res');"
+      `expandedElements.add('${auditToggle.audit}'); expandedElements.add('${auditToggle.req}'); expandedElements.add('${auditToggle.res}');`
     );
     const auditWithUa = context.renderAuditDetails({
       task_id: "audit-1",
@@ -808,6 +809,13 @@ describe("main.js", () => {
 
     expect(context._historyHardwareLabelFromMeta("GPU", "")).toBe("GPU");
     expect(context._historyHardwareLabelFromMeta(null, null)).toBe("Unknown Hardware");
+
+    const xssTag = context._historyHardwareTag({
+      unit_id: '<img src=x onerror=alert(1)>',
+      history_unit_id: '<img src=x onerror=alert(1)>',
+    });
+    expect(xssTag).not.toContain("<img");
+    expect(xssTag).toContain("&lt;img");
   });
 
   it("covers showTab chart/history branches and handleToggle open-close paths", async () => {

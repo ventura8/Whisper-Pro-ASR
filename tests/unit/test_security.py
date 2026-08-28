@@ -148,6 +148,16 @@ def test_verify_admin_request_missing_key():
         assert err[1] == 401
 
 
+def test_admin_api_key_does_not_fall_back_to_api_key():
+    """ADMIN_API_KEY must be explicit; API_KEY alone must not authenticate admin routes."""
+    with mock.patch.dict("os.environ", {"API_KEY": "general_key"}, clear=True):
+        assert security.get_admin_api_key() == ""
+        req = _create_mock_request({"X-API-Key": "general_key"})
+        err = security.verify_admin_request(req)
+        assert err is not None
+        assert err[1] == 403
+
+
 def test_verify_admin_request_unauthenticated_mode_csrf():
     """Verify anti-CSRF checks in unauthenticated mode."""
     with mock.patch.dict("os.environ", {}, clear=True):

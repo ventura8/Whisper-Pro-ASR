@@ -20,6 +20,28 @@ router = APIRouter(tags=["System"])
 logger = logging.getLogger(__name__)
 
 
+def _parse_int_setting(env_key: str, fallback: int, minimum: int, maximum: int) -> int:
+    """Parse a bounded integer setting from the environment."""
+    raw = os.environ.get(env_key, "")
+    if not raw:
+        return fallback
+    try:
+        value = int(raw)
+    except ValueError:
+        return fallback
+    return value if minimum <= value <= maximum else fallback
+
+
+def _telemetry_retention_hours_setting() -> int:
+    """Return bounded TELEMETRY_RETENTION_HOURS from the environment."""
+    return _parse_int_setting("TELEMETRY_RETENTION_HOURS", config.TELEMETRY_RETENTION_HOURS, 1, 720)
+
+
+def _log_retention_days_setting() -> int:
+    """Return bounded LOG_RETENTION_DAYS from the environment."""
+    return _parse_int_setting("LOG_RETENTION_DAYS", config.LOG_RETENTION_DAYS, 1, 90)
+
+
 @router.get("/")
 def root(request: Request):
     """
@@ -236,7 +258,8 @@ def get_settings(request: Request):
         "ASR_MODEL": config.ASR_MODEL,
         "ASR_DEVICE": config.ASR_DEVICE,
         "ASR_ENGINE": config.ASR_ENGINE,
-        "TELEMETRY_RETENTION_HOURS": int(os.environ.get("TELEMETRY_RETENTION_HOURS", 24)),
+        "TELEMETRY_RETENTION_HOURS": _telemetry_retention_hours_setting(),
+        "LOG_RETENTION_DAYS": _log_retention_days_setting(),
     }
 
 

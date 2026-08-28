@@ -2,6 +2,9 @@ const { defineConfig } = require("@playwright/test");
 
 module.exports = defineConfig({
   testDir: "tests/e2e",
+  // tests/e2e/real/** is a separate project (playwright.real.config.cjs) that runs
+  // against the real FastAPI app instead of this suite's fixture mock server.
+  testIgnore: "real/**",
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,

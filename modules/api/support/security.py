@@ -81,11 +81,8 @@ def get_api_key() -> str:
 
 
 def get_admin_api_key() -> str:
-    """Retrieve admin-level API key from environment."""
-    admin_key = os.environ.get("ADMIN_API_KEY", "").strip()
-    if admin_key:
-        return admin_key
-    return get_api_key()
+    """Retrieve the explicitly configured admin API key (no API_KEY fallback)."""
+    return os.environ.get("ADMIN_API_KEY", "").strip()
 
 
 def get_custom_allowed_models() -> set[str]:

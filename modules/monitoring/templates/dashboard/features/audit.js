@@ -35,11 +35,18 @@ function _auditItemId(item) {
 }
 
 function _auditToggleIds(id) {
-    const base = String(id || '').replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const raw = String(id ?? '');
+    const base = raw.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    // Sanitizing to a safe DOM-id charset can collapse distinct ids (e.g. "a/b" and
+    // "a:b" both become "a_b"), which would make their toggle states alias each
+    // other. The suffix below is a lossless per-character encoding of the raw
+    // (unsanitized) id -- not a hash -- so any two distinct raw ids always produce
+    // distinct suffixes, with no collision risk regardless of string length/content.
+    const suffix = raw ? `_${Array.from(raw).map((c) => c.codePointAt(0).toString(36)).join('.')}` : '';
     return {
-        audit: `${base}_audit`,
-        req: `${base}_req`,
-        res: `${base}_res`
+        audit: `${base}${suffix}_audit`,
+        req: `${base}${suffix}_req`,
+        res: `${base}${suffix}_res`
     };
 }
 
@@ -57,21 +64,27 @@ function _auditLooksLikeMediaPath(value) {
         .some((ext) => lower.endsWith(ext));
 }
 
-function _auditNormalizeRequestJson(requestPayload) {
-    if (!requestPayload || typeof requestPayload !== 'object') {
-        return {};
-    }
+function _auditExtractMediaPathKey(entries, existingLocalPath) {
+    let localPath = existingLocalPath;
     const normalized = {};
-    let localPath = requestPayload.local_path || null;
-    for (const [key, value] of Object.entries(requestPayload)) {
+    for (const [key, value] of entries) {
         if (_auditLooksLikeMediaPath(key)) {
-            if (!localPath) {
-                localPath = key.trim().replace(/^["']|["']$/g, '');
-            }
+            localPath = localPath || key.trim().replace(/^["']|["']$/g, '');
             continue;
         }
         normalized[key] = value;
     }
+    return { normalized, localPath };
+}
+
+function _auditNormalizeRequestJson(requestPayload) {
+    if (!requestPayload || typeof requestPayload !== 'object') {
+        return {};
+    }
+    const { normalized, localPath } = _auditExtractMediaPathKey(
+        Object.entries(requestPayload),
+        requestPayload.local_path || null
+    );
     if (localPath) {
         normalized.local_path = localPath;
     }

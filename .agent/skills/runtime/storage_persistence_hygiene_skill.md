@@ -8,7 +8,7 @@ Guarantee cleanup correctness and persistent-state integrity.
 
 ## Checklist
 
-1. All transient files are registered and deleted in `finally` blocks.
+1. All transient files are registered and deleted in `finally` blocks. For async routes that use AnyIO worker threads, initialize one request-scoped registry before dispatch so worker-created assets and route cleanup share ownership.
 2. Error paths clean partial outputs and descriptors.
 3. Persistent artifacts are limited to intended locations (`model_cache`, state/history/logs).
 4. Cleanup routines do not remove active-session artifacts.

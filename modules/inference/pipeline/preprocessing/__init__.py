@@ -127,17 +127,36 @@ def _get_or_import_ort_module():
 
 
 def _ensure_openvino_onnxruntime(device_type: str) -> None:
-    """Ensure OpenVINO-capable ONNX Runtime is loaded for Intel-target requests."""
-    if not openvino_resolver.is_openvino_target(device_type):
+    """Ensure OpenVINO-capable ONNX Runtime is loaded for Intel-target requests.
+
+    Skipped outright when ASR runs on CUDA: an OpenVINO GPU/NPU context has
+    been observed to crash/hang natively alongside an active CUDA context
+    (see the guard in modules/core/config.py and
+    preprocessing/provider.py's _block_openvino_alongside_cuda, which already
+    ensure the *selected* preprocessing device never resolves to OpenVINO in
+    that case). This function's reload also swaps the process-wide shared
+    `ort` module reference to the Intel-only build — merely constructing a
+    PreprocessingManager for an unused Intel GPU/NPU hardware unit at startup
+    (every unit gets one eagerly, see model_manager.load_model) would
+    otherwise permanently poison CUDA-based onnxruntime execution providers
+    for the rest of the process, even though that manager is never used for
+    inference. Skip the reload so the CUDA-capable `ort` build stays active.
+    """
+    if _skip_openvino_onnxruntime_reload(device_type):
         return
     current_ort = _get_or_import_ort_module()
-    if current_ort is None:
-        return
-    if openvino_resolver.has_openvino_provider(current_ort):
+    if current_ort is None or openvino_resolver.has_openvino_provider(current_ort):
         return
     logger.info("[UVR] OpenVINO provider missing in active ORT; hot-reloading from Intel runtime path.")
     if not _reload_onnxruntime_from_intel_path():
         logger.warning("[UVR] Failed to hot-reload ONNX Runtime from Intel runtime path.")
+
+
+def _skip_openvino_onnxruntime_reload(device_type: str) -> bool:
+    """True when this device/target doesn't need the OpenVINO-capable ORT reload."""
+    if config.DEVICE == "CUDA":
+        return True
+    return not openvino_resolver.is_openvino_target(device_type)
 
 
 def _cpu_provider_config():

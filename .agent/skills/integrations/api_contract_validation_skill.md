@@ -11,7 +11,7 @@ Protect external API compatibility for:
 - `/detectlang`
 - `/v1/audio/transcriptions`
 - `/v1/audio/translations`
-- `/status`, `/analytics`, `/settings`, `/history`
+- `/status`, `/analytics`, `/system/settings`, `/history`
 
 ## Contract Checklist
 
@@ -21,7 +21,7 @@ Protect external API compatibility for:
 4. Verify subtitle controls (`max_line_width`, `max_line_count`) affect SRT/VTT output.
 5. Verify expected status codes & access controls:
    - `400` for malformed input, invalid/disallowed `ASR_MODEL`, invalid `ASR_DEVICE`, out-of-bounds retention settings, or media handling failures
-   - `401` for missing/invalid API key when `API_KEY` or `ADMIN_API_KEY` is configured, including `GET /logs/download` when `ADMIN_API_KEY` protection is enabled
+   - `401` for missing/invalid API key when `API_KEY` or `ADMIN_API_KEY` is configured, including `GET /logs/download` when `ADMIN_API_KEY` protection is enabled. `ADMIN_API_KEY` is a distinct credential with no `API_KEY` fallback.
    - `403` for untrusted cross-origin requests to administrative endpoints when unauthenticated, including requests with neither Origin nor Referer
    - `GET /logs/download` must require trusted Origin or Referer validation against configured origins when no admin key is configured, and reject both missing headers and untrusted values with `403`
    - `503` for unavailable inference engine

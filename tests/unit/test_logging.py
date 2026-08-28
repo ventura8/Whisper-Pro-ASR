@@ -5,6 +5,7 @@ import logging
 import os
 from unittest import mock
 
+import pytest
 from starlette.datastructures import QueryParams
 
 import whisper_pro_asr
@@ -18,6 +19,8 @@ from modules.core.logging_setup import (
     _unique_device_props,
     log_banner,
 )
+
+pytestmark = pytest.mark.usefixtures("restore_config_after_reload")
 
 
 def _logged_messages(mock_logger: mock.MagicMock) -> str:

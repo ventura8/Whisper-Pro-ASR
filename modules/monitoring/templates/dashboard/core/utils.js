@@ -54,15 +54,12 @@ function _statusDataForHardwareLabeling() {
     return null;
 }
 
+const _HARDWARE_FAMILY_PREFIXES = ['cuda', 'npu', 'gpu', 'amd'];
+
 function _normalizeHardwareFamily(unit) {
-    const id = String((unit && unit.id) || '').toLowerCase();
-    const type = String((unit && unit.type) || '').toLowerCase();
-    const source = id || type;
-    if (source.startsWith('cuda')) return 'cuda';
-    if (source.startsWith('npu')) return 'npu';
-    if (source.startsWith('gpu')) return 'gpu';
-    if (source.startsWith('amd')) return 'amd';
-    return source;
+    const source = String((unit && (unit.id || unit.type)) || '').toLowerCase();
+    const family = _HARDWARE_FAMILY_PREFIXES.find((prefix) => source.startsWith(prefix));
+    return family || source;
 }
 
 let dashboardApiKey = '';

@@ -98,7 +98,8 @@ async def transcribe(
         )
 
         start_time = time.time()
-        filename = routes_utils.get_display_name_early(resolved_local_path, uploaded_file)
+        video_file = routes_utils.extract_video_file(form_data, request)
+        filename = routes_utils.get_display_name_early(resolved_local_path, uploaded_file, video_file)
         task_type = _resolve_task_type(params)
         _log_task_start(task_type, params)
         worker_context = _build_worker_context(request, params, resolved_local_path)
@@ -110,6 +111,7 @@ async def transcribe(
                 resolved_local_path,
                 uploaded_file,
                 filename,
+                video_file=video_file,
                 worker_context=worker_context,
             )
         )
@@ -146,6 +148,7 @@ def _build_worker_context(
         "endpoint": request.url.path,
         "clean_audio": params.get("clean_audio"),
         "input_flags": getattr(utils.THREAD_CONTEXT, "input_flags", None),
+        "audio_source_mode": getattr(utils.THREAD_CONTEXT, "audio_source_mode", None),
     }
 
 
@@ -155,6 +158,7 @@ def _apply_worker_context(worker_context: dict[str, Any]) -> None:
     utils.THREAD_CONTEXT.endpoint = worker_context["endpoint"]
     utils.THREAD_CONTEXT.clean_audio = worker_context["clean_audio"]
     utils.THREAD_CONTEXT.input_flags = worker_context.get("input_flags")
+    utils.THREAD_CONTEXT.audio_source_mode = worker_context.get("audio_source_mode")
 
 
 def _perform_transcription_task(
@@ -164,19 +168,25 @@ def _perform_transcription_task(
     audio_file: Optional[UploadFile],
     filename: str,
     *,
+    video_file: Optional[str] = None,
     worker_context: dict[str, Any],
 ) -> tuple[Optional[TranscriptionResult], Optional[str], Optional[ApiError]]:
     """Inner logic for transcription execution."""
     _apply_worker_context(worker_context)
     with model_manager.early_task_registration(task_type=task_type, filename=filename):
+        routes_utils.log_audio_source_mode(worker_context)
         try:
-            source_path, init_err = _initialize_transcription_context(local_path, audio_file, task_type)
+            source_path, init_err = _initialize_transcription_context(local_path, audio_file, task_type, video_file)
             if init_err:
                 msg, code = init_err
                 model_manager.record_task_failure(msg, code, context="ASR")
                 return None, None, init_err
 
-            clean_wav, err = _get_transcription_source(source_path)
+            clean_wav, err = _get_transcription_source(
+                source_path,
+                language=params.get("language"),
+                apply_stream_alignment=(audio_file is None),
+            )
             if err:
                 msg, code = err
                 model_manager.record_task_failure(msg, code, context="ASR")
@@ -193,16 +203,26 @@ def _perform_transcription_task(
             raise e
 
 
-def _get_transcription_source(source_path: str) -> tuple[Optional[str], Optional[ApiError]]:
-    return routes_utils.get_clean_wav_or_error(source_path)
+def _get_transcription_source(
+    source_path: str,
+    *,
+    language: Optional[str] = None,
+    apply_stream_alignment: bool = False,
+) -> tuple[Optional[str], Optional[ApiError]]:
+    return routes_utils.get_clean_wav_or_error(
+        source_path,
+        language=language,
+        apply_stream_alignment=apply_stream_alignment,
+    )
 
 
 def _initialize_transcription_context(
     local_path: Optional[str],
     audio_file: Optional[UploadFile],
     task_type: str,
+    video_file: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[ApiError]]:
-    source_path, _, err = routes_utils.initialize_task_context(local_path, audio_file, is_priority=False)
+    source_path, _, err = routes_utils.initialize_task_context(local_path, audio_file, is_priority=False, video_file=video_file)
     if err:
         return None, err
     model_manager.update_task_progress(None, f"{task_type} Initializing")
@@ -285,7 +305,7 @@ def _apply_prompt_and_format_flags(
     query_params: QueryParams,
     form_data: FormData,
 ) -> None:
-    params["initial_prompt"] = _pick_first(query_params, form_data, ["initial_prompt"])
+    params["initial_prompt"] = _pick_first(query_params, form_data, ["initial_prompt", "prompt"])
     params["subtitle_highlight_words"] = _parse_subtitle_highlight(query_params, form_data)
     params["vad_filter"] = _parse_bool_param(query_params, form_data, "vad_filter", True)
     params["word_timestamps"] = _parse_bool_param(query_params, form_data, "word_timestamps", False)
@@ -425,8 +445,17 @@ def _log_completion(params: RequestParams, stats: dict[str, float], result: Tran
     )
 
 
+_OUTPUT_FORMAT_ALIASES = {
+    # OpenAI's documented `response_format` values for /v1/audio/transcriptions
+    # and /v1/audio/translations map onto our internal format names.
+    "text": "txt",
+    "verbose_json": "json",
+}
+
+
 def _normalize_output_format(output_format: str) -> str:
     fmt = str(output_format or "srt").lower()
+    fmt = _OUTPUT_FORMAT_ALIASES.get(fmt, fmt)
     if fmt in {"json", "vtt", "txt", "tsv", "srt"}:
         return fmt
     return "srt"

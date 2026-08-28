@@ -30,7 +30,7 @@ def _count_optimization_logs(call_args_list):
 def test_prepare_source_path_upload():
     """Verify prepare_source_path when uploading a file."""
     # Mock handle_upload to return valid paths
-    with mock.patch("modules.api.support.request_utils.handle_upload", return_value=("tmp", "temp", "orig")):
+    with mock.patch("modules.api.support.source_resolution.handle_upload", return_value=("tmp", "temp", "orig")):
         res = routes_utils.prepare_source_path(audio_file="dummy")
         assert res == ("tmp", "temp", "orig")
 
@@ -48,7 +48,7 @@ def test_handle_upload_long_extension():
     # Mock open and other operations
     with mock.patch("builtins.open", mock.mock_open()):
         with mock.patch("os.path.getsize", return_value=10):
-            with mock.patch("modules.api.support.request_utils.uuid") as mock_uuid:
+            with mock.patch("modules.api.support.source_resolution.uuid") as mock_uuid:
                 mock_uuid.uuid4.return_value.hex = "1234"
                 res = routes_utils.handle_upload(mock_file)
                 # Verify that it used .tmp extension due to length
@@ -63,7 +63,7 @@ def test_handle_upload_seek_exception():
 
     with mock.patch("builtins.open", mock.mock_open()):
         with mock.patch("os.path.getsize", return_value=10):
-            with mock.patch("modules.api.support.request_utils.shutil_copy_file_in_chunks"):
+            with mock.patch("modules.api.support.source_resolution.shutil_copy_file_in_chunks"):
                 res = routes_utils.handle_upload(mock_file)
                 assert res[2] == "test.wav"
 
@@ -86,6 +86,15 @@ def test_get_display_name_early_from_local_path():
     assert routes_utils.get_display_name_early(local_path='"clean_path.wav"') == "clean_path.wav"
 
 
+def test_get_display_name_early_normalizes_windows_path_separators():
+    """Regression: Bazarr can run on Windows and send a Windows-style local_path
+    (e.g. C:\\media\\episode.avi) even against a Linux server -- os.path.basename
+    alone only splits on '/', so without normalizing '\\\\' first the dashboard
+    would show the full Windows path instead of just the filename."""
+    assert routes_utils.get_display_name_early(local_path=r"C:\media\episode.avi") == "episode.avi"
+    assert routes_utils.get_display_name_early(video_file=r"C:\media\episode.avi") == "episode.avi"
+
+
 def test_get_display_name_early_from_uploaded_filename():
     """Uploaded filenames should be preserved when they are meaningful."""
     mock_file = mock.MagicMock()
@@ -106,6 +115,28 @@ def test_get_display_name_early_generic_uploaded_filename_variants():
     assert routes_utils.get_display_name_early(audio_file=mock_file) == "Unknown Media"
 
 
+def test_get_display_name_early_prefers_video_file_over_generic_upload_name(tmp_path):
+    """Regression: real Bazarr uploads a generic-named file (its own field name echoed
+    back as filename='audio_file') and separately sends `video_file` as caller metadata.
+    Once the upload is materialized to a tagged temp path, get_display_name_early must
+    prefer video_file over showing the literal generic upload name."""
+    tagged_path = routes_utils.MaterializedUploadPath(str(tmp_path / "upload_deadbeef.raw"))
+    tagged_path.original_filename = "audio_file"
+    video_file = "/tv/SpongeBob SquarePants/Season 4/SpongeBob SquarePants - S04E24 - Bummer Vacation SDTV.avi"
+    assert (
+        routes_utils.get_display_name_early(audio_file=tagged_path, video_file=video_file)
+        == "SpongeBob SquarePants - S04E24 - Bummer Vacation SDTV.avi"
+    )
+
+
+def test_get_display_name_early_generic_upload_name_without_video_file_falls_back(tmp_path):
+    """Without a usable video_file, a generic materialized-upload name must still fall
+    back to Unknown Media rather than leaking the literal generic name."""
+    tagged_path = routes_utils.MaterializedUploadPath(str(tmp_path / "upload_deadbeef.raw"))
+    tagged_path.original_filename = "audio_file"
+    assert routes_utils.get_display_name_early(audio_file=tagged_path) == "Unknown Media"
+
+
 def test_get_display_name_early_bazarr_style_path_with_parens():
     """Bazarr/Sonarr local paths with spaces and parentheses should resolve to basename."""
     path = "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
@@ -123,8 +154,8 @@ def test_prepare_source_path_fallback_preserves_local_path():
     """Verify fallback paths extraction logic preserves original local path basename."""
     # local_path provided but does not exist
     # audio_file provided and handles upload
-    with mock.patch("modules.api.support.request_utils.resolve_local_path", return_value=None):
-        with mock.patch("modules.api.support.request_utils.handle_upload", return_value=("tmp", "temp", "audio_file")):
+    with mock.patch("modules.api.support.source_resolution.resolve_local_path", return_value=None):
+        with mock.patch("modules.api.support.source_resolution.handle_upload", return_value=("tmp", "temp", "audio_file")):
             res = routes_utils.prepare_source_path(local_path="/home/user/music/my_real_song.mp3", audio_file="dummy")
             # Should use the basename of local_path instead of the upload name "audio_file"
             assert res == ("tmp", "temp", "my_real_song.mp3")
@@ -171,9 +202,19 @@ def test_extract_local_path_from_form_data():
     mock_req.query_params = {}
 
     assert routes_utils.extract_local_path(None, {"local_path": "/path/to/audio.mp3"}, mock_req) == "/path/to/audio.mp3"
-    assert routes_utils.extract_local_path(None, {"video_file": "/path/to/video.mp4"}, mock_req) == "/path/to/video.mp4"
     assert routes_utils.extract_local_path(None, {"file": "/path/to/file.wav"}, mock_req) == "/path/to/file.wav"
     assert routes_utils.extract_local_path(None, {"audio_file": "/path/to/audio.wav"}, mock_req) == "/path/to/audio.wav"
+
+
+def test_extract_local_path_ignores_video_file():
+    """video_file is Bazarr caller metadata (logging/display only, see whisperai.py's
+    pass_video_name option) and must never be resolved as a local filesystem path."""
+    mock_req = mock.MagicMock()
+    mock_req.query_params = {}
+
+    assert routes_utils.extract_local_path(None, {"video_file": "/path/to/video.mp4"}, mock_req) is None
+    mock_req.query_params = {"video_file": "/path/to/video.mp4"}
+    assert routes_utils.extract_local_path(None, {}, mock_req) is None
 
 
 def test_extract_local_path_from_query_params():
@@ -231,7 +272,7 @@ def test_resolve_local_path_logs_once_per_request(tmp_path):
 
     with _temporary_approved_roots(tmp_path):
         routes_utils.utils.THREAD_CONTEXT.optimized_local_path_logged = None
-        with mock.patch("modules.api.support.request_utils.logger.info") as info_mock:
+        with mock.patch("modules.api.support.source_resolution.logger.info") as info_mock:
             first = routes_utils.resolve_local_path(str(test_file))
 
             assert first == os.path.realpath(str(test_file))
@@ -246,7 +287,7 @@ def test_resolve_local_path_suppresses_duplicate_optimization_log(tmp_path):
 
     with _temporary_approved_roots(tmp_path):
         routes_utils.utils.THREAD_CONTEXT.optimized_local_path_logged = None
-        with mock.patch("modules.api.support.request_utils.logger.info") as info_mock:
+        with mock.patch("modules.api.support.source_resolution.logger.info") as info_mock:
             first = routes_utils.resolve_local_path(str(test_file))
             second = routes_utils.resolve_local_path(str(test_file))
 
@@ -256,222 +297,9 @@ def test_resolve_local_path_suppresses_duplicate_optimization_log(tmp_path):
         routes_utils.utils.THREAD_CONTEXT.optimized_local_path_logged = None
 
 
-@pytest.mark.anyio
-async def test_materialize_upload_file_valid_preserves_filename():
-    """Valid uploads should preserve the source filename."""
-    valid_file = UploadFile(file=io.BytesIO(b"valid audio content"), filename="valid.wav")
-    path, filename = await routes_utils.materialize_upload_file(valid_file)
-    assert path is not None
-    assert filename == "valid.wav"
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_valid_writes_content():
-    """Valid uploads should be written to disk with the same content."""
-    valid_file = UploadFile(file=io.BytesIO(b"valid audio content"), filename="valid.wav")
-    path, _ = await routes_utils.materialize_upload_file(valid_file)
-    assert os.path.exists(path)
-    with open(path, "rb") as file_handle:
-        assert file_handle.read() == b"valid audio content"
-    if os.path.exists(path):
-        os.remove(path)
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_empty():
-    """Verify materialize_upload_file raises ValueError for empty uploads."""
-    empty_file = UploadFile(file=io.BytesIO(b""), filename="empty.mp3")
-    with pytest.raises(ValueError, match="Remote data stream is empty"):
-        await routes_utils.materialize_upload_file(empty_file)
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_corrupt():
-    """Verify materialize_upload_file materializes non-empty audio files cleanly."""
-    valid_file = UploadFile(file=io.BytesIO(b"audio content"), filename="audio.mp3")
-    path, filename = await routes_utils.materialize_upload_file(valid_file)
-    assert path is not None
-    assert filename == "audio.mp3"
-    if os.path.exists(path):
-        os.remove(path)
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_corrupt_bypassed():
-    """Verify materialize_upload_file works cleanly for raw PCM uploads."""
-    pcm_file = UploadFile(file=io.BytesIO(b"pcm audio content"), filename="audio.pcm")
-    path, filename = await routes_utils.materialize_upload_file(pcm_file)
-    assert path is not None
-    assert filename == "audio.pcm"
-    if os.path.exists(path):
-        os.remove(path)
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_sync_fallback_reads_chunks():
-    """The sync fallback should materialize chunk data when async reads fail."""
-    mock_file = mock.MagicMock(spec=UploadFile)
-    mock_file.filename = "test.wav"
-    mock_file.read.side_effect = TypeError("Async read failed")
-    mock_file.file = mock.MagicMock()
-    mock_file.file.read.side_effect = [b"chunk data", b""]
-
-    def _fake_copy(_src, dst):
-        dst.write(b"chunk data")
-
-    with mock.patch("modules.api.support.request_utils.shutil_copy_file_in_chunks", side_effect=_fake_copy):
-        path, filename = await routes_utils.materialize_upload_file(mock_file)
-        assert path is not None
-        assert filename == "test.wav"
-        if os.path.exists(path):
-            os.remove(path)
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_sync_fallback_handles_exception():
-    """The sync fallback should return None when sync reading fails."""
-    mock_file = mock.MagicMock(spec=UploadFile)
-    mock_file.filename = "test.wav"
-    mock_file.read.side_effect = TypeError("Async read failed")
-    mock_file.file = mock.MagicMock()
-    mock_file.file.seek.side_effect = OSError("Sync seek failed")
-    path, name = await routes_utils.materialize_upload_file(mock_file)
-    assert path is None
-    assert name is None
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_empty_cleanup_error_raises():
-    """Empty uploads should still raise when cleanup fails during validation."""
-    empty_file = UploadFile(file=io.BytesIO(b""), filename="empty.mp3")
-    with mock.patch(
-        "modules.api.support.request_utils._ensure_non_empty_file",
-        side_effect=ValueError("Remote data stream is empty (0 bytes received)."),
-    ):
-        with pytest.raises(ValueError, match="Remote data stream is empty"):
-            await routes_utils.materialize_upload_file(empty_file)
-
-
-@pytest.mark.anyio
-async def test_materialize_upload_file_sync_fallback_edge_cases(tmp_path):
-    """Cover sync fallback branches for missing/empty temp output and invalid upload types."""
-    # Invalid upload type should short-circuit immediately.
-    assert await routes_utils.materialize_upload_file("not-an-upload") == (None, None)
-
-    mock_file = mock.MagicMock(spec=UploadFile)
-    mock_file.filename = "test.wav"
-    mock_file.read.side_effect = TypeError("Async read failed")
-    mock_file.file = mock.MagicMock()
-    mock_file.file.read.side_effect = [b"sync data", b""]
-
-    with mock.patch("modules.core.config.get_temp_dir", return_value=str(tmp_path)):
-        # Temp file does not exist after sync fallback copy.
-        with (
-            mock.patch("modules.api.support.request_utils.os.path.exists", return_value=False),
-            mock.patch("modules.api.support.request_utils.shutil_copy_file_in_chunks"),
-        ):
-            path, name = await routes_utils.materialize_upload_file(mock_file)
-            assert path is None
-            assert name is None
-
-        # Temp file exists but is empty after sync fallback copy.
-        with (
-            mock.patch("modules.api.support.request_utils.os.path.exists", return_value=True),
-            mock.patch("modules.api.support.request_utils.os.path.getsize", return_value=0),
-            mock.patch("modules.api.support.request_utils.shutil_copy_file_in_chunks"),
-            mock.patch("modules.api.support.request_utils.os.remove"),
-        ):
-            with pytest.raises(ValueError, match="Remote data stream is empty"):
-                await routes_utils.materialize_upload_file(mock_file)
-
-
-def test_prepare_source_path_string_path(tmp_path):
-    """Verify prepare_source_path uses string audio_file directly."""
-    test_file = tmp_path / "valid.wav"
-    test_file.write_text("some audio content")
-    res_path, res_temp, res_name = routes_utils.prepare_source_path(audio_file=str(test_file))
-    assert res_path == str(test_file)
-    assert res_temp == str(test_file)
-    assert res_name == "valid.wav"
-
-
-@pytest.mark.anyio
-async def test_resolve_and_materialize_upload_skips_materialization_for_resolved_path():
-    """Resolved local paths should bypass upload materialization."""
-    mock_req = mock.MagicMock()
-    mock_req.query_params = {}
-    dummy_file = UploadFile(file=io.BytesIO(b"audio"), filename="test.wav")
-
-    with (
-        mock.patch("modules.api.support.request_utils.resolve_local_path", return_value="/mapped/local/file.mkv"),
-        mock.patch("modules.api.support.request_utils.extract_uploaded_file", return_value=dummy_file),
-        mock.patch("modules.api.support.request_utils.materialize_upload_file") as materialize_mock,
-    ):
-        path, upload = await routes_utils.resolve_and_materialize_upload("/local/path", dummy_file, None, {}, mock_req)
-        assert path == "/mapped/local/file.mkv"
-        assert upload is None
-        materialize_mock.assert_not_called()
-
-
-@pytest.mark.anyio
-async def test_resolve_and_materialize_upload_materializes_when_needed():
-    """Missing local paths should materialize uploaded files."""
-    mock_req = mock.MagicMock()
-    mock_req.query_params = {}
-    dummy_file = UploadFile(file=io.BytesIO(b"audio"), filename="test.wav")
-
-    with (
-        mock.patch("modules.api.support.request_utils.resolve_local_path", return_value=None),
-        mock.patch("modules.api.support.request_utils.extract_uploaded_file", return_value=dummy_file),
-        mock.patch("modules.api.support.request_utils.materialize_upload_file", return_value=("/materialized/path", "test.wav")),
-    ):
-        path, upload = await routes_utils.resolve_and_materialize_upload("/missing/path.mkv", dummy_file, None, {}, mock_req)
-        assert path == "/missing/path.mkv"
-        assert upload == "/materialized/path"
-
-
-@pytest.mark.anyio
-async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_when_raw_pcm_true():
-    """raw_pcm=true should force raw PCM input flags if materialization fails."""
-    mock_req = mock.MagicMock()
-    mock_req.query_params = {"raw_pcm": "true"}
-    dummy_file = UploadFile(file=io.BytesIO(b"audio"), filename="test.wav")
-
-    with (
-        mock.patch("modules.api.support.request_utils.resolve_local_path", return_value=None),
-        mock.patch("modules.api.support.request_utils.extract_uploaded_file", return_value=dummy_file),
-        mock.patch("modules.api.support.request_utils.materialize_upload_file", return_value=(None, None)) as mat_mock,
-    ):
-        path, upload = await routes_utils.resolve_and_materialize_upload("/missing/path.mkv", dummy_file, None, {}, mock_req)
-        assert path == "/missing/path.mkv"
-        assert upload is None
-        mat_mock.assert_called_once()
-        assert routes_utils.utils.THREAD_CONTEXT.input_flags == ["-f", "s16le", "-ar", "16000", "-ac", "1"]
-
-
-@pytest.mark.anyio
-async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_when_encode_false():
-    """encode=false (from Bazarr) sets raw s16le PCM input flags."""
-    routes_utils.utils.THREAD_CONTEXT.input_flags = None
-    mock_req = mock.MagicMock()
-    mock_req.query_params = {"encode": "false"}
-    dummy_file = UploadFile(file=io.BytesIO(b"audio"), filename="test.wav")
-
-    with (
-        mock.patch("modules.api.support.request_utils.resolve_local_path", return_value=None),
-        mock.patch("modules.api.support.request_utils.extract_uploaded_file", return_value=dummy_file),
-        mock.patch("modules.api.support.request_utils.materialize_upload_file", return_value=(None, None)) as mat_mock,
-    ):
-        path, upload = await routes_utils.resolve_and_materialize_upload("/missing/path.mkv", dummy_file, None, {}, mock_req)
-        assert path == "/missing/path.mkv"
-        assert upload is None
-        mat_mock.assert_called_once()
-        assert routes_utils.utils.THREAD_CONTEXT.input_flags == ["-f", "s16le", "-ar", "16000", "-ac", "1"]
-
-
 def test_prepare_source_path_local_missing_raises():
     """Verify local path only input raises a clear accessibility error."""
-    with mock.patch("modules.api.support.request_utils.resolve_local_path", return_value=None):
+    with mock.patch("modules.api.support.source_resolution.resolve_local_path", return_value=None):
         with pytest.raises(ValueError, match="Path not accessible"):
             routes_utils.prepare_source_path(local_path="/not/mounted/movie.mkv", audio_file=None)
 

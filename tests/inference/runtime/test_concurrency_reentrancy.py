@@ -56,43 +56,15 @@ The tests below:
 import ast
 import inspect
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
-import pytest
-
-from modules.core import utils
 from modules.inference import scheduler
 from modules.inference.runtime import model_manager
 from modules.inference.runtime.model_manager import model_lock_ctx as _module_level_claim_lock
 from tests.inference.scheduler.priority._preemption_test_helpers import _capture_worker_exc, _poll_until
-
-
-@pytest.fixture(autouse=True)
-def reset_state() -> Iterator[None]:
-    """Reset model_manager and scheduler global state before each test."""
-    model_manager.MODEL_POOL.clear()
-    model_manager.PREPROCESSOR_POOL.clear()
-
-    with mock.patch("modules.core.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
-        from modules.inference.scheduler import SchedulerState
-
-        scheduler.STATE = SchedulerState()
-        scheduler.STATE.engine_initialized = True
-
-    utils.THREAD_CONTEXT.is_priority = False
-    if hasattr(utils.THREAD_CONTEXT, "assigned_unit"):
-        utils.THREAD_CONTEXT.assigned_unit = None
-
-    yield
-
-    model_manager.MODEL_POOL.clear()
-    model_manager.PREPROCESSOR_POOL.clear()
-    with mock.patch("modules.core.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "CPU"}]):
-        from modules.inference.scheduler import SchedulerState
-
-        scheduler.STATE = SchedulerState()
 
 
 def _assert_lock_type_is_semaphore_not_rlock(lock: threading.Semaphore) -> None:
@@ -246,19 +218,99 @@ def _call_targets_model_lock_ctx(node: ast.Call, aliases: set[str]) -> bool:
     return isinstance(func, ast.Attribute) and func.attr == "model_lock_ctx"
 
 
+def _read_defining_module_source(fn: Callable[..., Any]) -> str:
+    """Read fn's defining file directly, bypassing inspect.getsource()'s
+    linecache/loader-based lookup. That path has been observed to raise
+    "could not get source code" for functions in a module pytest's assertion-
+    rewrite import hook has instrumented, specifically on Python 3.13.15 (the
+    CI container's interpreter) though not on 3.13.13 (this repo's other
+    tested environment) -- reading the file directly sidesteps the loader
+    entirely and isn't sensitive to that difference.
+
+    Also tolerates stale pytest-rewritten ``.pyc`` files whose ``co_filename``
+    still points at a host absolute path that does not exist inside the Docker
+    test image: fall back to this module's on-disk ``__file__``, but only when
+    ``fn`` is actually defined in this module -- substituting this file's
+    source for a foreign function would silently classify it against the
+    wrong AST instead of failing loudly.
+    """
+    file = inspect.getsourcefile(fn) or inspect.getfile(fn)
+    path = Path(file)
+    if not path.is_file():
+        if fn.__module__ != __name__:
+            raise OSError(f"Source file for {fn!r} not found on disk: {file!r} (module {fn.__module__!r})")
+        path = Path(__file__)
+    with path.open(encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _function_ast(fn: Callable[..., Any]) -> ast.AST:
+    """Parse fn's defining module and return fn's own FunctionDef/AsyncFunctionDef
+    subtree, equivalent to what `ast.parse(inspect.getsource(fn))` would give.
+
+    Matches by exact defining line number (`fn.__code__.co_firstlineno`) for
+    undecorated functions, and by decorator-inclusive definition span when
+    `co_firstlineno` points at a leading decorator. Name-only matching would
+    silently return the WRONG node (and so the wrong reentrancy classification)
+    whenever two functions/methods anywhere in the module share a name, e.g. a
+    duplicate method name on two different classes or a redefined module-level
+    function. Raises LookupError when no exact or span match is found rather
+    than falling back to an arbitrary same-name candidate."""
+    module_tree = ast.parse(_read_defining_module_source(fn))
+    candidates = _same_named_function_defs(module_tree, fn.__name__)
+    return _best_matching_candidate(candidates, fn.__code__.co_firstlineno, fn.__name__)
+
+
+def _same_named_function_defs(module_tree: ast.AST, name: str) -> list[ast.AST]:
+    return [node for node in ast.walk(module_tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name]
+
+
+def _definition_span_start(node: ast.AST) -> int:
+    """First line of a function definition, including leading decorators."""
+    decorators = getattr(node, "decorator_list", None) or []
+    if decorators:
+        return min(decorator.lineno for decorator in decorators)
+    return node.lineno
+
+
+def _best_matching_candidate(candidates: list[ast.AST], target_line: int, name: str) -> ast.AST:
+    exact = _exact_candidate(candidates, target_line)
+    if exact is not None:
+        return exact
+    spanning = next((_candidate_spanning_line(node, target_line) for node in candidates), None)
+    if spanning is not None:
+        return spanning
+    raise LookupError(f"Could not locate function {name!r} in its own source file")
+
+
+def _exact_candidate(candidates: list[ast.AST], target_line: int) -> ast.AST | None:
+    return next((node for node in candidates if node.lineno == target_line), None)
+
+
+def _candidate_spanning_line(node: ast.AST, target_line: int) -> ast.AST | None:
+    start = _definition_span_start(node)
+    end = getattr(node, "end_lineno", None) or node.lineno
+    return node if start <= target_line <= end else None
+
+
+def _module_scope_aliases_of(module_tree: ast.AST, target_name: str) -> set[str]:
+    return {alias.asname for node in module_tree.body for alias in _import_aliases(node) if alias.name == target_name and alias.asname}
+
+
 def _find_module_scope_model_lock_ctx_aliases(fn: Callable[..., Any]) -> set[str]:
-    """Return aliases bound by `import model_lock_ctx as <alias>` at MODULE scope
-    in `fn`'s defining module. `inspect.getsource(fn)` only returns the function's
-    own source, so a module-level aliased import (as opposed to a function-local
-    one) would otherwise be invisible to `_uses_model_lock_ctx`."""
-    module = inspect.getmodule(fn)
-    if module is None:
-        return set()
+    """Return aliases bound by `import model_lock_ctx as <alias>` at true MODULE
+    scope (the module's own top-level statements) in `fn`'s defining module --
+    NOT aliases from an unrelated function/class body elsewhere in the same
+    file, which a plain `ast.walk` over the whole module would also pick up
+    and incorrectly apply to every target function checked. `_function_ast(fn)`
+    only returns the function's own subtree, so a genuine module-level aliased
+    import (as opposed to a function-local one) would otherwise be invisible
+    to `_uses_model_lock_ctx`."""
     try:
-        module_source = inspect.getsource(module)
-    except (OSError, TypeError):
+        module_source = _read_defining_module_source(fn)
+    except OSError:
         return set()
-    return _find_model_lock_ctx_aliases(ast.parse(module_source))
+    return _module_scope_aliases_of(ast.parse(module_source), "model_lock_ctx")
 
 
 def _uses_model_lock_ctx(fn: Callable[..., Any]) -> bool:
@@ -268,7 +320,7 @@ def _uses_model_lock_ctx(fn: Callable[..., Any]) -> bool:
     import alias, e.g. `from ... import model_lock_ctx as claim_lock` followed
     by `claim_lock(...)` -- whether that import is function-local or bound at
     module scope in `fn`'s defining module."""
-    tree = ast.parse(inspect.getsource(fn))
+    tree = _function_ast(fn)
     aliases = _find_model_lock_ctx_aliases(tree) | _find_module_scope_model_lock_ctx_aliases(fn)
     return any(isinstance(node, ast.Call) and _call_targets_model_lock_ctx(node, aliases) for node in ast.walk(tree))
 
@@ -331,3 +383,65 @@ def test_uses_model_lock_ctx_detects_module_scope_aliased_import_call():
     would otherwise be invisible to the alias resolver, letting a "_direct"
     helper smuggle in a re-acquisition via a module-level aliased import."""
     assert _uses_model_lock_ctx(_fn_calling_model_lock_ctx_via_module_alias) is True
+
+
+class _DuplicateNameHost:
+    """Regression fixture: a method sharing its name with a module-level function
+    below, but with unrelated content (no model_lock_ctx call)."""
+
+    def duplicate_named_target(self) -> None:
+        """No-op: this method's name collides with the module-level function below."""
+
+    def other_public_method(self) -> None:
+        """No-op sibling method, present only to satisfy pylint's class-shape check."""
+
+
+def duplicate_named_target() -> None:
+    """Regression fixture: a module-level function sharing its name with the
+    method above. _function_ast(duplicate_named_target) must resolve to THIS
+    node (matched by line number), not the unrelated method, since it calls
+    model_lock_ctx() and the method does not -- a name-only match could return
+    either one nondeterministically and silently misclassify reentrancy."""
+    with _module_level_claim_lock():
+        pass
+
+
+def test_function_ast_resolves_correct_node_when_names_are_duplicated():
+    """_function_ast (and therefore _uses_model_lock_ctx) must distinguish two
+    same-named callables in the same module by defining line, not just name --
+    otherwise it could silently classify the wrong one as calling/not calling
+    model_lock_ctx()."""
+    assert _uses_model_lock_ctx(duplicate_named_target) is True
+    assert _uses_model_lock_ctx(_DuplicateNameHost().duplicate_named_target) is False
+
+
+def _unrelated_function_with_local_alias_reuse() -> None:
+    """Regression fixture: imports model_lock_ctx under a LOCAL (function-scope)
+    alias that happens to reuse a common short name. This alias must stay
+    scoped to this function and never leak into module-scope alias resolution
+    for other, unrelated target functions checked in the same test run."""
+    from modules.inference.runtime.model_manager import model_lock_ctx as reused_alias_name
+
+    with reused_alias_name():
+        pass
+
+
+def _target_calling_unrelated_name_not_model_lock_ctx() -> None:
+    """Regression fixture: calls something named `reused_alias_name`, but one
+    that has nothing to do with model_lock_ctx (a plain no-op callable) -- if
+    module-scope alias collection incorrectly picked up nested/local aliases
+    from unrelated functions elsewhere in the file, this target would be
+    misclassified as calling model_lock_ctx() when it does not."""
+
+    def reused_alias_name() -> None:
+        return None
+
+    reused_alias_name()
+
+
+def test_module_scope_alias_collection_ignores_unrelated_function_local_aliases():
+    """_find_module_scope_model_lock_ctx_aliases must only see aliases bound by
+    the module's own top-level import statements, not aliases from other
+    functions' local scopes (like _unrelated_function_with_local_alias_reuse's
+    `reused_alias_name`) reached via a naive whole-module `ast.walk`."""
+    assert _uses_model_lock_ctx(_target_calling_unrelated_name_not_model_lock_ctx) is False
