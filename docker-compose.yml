@@ -36,41 +36,81 @@ services:
     user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
     ports:
       - "9000:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/ | grep -q 'healthy'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
     # --- [HARDWARE ACCELERATION (OPTIONAL)] ---
     # The application automatically detects and orchestrates available hardware (NVIDIA CUDA,
     # Intel iGPU/Arc/NPU, AMD Radeon ROCm/DirectML, or CPU fallback).
     #
-    # Default out-of-the-box configuration runs on CPU / default environment.
-    # Uncomment the section corresponding to your host hardware below:
+    # This deployment targets the configured bare-metal Intel+iGPU/NVIDIA host.
+    # CPU fallback remains possible, but is reported as a hardware-validation failure.
 
     # =========================================================================
     # OPTION 1: NVIDIA Silicon (CUDA)
     # Prerequisites: Install 'nvidia-container-toolkit' on the host system.
     # =========================================================================
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1          # Set to 'all' or specific count
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
     # =========================================================================
     # OPTION 2: Intel Silicon (NPU / iGPU / Arc GPU)
     # =========================================================================
-    # Linux Intel Hosts (Bare-metal):
-    # group_add:
-    #   - "991"                 # Host render/accel group (derive via: stat -c '%g' /dev/dri/renderD* /dev/accel/*)
-    # devices:
-    #   - /dev/dri:/dev/dri     # Maps all Intel GPU render nodes (multi-GPU safe)
-    #   - /dev/accel:/dev/accel # Maps all Intel NPU compute nodes (multi-NPU safe)
+    # Linux Intel Hosts (Bare-metal) — set HOST_INTEL_RENDER_GID explicitly (no silent default):
+    #   echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD128)" >> .env
+    #   # or: echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD* | head -n 1)" >> .env
+    group_add:
+      - "${HOST_INTEL_RENDER_GID:-990}"
+    devices:
+      - /dev/dri:/dev/dri
+    #   - /dev/accel:/dev/accel # Only if the host has an Intel NPU
+    # On a hybrid NVIDIA+Intel host, `devices:` alone can drop the Intel entry
+    # from /dev/dri/by-path (which Intel's compute-runtime uses to enumerate
+    # GPUs), even though /dev/dri/renderD* itself is present and openable. Pair
+    # this with the bind mount in `volumes:` below, which mirrors the host
+    # directory exactly and fixes that.
     #
     # Windows 11 / WSL2 Intel Hosts:
     # devices:
     #   - /dev/dxg:/dev/dxg     # WSL DirectX GPU bridge for Intel/NVIDIA compute
     #   - /dev/dri:/dev/dri     # Optional: exposed DRM render nodes in WSL2
     #   - /dev/accel:/dev/accel # Optional: exposed NPU accel nodes in WSL2
+    #
+    # Windows 11 / WSL2 Intel Hosts -- telemetry access (optional, only needed if
+    # intel_gpu_top/npu_busy_time PMU/sysfs access is blocked by container isolation;
+    # see docs/SETUP.md's "Intel telemetry container-access note"):
+    # SECURITY WARNING: pid: host and privileged: true grant host-wide process
+    # visibility and near-full host device/kernel access -- treat privileged mode as
+    # a last resort only on hosts you trust. Try the narrower cap_add (PERFMON/
+    # SYS_ADMIN) and read-only sysfs mounts below first; only add pid: host/
+    # privileged: true if telemetry still fails to enumerate with those alone.
+    # pid: host
+    # privileged: true
+    # cap_add:
+    #   - PERFMON
+    #   - SYS_ADMIN
+    # Add these mounts to this service's existing `volumes:` block below; do not
+    # uncomment a second `volumes:` key.
+    # volumes:
+    #   - /sys:/sys:ro
+    #   # The next two paths are NPU-specific and may not exist on hosts without an
+    #   # Intel NPU (e.g. iGPU/Arc-only systems) or on some WSL2 kernel configurations --
+    #   # Docker Compose has no "mount only if present" option, and bind-mounting a
+    #   # nonexistent host path can fail or create an unintended empty directory
+    #   # depending on Docker version/OS. Drop these two lines if your host doesn't
+    #   # expose them (check `ls /sys/class/accel /sys/bus/pci/drivers/intel_vpu` on
+    #   # the host first).
+    #   - /sys/class/accel:/sys/class/accel:ro
+    #   - /sys/bus/pci/drivers/intel_vpu:/sys/bus/pci/drivers/intel_vpu:ro
 
     # =========================================================================
     # OPTION 3: AMD Radeon Silicon (ROCm / DirectML)
@@ -117,16 +157,30 @@ services:
       # Speaker diarization token (Hugging Face). Required for PyAnnote speaker segmentation.
       - DIARIZATION_HF_TOKEN=${DIARIZATION_HF_TOKEN:-}
 
+      # --- [LIBRARY PATH FIXES] ---
+      # 1. ctranslate2 (faster-whisper's backend) dlopen()s libcublas.so.12 /
+      #    libcudnn.so.9, but the main env only ships CUDA 13.x libs (matching
+      #    torch); the isolated WhisperX layer happens to bundle CUDA 12, so
+      #    point at it here instead of vendoring a second CUDA 12 install.
+      # 2. /usr/lib/x86_64-linux-gnu is prepended ahead of everything else: on
+      #    a hybrid NVIDIA+Intel host, the CUDA apt packages' own libOpenCL.so.1
+      #    otherwise wins the default search over the system's multi-vendor ICD
+      #    loader, silently hiding the Intel GPU from OpenCL/OpenVINO.
+      # Must fully restate (not reference ${LD_LIBRARY_PATH}) the Dockerfile's
+      # baked-in value -- Compose interpolates that against the host/compose
+      # environment at parse time, not the image's runtime value.
+      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/app/libs/whisperx/nvidia/cublas/lib:/app/libs/whisperx/nvidia/cudnn/lib:/usr/lib/wsl/lib:/opt/rocm/lib:/opt/intel/openvino/runtime/lib/intel64:/opt/intel/openvino/runtime/3rdparty/tbb/lib:/opt/intel/openvino/runtime/3rdparty/omp/lib
+
       # --- [ENGINE CONFIGURATION] ---
       # Hardware Target: AUTO (Resolves CUDA -> AMD -> Intel GPU -> Intel NPU -> CPU),
       # or explicit: CPU, CUDA, GPU, NPU, AMD
-      - ASR_DEVICE=AUTO
+      - ASR_DEVICE=${ASR_DEVICE:-AUTO}
       # Computation Precision: AUTO, int8, float16 (default: AUTO)
       - ASR_COMPUTE_TYPE=AUTO
       # Model Weight Source (Faster-Whisper ID or local path)
       - ASR_MODEL=Systran/faster-whisper-large-v3
       # ASR engine backend: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
-      - ASR_ENGINE=AUTO
+      - ASR_ENGINE=${ASR_ENGINE:-AUTO}
       # Intel Whisper long-media stability tuning (only used by INTEL-WHISPER)
       - INTEL_ASR_CHUNK_DURATION=300
 
@@ -144,7 +198,7 @@ services:
 
       # --- [PREPROCESSING (UVR / MDX-NET)] ---
       # Target Device: AUTO (recommended), CPU, CUDA (NVIDIA), AMD (ROCm), GPU (Intel), NPU (Intel)
-      - ASR_PREPROCESS_DEVICE=AUTO
+      - ASR_PREPROCESS_DEVICE=${ASR_PREPROCESS_DEVICE:-AUTO}
       # Isolation Model Filename
       - VOCAL_SEPARATION_MODEL=UVR-MDX-NET-Inst_HQ_3.onnx
       # Vocal Separation Logic Toggles
@@ -170,15 +224,15 @@ services:
       # --- [ACCELERATOR ORCHESTRATION] ---
       # Control how many physical hardware units are utilized. 
       # Default: 1 (Safest for multi-service environments). Set to 'ALL' to use everything.
-      # - MAX_CUDA_UNITS=1
-      # - MAX_GPU_UNITS=1
+      - MAX_CUDA_UNITS=${MAX_CUDA_UNITS:-1}
+      - MAX_GPU_UNITS=${MAX_GPU_UNITS:-1}
       # - MAX_NPU_UNITS=1
       # - MAX_AMD_UNITS=1
       # - MAX_CPU_UNITS=1
 
       # --- [MEDIA PROCESSING] ---
       # Hardware Acceleration: none (CPU), cuda (NVIDIA), vaapi, qsv (Intel)
-      - FFMPEG_HWACCEL=none
+      - FFMPEG_HWACCEL=${FFMPEG_HWACCEL:-qsv}
       # Normalization: dynaudnorm (Standard), loudnorm (Broadcast Quality)
       - FFMPEG_FILTER=dynaudnorm
 
@@ -204,6 +258,9 @@ services:
       - /tmp/numba-cache:size=128M
 
     volumes:
+      # Intel OPTION 2 above: bind mount /dev/dri (fixes by-path) -- uncomment
+      # together with that block.
+      # - /dev/dri:/dev/dri
       # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
       - ./model_cache:/app/model_cache
       # Persistent storage for task history, telemetry, and system logs

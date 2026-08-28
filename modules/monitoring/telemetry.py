@@ -6,6 +6,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from typing import Any
 
 from modules.core import config, logging_setup, utils
@@ -16,7 +17,11 @@ from modules.monitoring import history_manager, metrics_discovery
 logger = logging.getLogger(__name__)
 SERVICE_START_TIME: float = time.time()
 _STOP_EVENT: threading.Event = threading.Event()
-TELEMETRY_HISTORY: list[dict[str, Any]] = []
+# deque, not list: at the high end of the exposed retention range (720h/30 days,
+# sampled every 2s = up to 1,296,000 entries), list.pop(0) is O(n) per trim --
+# deque.popleft() is O(1). maxlen isn't fixed here because retention_hours (and
+# so max_points) is read fresh from config each time _telemetry_worker() starts.
+TELEMETRY_HISTORY: deque[dict[str, Any]] = deque()
 _TELEMETRY_LOCK: threading.Lock = threading.Lock()
 
 _DISPLAYABLE_STATUSES: set[str] = {
@@ -130,7 +135,7 @@ def _telemetry_worker() -> None:
                     }
                 )
                 if len(TELEMETRY_HISTORY) > max_points:
-                    TELEMETRY_HISTORY.pop(0)
+                    TELEMETRY_HISTORY.popleft()
         except (OSError, ValueError, AttributeError, KeyError, TypeError, RuntimeError) as e:
             logger.debug("[Telemetry] Worker cycle failed: %s", e)
         time.sleep(2)
@@ -144,7 +149,6 @@ def get_service_stats() -> dict[str, Any]:
     whisper_status, uvr_status = _resolve_engine_statuses(tasks)
     telemetry_snap = _get_telemetry_snapshot()
     latest_telemetry = _get_latest_telemetry(telemetry_snap)
-    telemetry_snap = _downsample_telemetry(telemetry_snap)
     actual_active, actual_queued = _count_task_statuses(tasks)
     hw_units_with_status = _build_hardware_unit_statuses(tasks)
 
@@ -364,7 +368,7 @@ def _resolve_uvr_status(tasks: list[dict[str, Any]]) -> str:
 
 def _get_telemetry_snapshot() -> list[dict[str, Any]]:
     with _TELEMETRY_LOCK:
-        return TELEMETRY_HISTORY[:]
+        return _downsample_telemetry(TELEMETRY_HISTORY)
 
 
 def _get_latest_telemetry(telemetry_snap: list[dict[str, Any]]) -> dict[str, Any]:

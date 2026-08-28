@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git stash)",
+      "Bash(git stash list*)",
+      "Bash(git stash show*)",
+      "Bash(git stash)"
+    ]
+  }
+}

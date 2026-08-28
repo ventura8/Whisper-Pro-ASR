@@ -77,6 +77,7 @@ Dashboard task list MUST always render in this **exact** order:
 - Dashboard rendering must continue to read `telemetry.hardware_util` keyed by unit id, with legacy singleton fields treated as compatibility-only fallback paths.
 - Telemetry history snapshots should preserve `hardware_util` so the hardware chart can replay per-unit GPU/NPU/CUDA usage instead of flattening history to legacy aggregate fields.
 - History cards should display the hardware unit used for execution. If runtime `unit_id` is cleared during post-processing, the dashboard must fall back to persisted history hardware fields (for example `history_unit_id`).
+- History hardware tag markup (`_historyHardwareTagMarkup`) must HTML-escape labels before `innerHTML` interpolation so unknown/family labels derived from `unitId` cannot inject markup. Callers (`getHwIconAndLabel` live path and meta fallback) pass raw labels into the helper.
 
 ### 5. Live Progress Updates
 
@@ -84,6 +85,8 @@ Dashboard task list MUST always render in this **exact** order:
 - Task progress fields (`current_position`, `progress`, `stage`) update in-place without removing/re-adding task card.
 - Log buffers auto-scroll to bottom on update.
 - Chart downsampling: server limits to 300 points; client applies additional downsampling for browser performance.
+- Server-side telemetry downsampling occurs while holding the telemetry lock, so dashboard responses copy at most 300 history points rather than a full retention deque.
+- Hardware-engine badge placeholders (`unknown`, `none`, `null`, `undefined`, `resuming`, and equivalent empty values) normalize to `ready` before display.
 - Hardware acceleration chart labeling/style contract: each non-CPU series custom legend badge must include `type + unit id` (for example `CUDA CUDA:0 - NVIDIA GPU 0`) and use deterministic per-type differentiation so overlapping lines remain readable (CUDA solid/circle, Intel GPU dashed/square, NPU short-dashed/triangle). Marker cadence on the chart line must also vary per unit so symbols appear at different intervals across series.
 - Multi-unit fallback contract: if `telemetry.hardware_util` is absent, dashboard rendering must still resolve per-unit values (not singleton type values) for repeated unit types by using unit-ID keyed and index-based legacy fields for CUDA, Intel GPU, and NPU units.
 

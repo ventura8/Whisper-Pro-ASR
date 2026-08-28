@@ -76,6 +76,25 @@ if ! docker ps >/dev/null 2>&1; then
 	fi
 fi
 
+# The default buildx driver ("docker") does not support --cache-to=type=local;
+# only the docker-container driver does. Create/reuse a dedicated builder so
+# local iterative builds get the same fast-rebuild cache-export property CI
+# already gets via cache-to=type=gha.
+BUILDX_BUILDER_NAME="whisper-pro-asr-builder"
+ensure_buildx_builder() {
+	if "${DOCKER_CMD[@]}" buildx inspect "$BUILDX_BUILDER_NAME" >/dev/null 2>&1; then
+		"${DOCKER_CMD[@]}" buildx use "$BUILDX_BUILDER_NAME"
+	else
+		"${DOCKER_CMD[@]}" buildx create --name "$BUILDX_BUILDER_NAME" --driver docker-container --use
+	fi
+}
+ensure_buildx_builder
+
+# Named volume persisting tool run-time caches (ruff/pylint/eslint/stylelint/
+# pytest) across separate `docker run` invocations on this machine -- build-time
+# cache mounts alone never reach the running container.
+TOOL_CACHE_VOLUME="whisper-pro-asr-tool-cache"
+
 ensure_poetry_lock() {
 	printf "\n--- Verifying Poetry Lock File ---\n"
 	user_args=()
@@ -91,13 +110,30 @@ ensure_poetry_lock() {
 		-v "${PROJECT_ROOT}/poetry.lock:/workspace/poetry.lock" \
 		-w /workspace \
 		"$PYTHON_IMAGE" \
-		/bin/bash -lc "export HOME=/tmp && export PATH=\"/tmp/.local/bin:\$PATH\" && export PIP_ROOT_USER_ACTION=ignore && export PIP_NO_WARN_SCRIPT_LOCATION=1 && python -m pip install --quiet --user poetry==2.4.1 && python -m poetry config virtualenvs.create false && if [ ! -f poetry.lock ] || ! python -m poetry check --lock >/dev/null 2>&1; then python -m poetry lock --no-interaction; fi"
+		/bin/bash -lc "export HOME=/tmp && export PATH=\"/tmp/.local/bin:\$PATH\" && export PIP_ROOT_USER_ACTION=ignore && export PIP_NO_WARN_SCRIPT_LOCATION=1 && python -m pip install --quiet --user --upgrade \"pip==${PIP_VERSION}\" && python -m pip install --quiet --user \"poetry==${POETRY_VERSION}\" && python -m poetry config virtualenvs.create false && if [ ! -f poetry.lock ] || ! python -m poetry check --lock >/dev/null 2>&1; then python -m poetry lock --no-interaction; fi"
 }
 
 ensure_poetry_lock
 
 printf "\n--- Building Test Image ---\n"
-"${DOCKER_CMD[@]}" build -f Dockerfile.test --target test -t whisper-pro-asr-test .
+DOCKER_BUILD_CACHE_DIR="${PROJECT_ROOT}/.docker-build-cache"
+DOCKER_BUILD_CACHE_DIR_NEW="${DOCKER_BUILD_CACHE_DIR}.new"
+# Export to a fresh dest, then atomically replace. Writing cache-to the same
+# directory used for cache-from can leave buildx trying to mkdir an empty path
+# while finalizing the local OCI cache (ingest → blobs).
+rm -rf "$DOCKER_BUILD_CACHE_DIR_NEW"
+mkdir -p "$DOCKER_BUILD_CACHE_DIR" "$DOCKER_BUILD_CACHE_DIR_NEW"
+"${DOCKER_CMD[@]}" buildx build \
+	-f Dockerfile.test --target test -t whisper-pro-asr-test \
+	--cache-from "type=local,src=${DOCKER_BUILD_CACHE_DIR}" \
+	--cache-to "type=local,dest=${DOCKER_BUILD_CACHE_DIR_NEW},mode=max" \
+	--load .
+rm -rf "${DOCKER_BUILD_CACHE_DIR}.old"
+if [ -d "$DOCKER_BUILD_CACHE_DIR" ]; then
+	mv "$DOCKER_BUILD_CACHE_DIR" "${DOCKER_BUILD_CACHE_DIR}.old"
+fi
+mv "$DOCKER_BUILD_CACHE_DIR_NEW" "$DOCKER_BUILD_CACHE_DIR"
+rm -rf "${DOCKER_BUILD_CACHE_DIR}.old"
 
 printf "\n--- Execute Test Suite ---\n"
 REPORTS_DIR="${PROJECT_ROOT}/reports"
@@ -116,6 +152,7 @@ cat <<'DOCKER_TEST_SCRIPT' | "${DOCKER_CMD[@]}" run --rm -i \
 	-e CI=true \
 	-v "${PROJECT_ROOT}/assets:/app/assets" \
 	-v "${REPORTS_DIR}:/reports" \
+	-v "${TOOL_CACHE_VOLUME}:/var/cache/whisper-pro-asr-tools" \
 	whisper-pro-asr-test /bin/bash -s
 bash tests/run_suite.sh
 TEST_EXIT_CODE=$?
@@ -132,6 +169,7 @@ printf "\n--- Regenerating Coverage Badge (Mandatory Final Stage) ---\n"
 "${DOCKER_CMD[@]}" run --rm \
 	-v "${PROJECT_ROOT}/assets:/app/assets" \
 	-v "${REPORTS_DIR}:/reports" \
+	-v "${TOOL_CACHE_VOLUME}:/var/cache/whisper-pro-asr-tools" \
 	whisper-pro-asr-test /bin/bash -lc "if [ ! -s /reports/coverage.xml ]; then echo 'Error: /reports/coverage.xml is missing or empty'; exit 1; fi; genbadge coverage -i /reports/coverage.xml -o /app/assets/coverage.svg"
 
 if [ ! -s "${PROJECT_ROOT}/assets/coverage.svg" ]; then
@@ -146,7 +184,7 @@ fi
 
 printf "\n--- Code Coverage Summary ---\n"
 if [ -f "${REPORTS_DIR}/coverage_output.txt" ]; then
-	sed -n '/---------- coverage/,/TOTAL/p' "${REPORTS_DIR}/coverage_output.txt"
+	sed -n -E '/^[-_]+ coverage:/,/^TOTAL/p' "${REPORTS_DIR}/coverage_output.txt"
 fi
 
 printf "\n--- Done ---\n"

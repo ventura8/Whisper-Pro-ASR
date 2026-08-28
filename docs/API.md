@@ -72,7 +72,8 @@ Transcribe audio to SRT/VTT/JSON with optional speaker diarization. All incoming
 **Input Precedence**:
 
 - If `local_path` is readable inside the service container (volume mapping works), the request uses that path directly and skips upload materialization.
-- If `local_path` is not readable/mapped, the service falls back to the uploaded payload (`audio_file`/`file`) when present.
+- If `local_path` is unavailable, a readable `video_file` inside the approved roots is used directly without upload materialization.
+- If neither path is usable, the service falls back to the uploaded payload (`audio_file`/`file`) when present.
 
 **Parameters**:
 
@@ -82,8 +83,8 @@ Transcribe audio to SRT/VTT/JSON with optional speaker diarization. All incoming
 | `local_path` | string | - | Server file path (faster) |
 | `task` | string | `transcribe` | `transcribe` or `translate` |
 | `language` | string | auto | Source language (`en`, `es`, etc.) |
-| `output` | string | `srt` | `srt`, `vtt`, `txt`, `tsv`, or `json` |
-| `initial_prompt` | string | config | Context prompt to guide transcription |
+| `output` | string | `srt` | `srt`, `vtt`, `txt`, `tsv`, or `json`. `response_format` is accepted as an alias (OpenAI-compatible clients send this name); its `text` and `verbose_json` values map to `txt` and `json` respectively. |
+| `initial_prompt` | string | config | Context prompt to guide transcription. `prompt` is accepted as an alias (the field name OpenAI SDKs send); `initial_prompt` takes precedence if both are provided. |
 | `vad_filter` | bool | `true` | Enable Voice Activity Detection filtering |
 | `word_timestamps` | bool | `false` | Include word-level timestamps |
 | `subtitle_highlight_words` | bool | `false` | Highlight active word in SRT/VTT (enables `word_timestamps` automatically) |
@@ -94,13 +95,14 @@ Transcribe audio to SRT/VTT/JSON with optional speaker diarization. All incoming
 | `max_line_width` | int | - | Max characters per subtitle line |
 | `max_line_count` | int | - | Max lines per subtitle block |
 | `clean_audio` | bool | - | Enable/disable vocal isolation (WhisperX prep). Canonical parameter: overrides `vocal_separation` and `enable_vocal_separation`. If omitted, falls back to `ENABLE_VOCAL_SEPARATION`. |
-| `encode` | bool | `true` | When `false`, skip FFmpeg normalization and treat input as raw 16 kHz mono s16le PCM (Bazarr compatibility) |
+| `encode` | bool | `true` | When `false`, the input is treated as raw 16 kHz mono s16le PCM (Bazarr compatibility); FFmpeg still runs, using the raw-PCM input flags instead of format auto-detection |
 
 **Bazarr raw PCM (`encode=false`)**:
 
 - Bazarr may send pre-standardized PCM with `encode=false`.
-- The service skips FFmpeg conversion in that case and uses the mapped file path directly.
-- `encode=true` (default) runs the normal FFmpeg standardization path to 16 kHz mono WAV.
+- The service still runs FFmpeg in that case, passing the raw-PCM format flags (`-f s16le -ar 16000 -ac 1`) so the headerless input can be decoded — this differs from `encode=true` only in the flags passed to FFmpeg, not in whether FFmpeg runs.
+- `encode=true` (default) runs the normal FFmpeg standardization path to 16 kHz mono WAV with format auto-detection.
+- A readable `local_path` or `video_file` is treated as the original media container and takes precedence over a bypassed upload. Raw-PCM flags are cleared for that mapped path so FFmpeg uses container auto-detection rather than interpreting it as headerless PCM.
 
 **Vocal Isolation (`clean_audio`) precedence**:
 
@@ -117,7 +119,7 @@ This precedence only controls whether the vocal isolation/prep stage runs; it do
 When `diarize=true`, the service runs the WhisperX post-processing pipeline:
 
 1. **Alignment**: Aligns transcription segments to audio using `whisperx.align`.
-2. **Diarization**: Identifies speakers using `whisperx.diarization.DiarizationPipeline` (requires `DIARIZATION_HF_TOKEN` or request `hf_token`).
+2. **Diarization**: Identifies speakers using `whisperx.diarize.DiarizationPipeline` (requires `DIARIZATION_HF_TOKEN` or request `hf_token`).
 3. **Speaker Assignment**: Maps speaker IDs to segments via `whisperx.assign_word_speakers`.
 
 Output formats (SRT, VTT, TXT, TSV) will include speaker labels (e.g., `[SPEAKER_00]: Hello world`).
@@ -168,6 +170,8 @@ OpenAI-compatible translation endpoint. Behaves identically to `/asr` with `task
 ### `POST /v1/audio/transcriptions`
 
 OpenAI-compatible transcription endpoint. Behaves identically to `/asr` with `task=transcribe` defaults and accepts equivalent parameters.
+
+**OpenAI SDK compatibility**: both endpoints accept the multipart field name `file` (OpenAI SDKs' upload field) as an alias for `audio_file` (Bazarr's field name) — if both are sent in the same request, `audio_file` takes precedence. They also accept `model` (any value; the service has one active model and the field is accepted but not used to select it), `prompt` (alias for `initial_prompt`), and `response_format` (alias for `output`, including the OpenAI-spec values `text` and `verbose_json`). `temperature`, `timestamp_granularities[]`, and `stream` are accepted and ignored — sending them (as most OpenAI client libraries do by default) will not fail the request.
 
 ---
 
@@ -238,11 +242,11 @@ The response contains structured cumulative and daily statistics. Each breakdown
 }
 ```
 
-### `GET/POST /settings`
+### `GET/POST /system/settings`
 
 View or update service settings at runtime.
 
-**GET**: Returns current configuration values (`ASR_MODEL`, `ASR_DEVICE`, `TELEMETRY_RETENTION_HOURS`).
+**GET**: Returns current configuration values (`ASR_MODEL`, `ASR_DEVICE`, `ASR_ENGINE`, `TELEMETRY_RETENTION_HOURS`, `LOG_RETENTION_DAYS`).
 
 **POST** (JSON body):
 
@@ -255,11 +259,11 @@ View or update service settings at runtime.
 
 ```bash
 # View settings
-curl -H "X-API-Key: <ADMIN_KEY>" http://localhost:9000/settings
+curl -H "X-API-Key: <ADMIN_KEY>" http://localhost:9000/system/settings
 
 # Update model
 curl -X POST -H "Content-Type: application/json" -H "X-API-Key: <ADMIN_KEY>" \
-  -d '{"ASR_MODEL": "Systran/faster-whisper-large-v3"}' http://localhost:9000/settings
+  -d '{"ASR_MODEL": "Systran/faster-whisper-large-v3"}' http://localhost:9000/system/settings
 ```
 
 ### `GET /history`
@@ -311,7 +315,7 @@ curl http://localhost:9000/help
 When configured via environment variables, the service supports API key authentication:
 
 - **`API_KEY`**: Secures transcription, language detection, status, and history endpoints.
-- **`ADMIN_API_KEY`**: Secures administrative endpoints (`/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, `/logs/download`). If `ADMIN_API_KEY` is not explicitly set, it defaults to the value of `API_KEY`.
+- **`ADMIN_API_KEY`**: Distinct administrative credential that must be set explicitly. Secures `/system/settings`, `/system/history/clear`, `/system/telemetry/clear`, `/system/cleanup`, and `/logs/download`. It does not fall back to `API_KEY`.
 
 Pass the key using either standard header:
 
@@ -333,7 +337,7 @@ curl -H "Authorization: Bearer <KEY>" http://localhost:9000/status
 
 ### Model Allowlist & Validation (`ALLOWED_MODELS`)
 
-To prevent arbitrary model downloads and model supply chain attacks, runtime model changes via `/settings` are restricted to:
+To prevent arbitrary model downloads and model supply chain attacks, runtime model changes via `/system/settings` are restricted to:
 
 - Standard Faster-Whisper / OpenAI models (`tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`, `medium.en`, `large`, `large-v1`, `large-v2`, `large-v3`, `large-v3-turbo`, `turbo`, `distil-*`).
 - Official model repositories (`Systran/faster-whisper-*`, `openai/whisper-*`, `guillaumekln/faster-whisper-*`, `deepdml/faster-whisper-*`).
@@ -348,7 +352,7 @@ To prevent arbitrary model downloads and model supply chain attacks, runtime mod
 2. Endpoint: `http://<IP_OR_HOSTNAME>:9000`
 3. Read Timeout: `54000` (for long movies)
 
-When Bazarr sends `encode=false`, the service expects already-standardized 16 kHz mono PCM and bypasses FFmpeg normalization for faster mapped-path processing.
+When Bazarr sends `encode=false` with an uploaded audio stream, the service expects raw 16 kHz mono s16le PCM and runs FFmpeg normalization using raw-PCM input flags. If a readable mapped `local_path` or `video_file` takes precedence, it is treated as a media container and uses FFmpeg format auto-detection instead.
 
 Some Bazarr builds send the media path as a JSON object key (for example `{"/tv/show.mkv": ""}`) instead of a `local_path` field. The service recovers those paths for processing and dashboard history display, including failed tasks where history retains normalized request metadata, error payloads, and execution logs.
 

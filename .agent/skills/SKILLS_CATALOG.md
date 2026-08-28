@@ -25,10 +25,10 @@ This catalog lists all available project skills and when to use them.
 ## Quality Skills
 
 - `quality/ci_quality_gates_skill.md`: Repository quality gates, enforcement, and pre-merge checklist.
-- `quality/frontend_quality_gates_skill.md`: Dashboard JS/CSS lint + per-file coverage gates and CI parity workflow.
+- `quality/frontend_quality_gates_skill.md`: Dashboard JS/CSS lint + per-file coverage gates and CI parity workflow. All 10 gates (lint, coverage, Playwright E2E, security audit, aggregate) run exclusively via `scripts/ci/build-and-test.sh` / `.ps1` → Docker `tests/run_suite.sh` (not host npm).
 - `quality/markdown_quality_gates_skill.md`: Markdown lint/fix workflow and Docker pipeline integration.
 - `quality/pipeline_skill.md`: Run local/CI-equivalent lint + tests + coverage.
-- `quality/prepare_release_skill.md`: Release prep workflow and verification gates.
+- `quality/prepare_release_skill.md`: Release prep workflow and verification gates. Writes curated GitHub Release body to `docs/releases/vX.Y.Z_github_description.md`; tag-push CI creates the GitHub Release from that file.
 - `quality/testing_strategy_skill.md`: Test planning and deterministic concurrency regression workflow.
 
 ## Runtime Skills

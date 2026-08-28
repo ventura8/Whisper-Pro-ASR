@@ -12,6 +12,7 @@ import pytest
 import whisper_pro_asr as wpa_module
 from modules.core import bootstrap
 from tests.conftest import FlaskCompatibleClient
+from whisper_pro_asr import _warm_up_torch_stack
 
 
 @pytest.fixture(name="whisper_pro_asr")
@@ -190,3 +191,27 @@ def test_main_entrypoint():
     with mock.patch("uvicorn.run") as mock_run:
         runpy.run_module("whisper_pro_asr", run_name="__main__")
         mock_run.assert_called_once()
+
+
+def test_warm_up_torch_stack_skips_on_import_error(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Missing torch/torchvision (ImportError) must not raise -- warm-up is best-effort."""
+    with mock.patch("importlib.import_module", side_effect=ImportError("no torch")):
+        with caplog.at_level(logging.DEBUG):
+            _warm_up_torch_stack()
+    assert "skipping warm-up" in caplog.text
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, AttributeError, OSError])
+def test_warm_up_torch_stack_survives_broken_install(
+    caplog: pytest.LogCaptureFixture,
+    error_type: type[BaseException],
+):
+    """A broken/partial torch install can raise RuntimeError or AttributeError instead of
+    ImportError; startup must continue rather than crash the whole app over an optional
+    warm-up optimization."""
+    with mock.patch("importlib.import_module", side_effect=error_type("broken torch install")):
+        with caplog.at_level(logging.WARNING):
+            _warm_up_torch_stack()
+    assert "warm-up failed" in caplog.text

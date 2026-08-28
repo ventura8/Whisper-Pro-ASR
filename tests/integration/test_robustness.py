@@ -9,12 +9,16 @@ import tempfile
 from collections import namedtuple
 from unittest import mock
 
+import pytest
+
 from modules.api.routes import system as routes_system
 from modules.core import bootstrap, config, utils
 from modules.inference import scheduler
 from modules.inference.pipeline import language_detection
 from modules.inference.runtime import model_manager
 from modules.monitoring import dashboard_ui, metrics_discovery
+
+pytestmark = pytest.mark.usefixtures("restore_config_after_reload")
 
 
 def test_hardware_path_resolution():

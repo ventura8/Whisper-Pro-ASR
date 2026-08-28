@@ -10,8 +10,8 @@ from modules.api.support import request_utils as routes_utils
 
 
 @pytest.mark.anyio
-async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_for_local_path():
-    """raw_pcm=true must set input flags before the zero-copy local-path return."""
+async def test_resolve_and_materialize_upload_clears_raw_pcm_flags_for_local_path():
+    """Mapped media must not inherit raw-upload flags before its zero-copy return."""
     original_flags = getattr(routes_utils.utils.THREAD_CONTEXT, "input_flags", None)
     mock_req = mock.MagicMock()
     mock_req.query_params = {"raw_pcm": "true"}
@@ -26,6 +26,6 @@ async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_for_local_path(
             path, upload = await routes_utils.resolve_and_materialize_upload("/raw.pcm", dummy_file, None, {}, mock_req)
         assert path == "/mapped/raw.pcm" and upload is None
         materialize_mock.assert_not_called()
-        assert routes_utils.utils.THREAD_CONTEXT.input_flags == ["-f", "s16le", "-ar", "16000", "-ac", "1"]
+        assert routes_utils.utils.THREAD_CONTEXT.input_flags is None
     finally:
         routes_utils.utils.THREAD_CONTEXT.input_flags = original_flags

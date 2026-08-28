@@ -173,7 +173,7 @@ When `MODEL_IDLE_TIMEOUT > 0` (or defaults to `300`), it takes precedence over `
 
 ### 3. Storage & Memory Hygiene
 
-The service implements a **Centralized Storage Hygiene** strategy. Every transient file created during a request (uploads, HQ prep files, isolated stems) is registered in a thread-local `tracked_files` registry. A mandatory `cleanup_files()` call in the request's `finally` block ensures 100% reclamation of storage space.
+The service implements a **Centralized Storage Hygiene** strategy. Every transient file created during a request (uploads, HQ prep files, isolated stems) is registered in a request-scoped `tracked_files` registry. The registry is shared with AnyIO worker-thread context copies, so a mandatory `cleanup_files()` call in the route's `finally` block reclaims assets created by asynchronous worker stages as well. Concurrency tests reset that context around each workload so parallel-test state cannot contaminate a hygiene assertion.
 
 ### 4. Dashboard Ordering Contract
 
@@ -194,7 +194,7 @@ On hardware with very limited resources (e.g., 1-CPU systems), the service autom
 When `diarize=true` is passed to `/asr`, the diarization pipeline runs **within the same claimed hardware unit** as the main transcription, via a non-locking "_direct" sub-stage entry point rather than re-acquiring the lock. This ensures:
 
 - **No additional hardware claims**: Alignment and diarization share the unit already claimed for transcription.
-- **Cache isolation**: Each hardware unit maintains its own `_ALIGN_POOL` and `_DIARIZE_POOL` entries, preventing cross-unit cache collisions.
+- **Cache isolation**: Each hardware unit maintains its own `ALIGN_POOL` and `DIARIZE_POOL` entries, preventing cross-unit cache collisions.
 - **Preemption safety**: Diarization stages respect the same `_check_preemption()` cooperative yielding checks as transcription.
 - **Diarization fallback contract**: If diarization fails or `DIARIZATION_HF_TOKEN` is missing, the request still completes using standard transcription (no speaker labels). The diarization stage must not abort the overall `/asr` response.
 

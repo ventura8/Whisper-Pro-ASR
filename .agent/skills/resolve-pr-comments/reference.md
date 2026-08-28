@@ -90,6 +90,7 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String, $commentC
 Filter to `isResolved == false` in the agent.
 
 Pagination rules:
+
 - `reviewThreads`: follow `reviewThreads.pageInfo.hasNextPage/endCursor` by calling the same query with updated `cursor`.
 - `comments` (per thread): follow `comments.pageInfo.hasNextPage/endCursor` by repeatedly calling the same query with updated `commentCursor` *for that thread* until both connections are exhausted.
 

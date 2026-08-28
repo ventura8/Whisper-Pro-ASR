@@ -102,6 +102,10 @@ function _activeTaskViewModel(task, now, historicalSpeeds, domKey) {
     };
 }
 
+function _activeTaskQueueHintDisplay(normalizedStatus) {
+    return normalizedStatus === 'queued' ? 'flex' : 'none';
+}
+
 function _activeTaskIdentity(task, normalizedStatus, stageText, now, domKey) {
     const id = task.task_id || task.filename;
     const isAsr = isAsrLikeCategory(getTaskFilterCategory(task));
@@ -114,7 +118,7 @@ function _activeTaskIdentity(task, normalizedStatus, stageText, now, domKey) {
         timerText: getTimerText(task, now),
         hw: getHwIconAndLabel(task.unit_id),
         queueHint: _queueHint(normalizedStatus, stageText),
-        queueHintDisplay: normalizedStatus === 'queued' ? 'flex' : 'none',
+        queueHintDisplay: _activeTaskQueueHintDisplay(normalizedStatus),
         liveSectionHtml: _activeTaskLiveSection(isAsr, domKey, id, task.live_text),
         logContent: (task.logs || []).join('\n')
     };
