@@ -60,13 +60,24 @@ Ensure all documentation files are synchronized with the actual shipped behavior
 - **docs/DOCKERHUB_DESCRIPTION.md**: Keep feature summary aligned with README.
 - **.agent/** skills/workflows: Update when behavior, quality gates, or execution policy changed.
 
-### 4. Generate GitHub Release Notes
+### 4. Generate GitHub Release Description
 
-Create or update the version-specific markdown release file at `docs/releases/GITHUB_RELEASE_v<VERSION>.md`:
+Create or update the curated GitHub Release body at
+`docs/releases/v<VERSION>_github_description.md` (example:
+`docs/releases/v1.2.2_github_description.md`):
 
+- Start with a single H1 that becomes the GitHub Release title in CI
+  (e.g. `# Release v1.2.2 - Short Theme`).
 - Highlight key features and structural improvements.
 - Document optimizations, bug fixes, and security enhancements.
 - Include verification results (backend/frontend tests, Playwright E2E, coverage, lint, audit status).
+
+On a tag push matching `vMAJOR.MINOR.PATCH` (e.g. `v1.2.2`), `.github/workflows/ci.yml`
+validates the semantic-version format, verifies this file exists, creates the
+GitHub Release automatically via the preinstalled `gh` CLI
+(`gh release create --title "$RELEASE_NAME" --notes-file <path>`), and uses the
+file as release notes (not auto-generated notes). Tags that don't match
+`vMAJOR.MINOR.PATCH` fail validation before release creation.
 
 ### 5. Consolidate Git Commit
 

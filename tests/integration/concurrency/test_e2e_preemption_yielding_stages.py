@@ -15,6 +15,7 @@ from tests.integration.concurrency.concurrency_fixtures import (
     HW_TOPOLOGY_1_NPU,
     setup_concurrency_harness,
 )
+from tests.thread_join_helpers import join_and_assert_terminated
 
 
 def _run_priority_detectlang(events: list[str], name: str, delay: float = 0.04) -> None:
@@ -87,6 +88,16 @@ def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str):
         _execute_uvr_chunk_loop(events, uvr_started, yield_cb)
         return "clean_isolated.wav"
 
+    # Force a non-accelerated PREPROCESS_DEVICE so _resolve_preprocessor_for_unit
+    # takes its direct unit_id lookup (PREPROCESSOR_POOL.get(unit_id)) instead of
+    # its accelerated-device_type-matching branch, which would otherwise ignore
+    # the "NPU.0"-keyed mock configured above whenever the machine running this
+    # test happens to have real accelerator hardware (making config.PREPROCESS_DEVICE
+    # resolve to e.g. "GPU").
+    device_patcher = mock.patch("modules.core.config.PREPROCESS_DEVICE", "CPU")
+    device_patcher.start()
+    t_asr: threading.Thread | None = None
+    t_prio: threading.Thread | None = None
     try:
         model_manager.PREPROCESSOR_POOL["NPU.0"].preprocess_audio = mock_preprocess
 
@@ -102,7 +113,16 @@ def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str):
 
         _assert_uvr_stage_events(t_asr, t_prio, events)
     finally:
-        patcher.stop()
+        # Unconditional (not just the try-path joins above, which are skipped
+        # entirely if _assert_uvr_stage_events raises): both threads must actually
+        # terminate before the patched globals are restored, otherwise a still-running
+        # straggler thread would keep executing against unpatched config/hooks.
+        try:
+            join_and_assert_terminated(t_asr, 30.0, "t_asr")
+            join_and_assert_terminated(t_prio, 30.0, "t_prio")
+        finally:
+            device_patcher.stop()
+            patcher.stop()
 
 
 def _mock_segment_generator(events: list[str], infer_started: threading.Event) -> Generator[mock.MagicMock, None, None]:

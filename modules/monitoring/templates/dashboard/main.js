@@ -25,6 +25,7 @@ function showTab(tab) {
     }
     if (tab === 'settings') {
         loadDashboardApiKeys();
+        loadRetentionSettings();
     }
 }
 
@@ -87,12 +88,56 @@ function handleTelemetryPurgeSuccess() {
     renderCharts();
 }
 
+function onAdminApiKeyChanged() {
+    // On a fresh page load the admin key is empty, so the settings-tab GET made
+    // by showTab('settings') 401s and the sliders keep their HTML-default values
+    // -- silently entering the key afterward never re-fetches, so Save could
+    // overwrite real server settings with those defaults. Re-load once a key is
+    // actually entered (loadRetentionSettings's own userEdited guard still
+    // protects any slider the user is already mid-editing).
+    persistDashboardApiKeys();
+    loadRetentionSettings();
+}
+
+async function loadRetentionSettings() {
+    try {
+        const response = await fetch('/system/settings', { headers: getAuthHeaders(null, true) });
+        if (!response.ok) {
+            return;
+        }
+        const data = await response.json();
+        _applyRetentionSlider('retention-range', 'retention-label', data.TELEMETRY_RETENTION_HOURS, 'h');
+        _applyRetentionSlider('log-retention-range', 'log-retention-label', data.LOG_RETENTION_DAYS, 'd');
+    } catch (e) {
+        // Best-effort rehydrate; leave HTML defaults if the GET fails.
+    }
+}
+
+function _shouldSkipRetentionHydration(range, value) {
+    if (value === undefined || value === null) {
+        return true;
+    }
+    return !range || range.dataset.userEdited === '1';
+}
+
+function _applyRetentionSlider(rangeId, labelId, value, suffix) {
+    const range = document.getElementById(rangeId);
+    if (_shouldSkipRetentionHydration(range, value)) {
+        return;
+    }
+    range.value = String(value);
+    const label = document.getElementById(labelId);
+    if (label) {
+        label.textContent = `${range.value}${suffix}`;
+    }
+}
+
 async function saveSettings() {
     persistDashboardApiKeys();
     const telemetryHours = document.getElementById('retention-range').value;
     const logDays = document.getElementById('log-retention-range').value;
     try {
-        const response = await fetch('/settings', {
+        const response = await fetch('/system/settings', {
             method: 'POST',
             headers: getAuthHeaders('application/json', true),
             body: JSON.stringify({

@@ -1,23 +1,24 @@
 [tool.poetry]
 name = "whisper-pro-asr"
-version = "1.2.1"
+version = "1.2.2"
 description = "Enterprise-grade Whisper Automatic Speech Recognition web service"
 authors = ["DeepMind Team"]
 package-mode = false
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.14"
-fastapi = "0.139.2"
-uvicorn = { version = "0.51.0", extras = ["standard"] }
+fastapi = "0.141.1"
+uvicorn = { version = "0.52.4", extras = ["standard"] }
 python-multipart = "0.0.32"
-colorlog = "6.11.0"
+colorlog = "6.12.0"
 pyyaml = "6.0.3"
 requests = "2.34.2"
 pydub = "0.25.1"
 psutil = "7.2.2"
-tqdm = "4.68.4"
+tqdm = "4.70.0"
 soundfile = "0.14.0"
 ffmpeg-python = "0.2.0"
+# OpenVINO 2026.3.1 requires numpy<2.5.0.
 numpy = "2.4.6"
 
 [tool.poetry.group.ml]
@@ -25,33 +26,51 @@ optional = true
 
 [tool.poetry.group.ml.dependencies]
 faster-whisper = "1.2.1"
-tokenizers = "0.21.4"
+tokenizers = "0.22.2"
 ctranslate2 = "4.8.1"
-torch = "2.8.0"
-torchaudio = "2.8.0"
-torchvision = "0.23.0"
+torch = "2.13.0"
+torchaudio = "2.11.0"
+torchvision = "0.28.0"
+# Held at the last 0.x release (not the new 1.0.0 major) because audio-separator
+# 0.44.5's common_separator.py calls librosa.get_duration(filename=...), and
+# librosa 1.0.0 removed the `filename` kwarg (renamed to `path`). This surfaced
+# as UVR preprocessing failing with "TypeError: get_duration() got an unexpected
+# keyword argument 'filename'" under real GPU testing, which cascaded into long
+# device-fallback retry loops. audio-separator declares only librosa>=0.10 (no
+# upper bound), so it doesn't protect against this itself.
 librosa = "0.11.0"
-openvino = "2026.2.1"
-openvino-genai = "2026.2.1.0"
-openvino-tokenizers = "2026.2.1.0"
-transformers = "4.48.3"
-huggingface-hub = "0.36.2"
-whisperx = "3.8.6"
-audio-separator = "0.44.3"
+openvino = "2026.3.1"
+openvino-genai = "2026.3.1.0"
+openvino-tokenizers = "2026.3.1.0"
+transformers = "5.15.1"
+huggingface-hub = "1.28.0"
+audio-separator = "0.44.5"
+# audio-separator's uvr_lib_v5.spec_utils imports audioread directly but does
+# not declare it as a dependency; it previously came in transitively via
+# librosa, which dropped audioread as of librosa 1.0.0 above.
+audioread = "3.1.0"
+
+# WhisperX 3.8.6 (latest published release) hard-pins torch~=2.8.0,
+# torchaudio~=2.8.0, torchvision~=0.23.0 and huggingface-hub<1.0.0, which
+# conflicts with the versions above. It is intentionally NOT a poetry
+# dependency: it's installed into an isolated directory in the Dockerfile
+# and run in its own subprocess (see modules/inference/engines/whisperx_worker.py).
 
 [tool.poetry.group.dev.dependencies]
 pytest = "9.1.1"
 pytest-cov = "7.1.0"
+pytest-xdist = "3.8.0"
+httpx2 = "2.12.0"
 genbadge = { version = "1.1.3", extras = ["coverage"] }
 requests-mock = "1.12.1"
 yamllint = "1.38.0"
-ruff = "0.15.22"
+ruff = "0.16.4"
 flake8 = "7.3.0"
-pylint = "4.0.6"
+pylint = "4.0.7"
 black = "26.5.1"
 isort = "8.0.1"
 radon = "^6.0.1"
-check-jsonschema = "0.37.4"
+check-jsonschema = "0.38.0"
 taplo = "0.9.3"
 bandit = "1.9.4"
 pip-audit = "2.10.1"

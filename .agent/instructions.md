@@ -10,10 +10,11 @@ Before implementation:
 2. Read `.agent/skills/SKILLS_CATALOG.md`.
 3. Read all directly relevant skill/workflow files for the task domain.
 
-## Mandatory Markdown Update (Every Task)
+## Mandatory Markdown Update (Every Task, No Exceptions)
 
 Every time you work on this project, you MUST update all relevant markdown files in the same task. Never ship code-only changes.
 
+- This applies to every kind of change, including CI/CD, Docker, and other infrastructure/tooling work, not just application code.
 - Sync every impacted file among `README.md`, `docs/*.md`, and `.agent/*.md` so they describe the current implementation.
 - Treat documentation as part of the deliverable, not a follow-up.
 - Do not close a task until relevant docs and agent assets are updated.

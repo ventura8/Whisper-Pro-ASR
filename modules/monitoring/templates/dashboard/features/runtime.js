@@ -1,5 +1,21 @@
 let latestStatusRequestSeq = 0;
 
+function _renderStatusData(data) {
+    const now = Date.now() / 1000;
+    const tasks = data.tasks || [];
+    _renderTopStats(data);
+    _renderQueueCounters(data);
+    _updateTelemetryState(data, now);
+    const historicalSpeeds = _refreshHistoryAndTabs(data);
+    _autoScrollTaskBuffers();
+    _renderAnalyticsGrid(data);
+    _renderHardwarePool(data);
+    _renderActiveTaskList(data, now, historicalSpeeds);
+    bindToggleHandlers();
+    _cleanupTimelineForTasks(tasks);
+    _renderLastUpdate();
+}
+
 async function updateStats() {
     if (!refreshEnabled) return;
     const requestSeq = ++latestStatusRequestSeq;
@@ -11,18 +27,7 @@ async function updateStats() {
         if (!_hasValidStatusData(data)) {
             return;
         }
-        const now = Date.now() / 1000;
-        _renderTopStats(data);
-        _renderQueueCounters(data);
-        _updateTelemetryState(data, now);
-        const historicalSpeeds = _refreshHistoryAndTabs(data);
-        _autoScrollTaskBuffers();
-        _renderAnalyticsGrid(data);
-        _renderHardwarePool(data);
-        _renderActiveTaskList(data, now, historicalSpeeds);
-        bindToggleHandlers();
-        _cleanupTimelineForTasks(data.tasks || []);
-        _renderLastUpdate();
+        _renderStatusData(data);
     } catch (e) { console.error(e); }
 }
 
@@ -56,8 +61,8 @@ function _renderTopStats(data) {
 }
 
 function _renderQueueCounters(data) {
-    document.getElementById('active-val').innerText = data.active_sessions || 0;
-    document.getElementById('queued-val').innerText = data.queued_sessions || 0;
+    document.getElementById('active-val').innerText = String(data.active_sessions || 0);
+    document.getElementById('queued-val').innerText = String(data.queued_sessions || 0);
 }
 
 function _updateTelemetryState(data, nowSec) {
@@ -122,18 +127,32 @@ function _renderHardwarePool(data) {
     document.getElementById('hw-pool').innerHTML = units.map((unit) => _renderHardwareCard(unit, data)).join('');
 }
 
+function _hardwareUsageBadge(isUsed) {
+    return {
+        statusText: isUsed ? 'Used' : 'Not used',
+        statusClass: isUsed ? 'status-used' : 'status-idle'
+    };
+}
+
+function _hardwareEngineStatusBadge(rawValue) {
+    const candidate = String(rawValue ?? '').trim();
+    const placeholders = ['', 'unknown', 'none', 'null', 'undefined', 'resuming', 'n/a', 'na', 'not available'];
+    const raw = placeholders.includes(candidate.toLowerCase()) ? 'ready' : candidate;
+    const cssClass = raw.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'ready';
+    return { raw, cssClass, safe: escapeHtml(raw) };
+}
+
 function _renderHardwareCard(unit, data) {
     const usage = _resolveHardwareUsage(unit, data);
-    const statusText = usage.isUsed ? 'Used' : 'Not used';
-    const statusClass = usage.isUsed ? 'status-used' : 'status-idle';
+    const { statusText, statusClass } = _hardwareUsageBadge(usage.isUsed);
     const safeType = escapeHtml(unit.type ?? 'Unknown');
     const safeName = escapeHtml(unit.name ?? 'Unnamed Unit');
-    const uvrStatusRaw = String(unit.uvr_status ?? 'ready');
-    const whisperStatusRaw = String(unit.whisper_status ?? 'ready');
-    const uvrStatusClass = uvrStatusRaw.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'ready';
-    const whisperStatusClass = whisperStatusRaw.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'ready';
-    const uvrStatus = escapeHtml(uvrStatusRaw);
-    const whisperStatus = escapeHtml(whisperStatusRaw);
+    const uvr = _hardwareEngineStatusBadge(unit.uvr_status);
+    const whisper = _hardwareEngineStatusBadge(unit.whisper_status);
+    const uvrStatusClass = uvr.cssClass;
+    const whisperStatusClass = whisper.cssClass;
+    const uvrStatus = uvr.safe;
+    const whisperStatus = whisper.safe;
     return `
                 <div class="hw-card">
                     <div class="hw-card-title"><span class="material-icons-sharp" style="font-size:12px">${usage.icon}</span> ${safeType}</div>
@@ -191,13 +210,17 @@ function _isNvidiaGpu(unit) {
     return String(unit.name || '').includes('NVIDIA');
 }
 
+const _HARDWARE_KIND_VISUAL_BUILDERS = {
+    'intel-gpu': (unit, isUsed, telemetry) => _intelGpuVisual(isUsed, telemetry),
+    npu: (unit, isUsed, telemetry) => _npuVisual(isUsed, telemetry),
+    cuda: (unit, isUsed, telemetry) => _cudaVisual(unit, isUsed, telemetry),
+    amd: (unit, isUsed, telemetry) => _amdVisual(isUsed, telemetry),
+    cpu: (unit, isUsed, telemetry, tasks) => _cpuVisual(isUsed, tasks)
+};
+
 function _hardwareKindVisual(kind, unit, isUsed, telemetry, tasks) {
-    if (kind === 'intel-gpu') return _intelGpuVisual(isUsed, telemetry);
-    if (kind === 'npu') return _npuVisual(isUsed, telemetry);
-    if (kind === 'cuda') return _cudaVisual(unit, isUsed, telemetry);
-    if (kind === 'amd') return _amdVisual(isUsed, telemetry);
-    if (kind === 'cpu') return _cpuVisual(isUsed, tasks);
-    return { icon: 'memory', isUsed };
+    const builder = _HARDWARE_KIND_VISUAL_BUILDERS[kind];
+    return builder ? builder(unit, isUsed, telemetry, tasks) : { icon: 'memory', isUsed };
 }
 
 function _amdVisual(isUsed, telemetry) {

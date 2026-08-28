@@ -14,6 +14,8 @@ const eventState = {
   logDownloads: 0,
   lifecycleScenario: "default",
   lifecycleTick: 0,
+  settingsFailStatus: null,
+  lastSettingsHeaders: null,
 };
 
 const BASE_NOW = Math.floor(Date.now() / 1000);
@@ -865,8 +867,21 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (url.pathname === "/settings") {
+  if (url.pathname === "/settings" || url.pathname === "/system/settings") {
     if (req.method === "POST") {
+      eventState.lastSettingsHeaders = req.headers;
+      if (eventState.settingsFailStatus) {
+        // Single-use: apply to this one request, then clear immediately (before
+        // the async response below) so subsequent saves succeed normally instead
+        // of failing indefinitely.
+        const failStatus = eventState.settingsFailStatus;
+        eventState.settingsFailStatus = null;
+        readJsonBody(req).then(() => {
+          res.writeHead(failStatus, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Forced failure" }));
+        });
+        return;
+      }
       readJsonBody(req).then((payload) => {
         eventState.settingsSaves.push(payload);
         respondJson(res, { ok: true });
@@ -909,7 +924,18 @@ const server = http.createServer((req, res) => {
     eventState.logDownloads = 0;
     eventState.lifecycleScenario = "default";
     eventState.lifecycleTick = 0;
+    eventState.settingsFailStatus = null;
+    eventState.lastSettingsHeaders = null;
     respondJson(res, { ok: true });
+    return;
+  }
+
+  if (url.pathname === "/__settings/fail" && req.method === "POST") {
+    readJsonBody(req).then((payload) => {
+      const status = Number((payload && payload.status) || 0);
+      eventState.settingsFailStatus = Number.isInteger(status) && status >= 400 && status <= 599 ? status : null;
+      respondJson(res, { ok: true, settingsFailStatus: eventState.settingsFailStatus });
+    });
     return;
   }
 

@@ -29,6 +29,10 @@ from whisper_pro_asr import create_app
 # Keep imported bootstrap alive to avoid unused import warning
 _ = tests.conftest_bootstrap
 
+# Register shared config-reload restore fixture for env-driven importlib.reload tests.
+# class_progress: quiet mode shows file::TestClass once, then one dot per test.
+pytest_plugins = ("tests.config_reload_helpers", "tests.class_progress")
+
 
 def mock_tensor_with_shape(*shape):
     """Create a mock tensor with a specific shape attribute."""

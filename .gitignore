@@ -23,9 +23,11 @@ media/
 *.mkv
 *.wav
 *.srt
+!tests/e2e/fixtures/*.wav
 
 # Docker
 .docker/
+.docker-build-cache/
 
 # IDEs
 .vscode/
@@ -64,7 +66,9 @@ data/
 node_modules/
 coverage-js/
 playwright-report/
+playwright-report-real/
 test-results/
+test-results-real/
 .playwright-tmp/
 *.tsbuildinfo
 npm-debug.log*

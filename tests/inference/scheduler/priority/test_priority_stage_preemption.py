@@ -11,6 +11,7 @@ from modules.core import utils
 from modules.inference import scheduler
 from modules.inference.runtime import concurrency, model_manager
 from modules.inference.runtime.model_segment_processing import consume_transcription_segments
+from tests.thread_join_helpers import join_scenario_threads
 
 _HW_PATCHER = None
 
@@ -163,22 +164,33 @@ def _exercise_vocal_separation_stage_scenario():
         finally:
             model_manager.decrement_active_session()
 
-    with mock.patch("modules.inference.runtime.model_manager._check_preemption", side_effect=fake_check_preemption):
+    # Force a non-accelerated PREPROCESS_DEVICE so _resolve_preprocessor_for_unit
+    # takes its direct unit_id lookup (PREPROCESSOR_POOL.get(unit_id)) instead of
+    # its accelerated-device_type-matching branch, which would otherwise ignore
+    # the "NPU.0"-keyed mock configured above whenever the machine running this
+    # test happens to have real accelerator hardware (making config.PREPROCESS_DEVICE
+    # resolve to e.g. "GPU").
+    with (
+        mock.patch("modules.core.config.PREPROCESS_DEVICE", "CPU"),
+        mock.patch("modules.inference.runtime.model_manager._check_preemption", side_effect=fake_check_preemption),
+    ):
         t_std = threading.Thread(target=run_vocal_stage)
-        t_std.start()
-        assert vocal_started.wait(timeout=2.0)
+        t_prio = None
+        try:
+            t_std.start()
+            assert vocal_started.wait(timeout=2.0)
 
-        t_prio = threading.Thread(target=_run_priority_detectlang, args=(events, "vocal", 0.03))
-        t_prio.start()
-
-        t_std.join(timeout=8.0)
-        t_prio.join(timeout=8.0)
+            t_prio = threading.Thread(target=_run_priority_detectlang, args=(events, "vocal", 0.03))
+            t_prio.start()
+        finally:
+            # Join before patches restore even if vocal_started.wait() or start fails.
+            join_scenario_threads(t_std, t_prio)
 
     return {
         "events": events,
         "hook_calls": len(hook_calls),
         "standard_alive": t_std.is_alive(),
-        "priority_alive": t_prio.is_alive(),
+        "priority_alive": t_prio.is_alive() if t_prio is not None else False,
     }
 
 

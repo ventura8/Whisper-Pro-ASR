@@ -19,7 +19,7 @@ class TestRAMOptimization:
         mock_file.file = mock.MagicMock()
         mock_file.file.read.side_effect = [b"a" * 2048, b""]
 
-        with mock.patch("modules.api.support.request_utils.config") as cfg:
+        with mock.patch("modules.api.support.source_resolution.config") as cfg:
             cfg.get_temp_dir.return_value = "/tmp/whisper"
             with mock.patch("os.path.getsize", return_value=2048):
                 with mock.patch("builtins.open", mock.mock_open()):
@@ -38,7 +38,7 @@ class TestRAMOptimization:
         mock_file.file = mock.MagicMock()
         mock_file.file.read.side_effect = [b"", b""]
 
-        with mock.patch("modules.api.support.request_utils.config") as cfg:
+        with mock.patch("modules.api.support.source_resolution.config") as cfg:
             cfg.get_temp_dir.return_value = "/tmp/whisper"
             with mock.patch("os.path.getsize", return_value=0):
                 with mock.patch("builtins.open", mock.mock_open(read_data=b"")):

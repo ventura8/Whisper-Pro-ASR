@@ -12,8 +12,10 @@ LICENSE
 coverage.xml
 coverage_output.txt
 htmlcov
-__pycache__
+__pycache__/
+**/__pycache__/
 *.pyc
+**/*.pyc
 .venv
 .venv_bak
 venv
@@ -29,3 +31,10 @@ reports
 test-results
 coverage-js
 .buildx-cache
+.docker-build-cache
+.docker-build-cache.new
+.docker-build-cache.old
+playwright-report
+test-results-real
+.ruff_cache
+.playwright-tmp
