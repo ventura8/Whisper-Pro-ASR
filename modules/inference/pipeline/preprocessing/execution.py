@@ -14,7 +14,14 @@ def create_separator(lazy_import_separator, output_dir: str):
         output_dir=output_dir,
         model_file_dir=config.UVR_MODEL_DIR,
         output_format="WAV",
-        normalization_threshold=0.01,
+        # audio-separator's normalization_threshold is a *ceiling*: spec_utils.normalize
+        # only attenuates when the stem peak exceeds it, and never amplifies (that is
+        # amplification_threshold, which we leave unset). The old value of 0.01 therefore
+        # pinned every vocal stem to 1% of full scale -- a 40 dB attenuation with no
+        # upside. Whisper is fed 16-bit PCM, so that left roughly nine effective bits and
+        # audibly quantized the speech: the fixture decoded "the quick brown fox dumps
+        # over the lazy dog". 0.9 is the library default and still guards against clipping.
+        normalization_threshold=0.9,
         output_single_stem="Vocals",
         chunk_duration=config.UVR_CHUNK_DURATION,
         log_level=logging.INFO,

@@ -213,3 +213,54 @@ def test_find_best_offset_exceeds_duration():
         # Expected offset = max(0, 100 - 30) = 70
         res = language_detection._find_best_offset_in_zone("test.wav", 90, 20, 100)
         assert res == 70
+
+
+class TestVotesDisagree:
+    """Tests for _votes_disagree, the free code-switch signal from the montage vote."""
+
+    def test_all_offsets_agree_no_disagreement(self):
+        results = [
+            {"confidence": 0.9, "all_probabilities": {"en": 0.9, "fr": 0.1}},
+            {"confidence": 0.85, "all_probabilities": {"en": 0.85, "fr": 0.15}},
+            {"confidence": 0.95, "all_probabilities": {"en": 0.95, "es": 0.05}},
+        ]
+        assert language_detection._votes_disagree(results) is False
+
+    def test_two_offsets_confidently_disagree(self):
+        results = [
+            {"confidence": 0.9, "all_probabilities": {"en": 0.9, "fr": 0.1}},
+            {"confidence": 0.9, "all_probabilities": {"es": 0.9, "en": 0.1}},
+        ]
+        assert language_detection._votes_disagree(results) is True
+
+    def test_low_confidence_votes_are_not_counted(self):
+        # Below LD_MIN_CONFIDENCE: _extract_segment_vote_or_none discards it, so a
+        # low-confidence outlier must not trigger a false "multilingual" signal.
+        results = [
+            {"confidence": 0.9, "all_probabilities": {"en": 0.9, "fr": 0.1}},
+            {"confidence": 0.01, "all_probabilities": {"es": 0.01, "en": 0.0}},
+        ]
+        assert language_detection._votes_disagree(results) is False
+
+    def test_empty_results_no_disagreement(self):
+        assert language_detection._votes_disagree([]) is False
+
+
+class TestVotesDisagreeIgnoresLoneDissenters:
+    """A single odd sample among many is a misfire, not a second language.
+
+    The signal gates an expensive full per-chunk scan, so a stray vote must not buy one.
+    """
+
+    def _votes(self, *languages):
+        return [{"confidence": 0.9, "all_probabilities": {lang: 0.9}} for lang in languages]
+
+    def test_one_dissenter_among_nine_is_ignored(self):
+        assert language_detection._votes_disagree(self._votes(*(["en"] * 8), "fr")) is False
+
+    def test_a_second_dissenting_sample_makes_it_real(self):
+        assert language_detection._votes_disagree(self._votes(*(["en"] * 7), "fr", "fr")) is True
+
+    def test_half_the_evidence_counts_even_from_one_sample(self):
+        """Two offsets naming two languages is the short-file case; it must still fire."""
+        assert language_detection._votes_disagree(self._votes("en", "es")) is True

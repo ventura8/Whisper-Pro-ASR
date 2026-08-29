@@ -13,6 +13,53 @@ Concurrency correctness is the top engineering priority: detect-language preempt
 
 ---
 
+## 📦 Which Image Should I Pick?
+
+Match the image to the hardware you have. **No image ships model weights** -- they download
+on first start into `./model_cache`.
+
+| Your hardware | Use this image |
+| :--- | :--- |
+| No GPU | **`cpu`** |
+| Intel iGPU / Arc / NPU | **`intel`** |
+| NVIDIA GPU | **`nvidia`** |
+| NVIDIA GPU + you need **speaker diarization** | **`full`** |
+| NVIDIA GPU **and** an Intel iGPU in the same box | **`nvidia-intel`** |
+| AMD Radeon (native Linux ROCm) | **`amd`** |
+
+Two extra images exist only if you want to run the **openai-whisper** engine *on the GPU*.
+They are large, and most people do not need them -- the default engines are already
+GPU-accelerated in the images above.
+
+| Special case | Use this image |
+| :--- | :--- |
+| openai-whisper on an Intel GPU | **`intel-xpu`** |
+| openai-whisper on an AMD GPU | **`amd-rocm-torch`** |
+
+### Capability Matrix
+
+Sizes are uncompressed on-disk; Docker Hub reports a smaller compressed number.
+
+| Image | Size | Transcription runs on | Vocal isolation (UVR) runs on | Engines available | Speaker diarization |
+| :--- | ---: | :--- | :--- | :--- | :---: |
+| **`cpu`** | 4.9 GB | CPU | CPU | Faster-Whisper, OpenAI-Whisper | — |
+| **`intel`** | 5.2 GB | **Intel GPU** (OpenVINO); CPU fallback on NPU | **Intel GPU / NPU** (OpenVINO) | + Intel-Whisper | — |
+| **`intel-xpu`** | 11.2 GB | **Intel GPU** (OpenVINO); CPU fallback on NPU | **Intel GPU / NPU** (OpenVINO) | + Intel-Whisper<br>OpenAI-Whisper also on **Intel GPU** **Requires Intel Arc (Alchemist) or newer** -- torch's XPU backend does not execute Whisper on older iGPUs (verified: UHD Graphics selects XPU but fails with a Level Zero error even for the `tiny` model). | — |
+| **`nvidia`** | 17.5 GB | **NVIDIA GPU** (CUDA) | **NVIDIA GPU** (CUDA) | Faster-Whisper, OpenAI-Whisper | — |
+| **`full`** | ~29.8 GB | **NVIDIA GPU** *and* **Intel GPU** (CUDA / OpenVINO); CPU fallback on NPU | either GPU, Intel NPU, or **AMD** (ROCm) | Faster-Whisper, Intel-Whisper, OpenAI-Whisper, WhisperX | ✅ |
+| **`nvidia-whisperx`** | ~18.4 GB | **NVIDIA GPU** (CUDA) | **NVIDIA GPU** (CUDA) | + WhisperX | ✅ |
+| **`nvidia-intel`** | 17.9 GB | **NVIDIA GPU** *and* **Intel GPU** at the same time | either GPU | Faster-Whisper, Intel-Whisper, OpenAI-Whisper | — |
+| **`amd`** | 14.1 GB | CPU *(see note)* | **AMD GPU** (ROCm) | Faster-Whisper, OpenAI-Whisper | — |
+| **`amd-rocm-torch`** | ~21.8 GB | CPU, except OpenAI-Whisper on **AMD GPU** | **AMD GPU** (ROCm) | Faster-Whisper, OpenAI-Whisper | — |
+
+**Why AMD transcribes on the CPU:** the default engine is CTranslate2, which has no ROCm
+backend at all. On AMD the GPU accelerates vocal isolation, and -- with `amd-rocm-torch` --
+the openai-whisper engine. This is a limitation of the upstream engine, not of the image.
+
+**Speaker diarization** needs WhisperX, which ships in **`full`** and in `nvidia-whisperx`.
+Prefer `full` unless image size is the binding constraint -- it carries every vendor's ONNX
+Runtime, so one tag runs on whatever hardware the host has.
+
 ## 🚀 Quick Start (Docker Compose)
 
 Create a `docker-compose.yml`:
@@ -20,6 +67,7 @@ Create a `docker-compose.yml`:
 ```yaml
 services:
   whisper-pro-asr:
+    # Choose the edition matching your hardware (see the table above):
     image: ventura8/whisper-pro-asr:latest
     container_name: whisper-pro-asr
     ports:
@@ -28,7 +76,7 @@ services:
     environment:
       # --- [SSD WRITE PROTECTION] ---
       - WHISPER_TEMP_DIR=/tmp/whisper
-      # --- [SPEAKER DIARIZATION] ---
+      # --- [SPEAKER DIARIZATION (requires a WhisperX image: full or nvidia-whisperx)] ---
       # Required for speaker identification. Get a token at https://huggingface.co/settings/tokens
       # - DIARIZATION_HF_TOKEN=hf_your_token_here
 
@@ -74,7 +122,7 @@ services:
     #   - /usr/lib/wsl:/usr/lib/wsl:ro # Optional: WSL2 host driver library mount
 
     tmpfs:
-      - /tmp/whisper:size=2G
+      - /tmp/whisper:size=2G,mode=1777
     volumes:
       # Persistent cache for AI models, diarization models, and pre-compiled hardware binaries
       - ./model_cache:/app/model_cache
@@ -115,7 +163,7 @@ To use this service with **Bazarr**:
 - **Intel ASR Chunking & Streaming**: Refactored OpenVINO engine transcription to split long media files dynamically into structured chunks guided by speech VAD timestamps, ensuring stability on very long movies.
 - **O(1) Live Subtitle Updates**: Appends pre-formatted subtitle blocks incrementally to the live SRT stream during processing instead of doing full $O(N^2)$ stream reconstructions.
 - **UVR Chunk Progress Tracking**: Computes and emits real-time preprocessing progress updates per UVR chunk to keep the dashboard progress bar fluid during vocal separation.
-- **Graceful Temp-Storage Fallback**: Establishes a 2GB minimum free space threshold and 1.5x file-size headroom multiplier to fallback gracefully to persistent storage when tmpfs runs low on space, preventing ENOSPC crashes.
+- **Graceful Temp-Storage Fallback**: Establishes a 2GB minimum free space threshold and 1.5x file-size headroom multiplier; both tmpfs and persistent fallback storage are validated so insufficient capacity fails early instead of causing an ENOSPC crash.
 - **16kHz WAV Standardization**: High-performance audio normalization layer for consistent cross-format results.
 - **Global VAD & In-Memory Batch ID**: Optimized language identification using a single VAD pass and zero-I/O NumPy slicing.
 - **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt`, `vad_filter`, and `word_timestamps`.
@@ -143,10 +191,16 @@ To use this service with **Bazarr**:
 | Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | AMD (native Linux ROCm) | Intel iGPU / Arc | Intel NPU |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Media Standardization** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (native Linux ROCm via `/dev/kfd`); WSL2 `/dev/dxg` detects AMD but falls back to CPU | ✅ (OpenVINO) | ✅ (OpenVINO) |
-| **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
-| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ❔ (native Linux ROCm via `/dev/kfd`); WSL2 `/dev/dxg` detects AMD but falls back to CPU | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ❔ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ✅ *with `ASR_ENGINE=INTEL-WHISPER`; otherwise CPU* | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ❔ | ✅ | ✅ |
+
+✅ measured on real hardware &nbsp;·&nbsp; ⚠️ works, but on CPU &nbsp;·&nbsp; ❔ **implemented, never exercised on supported AMD silicon**
+
+The AMD column is **not** a validation claim: the ROCm paths are implemented and the
+kernels ship, but they have never run on supported AMD silicon. The only Radeon available
+for testing was an integrated `gfx1036`, which upstream rocBLAS does not support at all.
 
 ---
 
@@ -155,10 +209,10 @@ To use this service with **Bazarr**:
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | **ASR_MODEL** | `Systran/faster-whisper-large-v3` | Model ID (HuggingFace) or local path |
-| **ASR_ENGINE** | `FASTER-WHISPER` | Selects ASR backend engine: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX` |
+| **ASR_ENGINE** | `AUTO` | Selects ASR backend engine: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX`. `AUTO` resolves to `FASTER-WHISPER` on every host |
 | **ASR_DEVICE** | `AUTO` | Device: `AUTO`, `CUDA`, or `CPU` |
 | **ASR_PREPROCESS_DEVICE** | `AUTO` | Device for Isolation: `AUTO`, `NPU`, `GPU`, `CUDA`, or `CPU` |
-| **ENABLE_VOCAL_SEPARATION** | `true` | Pre-clean audio with UVR/MDX-NET engine |
+| **ENABLE_VOCAL_SEPARATION** | `false` | Pre-clean audio with UVR/MDX-NET. Off by default: measured 76% slower for no gain on clean speech. Worth enabling for music-heavy audio |
 | **OV_CACHE_DIR** | `./model_cache` | OpenVINO kernel cache directory (highly recommended) |
 | **ASR_BEAM_SIZE** | `5` | Decoding beam width (Search depth) |
 | **ASR_PARALLEL_LIMIT_ACCEL** | `1` | Max concurrent tasks on GPU/NPU |
@@ -177,8 +231,22 @@ To use this service with **Bazarr**:
 
 Mapping the following volumes is **strongly recommended**:
 
-1. **`/app/model_cache`**: Stores downloaded AI models, WhisperX alignment models, PyAnnote diarization models, and pre-compiled OpenVINO NPU/GPU blobs. Reduces startup time from minutes to milliseconds.
+1. **`/app/model_cache`**: Stores the AI models downloaded on first start, WhisperX alignment models, PyAnnote diarization models, and pre-compiled OpenVINO NPU/GPU blobs. **Mapping this is effectively required** -- without it every container recreation re-downloads several GB of models.
 2. **`/app/data`**: Stores the persistent state of the application, including task history, telemetry statistics, and system logs. Mapping this ensures your history survives container restarts and updates.
+
+## 🚦 First Start
+
+Images ship **without model weights**; they are downloaded on first start into
+`/app/model_cache` and reused afterwards.
+
+- The container reports **healthy** immediately -- the download does not block startup.
+- Requests submitted during the download **wait in the queue** (stage
+  `Downloading Model (xx%)`) and run automatically once it finishes. They are not rejected.
+- `GET /status` shows `engines.whisper.status: "downloading"` meanwhile.
+- Budget roughly 3-4.5 GB on first start depending on the edition. Subsequent starts are
+  immediate.
+
+---
 
 ## 🐳 GPU/NPU Support
 
@@ -193,6 +261,8 @@ Mapping the following volumes is **strongly recommended**:
 - **Windows 11 / WSL2**: Map `/dev/dxg` (WSL GPU bridge) only for AMD adapter detection in this Linux container.
 - Set `MAX_AMD_UNITS=1` in environment to enable the AMD scheduler unit.
 - UVR vocal isolation runs on the AMD GPU via `onnxruntime-rocm` only on native Linux ROCm hosts with `/dev/kfd`. On WSL2 `/dev/dxg`, UVR falls back to CPU. Whisper ASR falls back to CPU on AMD units since CTranslate2 does not have a ROCm backend.
+- Published `amd` and `full` images support consumer Radeon RDNA2/RDNA3/RDNA4. Data-center and legacy
+  AMD architectures use CPU fallback.
 
 ### Intel NPU/GPU
 

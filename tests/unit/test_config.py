@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 
 import modules.core.config as config_module
-from modules.core import engine_registry
+from tests.config_reload_helpers import npu_cannot_execute
 
 pytestmark = pytest.mark.usefixtures("restore_config_after_reload")
 
@@ -106,7 +106,7 @@ class TestConfigEnv:
     def test_app_constants(self):
         """Test app name and version constants."""
         assert "Whisper" in config_module.APP_NAME
-        assert config_module.VERSION == "1.2.2"
+        assert config_module.VERSION == "1.3.0"
 
     def test_device_constant_exists(self):
         """Test DEVICE constant exists."""
@@ -195,10 +195,16 @@ class TestConfigHardware:
                 mock_core = mock.MagicMock()
                 mock_core.available_devices = ["NPU", "CPU"]
                 mock_core.get_property.return_value = "Intel(R) AI Boost"
-                with mock.patch("openvino.Core", return_value=mock_core):
+                # Pinned rather than left to the probe: config now hands it the resolved IR
+                # directory, so the answer would otherwise depend on whether the machine
+                # running the tests happens to have weights in ./model_cache.
+                with mock.patch("openvino.Core", return_value=mock_core), npu_cannot_execute():
                     importlib.reload(config_module)
-                    # NPU detected and selected as primary AUTO device when CUDA is absent.
-                    assert config_module.DEVICE == "NPU"
+                    # The NPU is detected and kept as a unit, but ASR does not run on it:
+                    # the default engine is CTranslate2, which has no OpenVINO backend, so
+                    # the device claim is corrected to CPU while preprocessing -- which the
+                    # NPU does run -- stays on it.
+                    assert config_module.DEVICE == "CPU"
                     assert config_module.PREPROCESS_DEVICE == "NPU"
                     assert any(u.get("id") == "NPU" for u in config_module.HARDWARE_UNITS if u.get("type") == "NPU")
 
@@ -211,8 +217,10 @@ class TestConfigHardware:
                 mock_core.get_property.return_value = "Intel(R) Arc(TM) Graphics"
                 with mock.patch("openvino.Core", return_value=mock_core):
                     importlib.reload(config_module)
-                    # Intel GPU detected and selected as primary AUTO device when CUDA is absent.
-                    assert config_module.DEVICE == "GPU"
+                    # The iGPU is detected and drives preprocessing, but not ASR: the
+                    # default engine is CTranslate2, which has no OpenVINO backend, so the
+                    # ASR device claim is CPU rather than a device it cannot address.
+                    assert config_module.DEVICE == "CPU"
                     assert config_module.PREPROCESS_DEVICE == "GPU"
 
     def test_hardware_resource_pooling(self):
@@ -295,48 +303,6 @@ class TestConfigHardware:
                 importlib.reload(config_module)
                 assert config_module.DEVICE == "CPU"
 
-    def test_asr_engine_auto_prefers_cuda_over_intel(self):
-        """ASR_ENGINE=AUTO should resolve to FASTER-WHISPER when CUDA is available."""
-        env = {"ASR_ENGINE": "AUTO", "ASR_DEVICE": "AUTO"}
-        with mock.patch.dict(os.environ, env):
-            with mock.patch("ctranslate2.get_cuda_device_count", return_value=1):
-                mock_core = mock.MagicMock()
-                mock_core.available_devices = ["GPU.0", "NPU.0"]
-                with mock.patch("openvino.Core", return_value=mock_core):
-                    importlib.reload(config_module)
-                    assert config_module.ASR_ENGINE == "FASTER-WHISPER"
-                    assert config_module.DEVICE == "CUDA"
-
-    def test_asr_engine_auto_prefers_intel_gpu_over_npu(self):
-        """ASR_ENGINE=AUTO should resolve Intel GPU tier before Intel NPU."""
-        env = {"ASR_ENGINE": "AUTO", "ASR_DEVICE": "AUTO"}
-        with mock.patch.dict(os.environ, env):
-            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
-                mock_core = mock.MagicMock()
-                mock_core.available_devices = ["NPU.0", "GPU.0", "CPU"]
-                with mock.patch("openvino.Core", return_value=mock_core):
-                    importlib.reload(config_module)
-                    assert config_module.ASR_ENGINE == "INTEL-WHISPER"
-                    assert config_module.DEVICE == "GPU"
-
-    def test_asr_engine_auto_uses_npu_when_no_gpu(self):
-        """ASR_ENGINE=AUTO should resolve to Intel Whisper on NPU when GPU is absent."""
-        env = {"ASR_ENGINE": "AUTO", "ASR_DEVICE": "AUTO"}
-        with mock.patch.dict(os.environ, env):
-            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
-                mock_core = mock.MagicMock()
-                mock_core.available_devices = ["NPU.0", "CPU"]
-                with mock.patch("openvino.Core", return_value=mock_core):
-                    importlib.reload(config_module)
-                    assert config_module.ASR_ENGINE == "INTEL-WHISPER"
-                    assert config_module.DEVICE == "NPU"
-
-    def test_asr_engine_invalid_value_fails_fast(self):
-        """Invalid ASR_ENGINE values should fail startup with a clear error."""
-        with mock.patch.dict(os.environ, {"ASR_ENGINE": "INVALID-ENGINE"}):
-            with pytest.raises(ValueError, match="Invalid ASR_ENGINE"):
-                importlib.reload(config_module)
-
     def test_hardware_detection_logic_manual_override(self):
         """Test manual ASR_DEVICE override path."""
         with mock.patch.dict(os.environ, {"ASR_DEVICE": "CPU", "ASR_PREPROCESS_DEVICE": "GPU"}):
@@ -364,59 +330,6 @@ class TestConfigHardware:
         assert "vă mulțumim pentru vizionare" in config_module.HALLUCINATION_PHRASES
 
 
-class TestConfigHardwareIntelResolution:
-    """Config hardware tests for Intel model/device resolution branches."""
-
-    def test_intel_engine_redirection(self):
-        """Test that MODEL_ID redirects for INTEL-WHISPER."""
-        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_MODEL": "Systran/faster-whisper-large-v3"}
-        with mock.patch.dict(os.environ, env):
-            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
-                mock_core = mock.MagicMock()
-                mock_core.available_devices = ["GPU.0"]
-                with mock.patch("openvino.Core", return_value=mock_core):
-                    with mock.patch("os.path.exists", side_effect=lambda p: "whisper-openvino" in p):
-                        importlib.reload(config_module)
-                        assert "whisper-openvino" in config_module.MODEL_ID
-
-    def test_intel_engine_hf_fallback(self):
-        """Test that MODEL_ID falls back to HF for INTEL-WHISPER if local missing."""
-        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_MODEL": "Systran/faster-whisper-large-v3"}
-        with mock.patch.dict(os.environ, env):
-            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
-                mock_core = mock.MagicMock()
-                mock_core.available_devices = ["GPU.0"]
-                with mock.patch("openvino.Core", return_value=mock_core):
-                    with mock.patch("os.path.exists", return_value=False):
-                        importlib.reload(config_module)
-                        assert config_module.MODEL_ID == "OpenVINO"
-
-    def test_intel_engine_explicit_falls_back_to_faster_without_intel_hardware(self):
-        """INTEL-WHISPER should resolve to Faster-Whisper when no Intel GPU/NPU is detected."""
-        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_DEVICE": "AUTO"}
-        with mock.patch.dict(os.environ, env):
-            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
-                with mock.patch("openvino.Core", side_effect=RuntimeError("No Intel accel")):
-                    # Disable the real /dev/dri GPU-node fallback so this test's
-                    # outcome doesn't depend on whether the machine running it
-                    # happens to have a real Intel GPU device node present.
-                    with mock.patch("modules.core.config_helpers._can_use_gpu_node_fallback", return_value=False):
-                        importlib.reload(config_module)
-                        assert config_module.ASR_ENGINE == "FASTER-WHISPER"
-
-    def test_intel_engine_explicit_auto_device_prefers_intel_hardware(self):
-        """Explicit INTEL-WHISPER with ASR_DEVICE=AUTO should propagate detected Intel device."""
-        env = {"ASR_ENGINE": "INTEL-WHISPER", "ASR_DEVICE": "AUTO"}
-        with mock.patch.dict(os.environ, env):
-            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
-                mock_core = mock.MagicMock()
-                mock_core.available_devices = ["GPU.0", "CPU"]
-                with mock.patch("openvino.Core", return_value=mock_core):
-                    importlib.reload(config_module)
-                    assert config_module.ASR_ENGINE == "INTEL-WHISPER"
-                    assert config_module.DEVICE == "GPU"
-
-
 def _is_cuda_preprocess_override_warning(call: Any, preprocess_value: str) -> bool:
     if not call.args:
         return False
@@ -425,13 +338,17 @@ def _is_cuda_preprocess_override_warning(call: Any, preprocess_value: str) -> bo
 
 @pytest.mark.parametrize("preprocess_value", ["GPU", "NPU", "INTEL", "OPENVINO"])
 def test_cuda_device_forces_preprocess_device_to_cuda(preprocess_value: str):
-    """A CUDA context can't safely share a process with an OpenVINO GPU/NPU context
-    (see the guard comment above PREPROCESS_DEVICE's assignment in config.py) --
-    ASR_DEVICE=CUDA must force PREPROCESS_DEVICE to CUDA regardless of what
-    ASR_PREPROCESS_DEVICE was explicitly set to, and log a warning explaining why."""
+    """Without isolation, ASR_DEVICE=CUDA must still force PREPROCESS_DEVICE to CUDA.
+
+    A CUDA context cannot safely share a process with an OpenVINO GPU/NPU context (see
+    the guard comment above PREPROCESS_DEVICE's assignment in config.py), so when both
+    would live in one interpreter the override still applies and still explains itself.
+    The isolated case is covered by
+    test_isolated_preprocessing_allows_cross_vendor_devices below.
+    """
     original_environ = dict(os.environ)
     try:
-        env = {"ASR_DEVICE": "CUDA", "ASR_PREPROCESS_DEVICE": preprocess_value}
+        env = {"ASR_DEVICE": "CUDA", "ASR_PREPROCESS_DEVICE": preprocess_value, "ASR_ISOLATE_PREPROCESSING": "0"}
         with mock.patch.dict(os.environ, env):
             with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
                 mock_core = mock.MagicMock()
@@ -463,21 +380,29 @@ def test_cuda_device_forces_preprocess_device_to_cuda(preprocess_value: str):
         importlib.reload(config_module)
 
 
-def test_engine_registry_validation_paths():
-    """Engine registry should validate supported values and hardware unit input."""
-    assert engine_registry.normalize_and_validate_engine("faster-whisper") == engine_registry.ENGINE_FASTER_WHISPER
+@pytest.mark.parametrize("preprocess_value", ["GPU", "NPU"])
+def test_isolated_preprocessing_allows_cross_vendor_devices(preprocess_value: str):
+    """With UVR out-of-process the cross-vendor restriction no longer applies.
 
-    with pytest.raises(ValueError, match="Supported values"):
-        engine_registry.normalize_and_validate_engine("AUTO")
+    The crash it guards against needs both contexts in one interpreter. Once preprocessing
+    has its own process, a CUDA ASR engine can coexist with Intel-GPU vocal separation --
+    and equally with a ROCm one, which is the only way an AMD host gets accelerated UVR
+    alongside a non-AMD ASR engine.
+    """
+    original_environ = dict(os.environ)
+    try:
+        env = {"ASR_DEVICE": "CUDA", "ASR_PREPROCESS_DEVICE": preprocess_value, "ASR_ISOLATE_PREPROCESSING": "1"}
+        with mock.patch.dict(os.environ, env):
+            with mock.patch("ctranslate2.get_cuda_device_count", return_value=0):
+                mock_core = mock.MagicMock()
+                mock_core.available_devices = ["CPU"]
+                with mock.patch("openvino.Core", return_value=mock_core):
+                    importlib.reload(config_module)
 
-    with pytest.raises(ValueError, match="non-empty list"):
-        engine_registry.resolve_auto_engine([])
-
-    with pytest.raises(ValueError, match="type"):
-        engine_registry.resolve_auto_engine([{"id": "CPU"}])
-
-    assert engine_registry.resolve_auto_engine([{"type": "CPU"}]) == (
-        engine_registry.ENGINE_FASTER_WHISPER,
-        "CPU",
-    )
-    assert engine_registry.resolve_auto_device([{"type": "OTHER"}]) == "CPU"
+                    assert config_module.ISOLATE_PREPROCESSING is True
+                    assert config_module.DEVICE == "CUDA"
+                    assert config_module.PREPROCESS_DEVICE == preprocess_value, "isolation should preserve the requested device"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environ)
+        importlib.reload(config_module)

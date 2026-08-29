@@ -112,19 +112,63 @@ def _detect_nvidia_via_ctranslate2() -> bool:
 def _resolve_target_library(
     device: str, preprocess_device: str, is_nvidia_hw: bool, is_intel_hw: bool, is_amd_hw: bool
 ) -> tuple[str | None, str]:
-    dual_res = _check_dual_gpu_path(device, preprocess_device, is_nvidia_hw, is_amd_hw)
-    if dual_res:
-        return dual_res
-    nvidia_res = _check_nvidia_library(device, is_nvidia_hw)
-    if nvidia_res:
-        return nvidia_res
-    amd_res = _check_amd_library(device, preprocess_device, is_amd_hw)
-    if amd_res:
-        return amd_res
-    intel_res = _check_intel_library(device, preprocess_device, is_intel_hw)
-    if intel_res:
-        return intel_res
+    # Order is the whole contract here: an explicitly named preprocess device outranks the
+    # ASR device, and the dual-GPU case outranks either vendor's own check. Expressed as a
+    # sequence so the precedence is one readable list rather than six paired branches.
+    candidates = (
+        lambda: _check_explicit_preprocess_library(preprocess_device, is_nvidia_hw, is_intel_hw, is_amd_hw),
+        lambda: _check_dual_gpu_path(device, preprocess_device, is_nvidia_hw, is_amd_hw),
+        lambda: _check_nvidia_library(device, is_nvidia_hw),
+        lambda: _check_amd_library(device, preprocess_device, is_amd_hw),
+        lambda: _check_intel_library(device, preprocess_device, is_intel_hw),
+    )
+    for check in candidates:
+        resolved = check()
+        if resolved:
+            return resolved
     return _check_cpu_library()
+
+
+def _check_explicit_preprocess_library(
+    preprocess_device: str, is_nvidia_hw: bool, is_intel_hw: bool, is_amd_hw: bool
+) -> tuple[str, str] | None:
+    """Resolve from an explicitly named preprocess device, ahead of the ASR device.
+
+    ONNX Runtime is used by UVR, VAD and hardware detection -- not by any ASR engine.
+    FASTER-WHISPER is CTranslate2, INTEL-WHISPER is OpenVINO GenAI, OPENAI-WHISPER and
+    WHISPERX are torch, and each brings its own runtime. So when the operator names a
+    preprocess device, that device decides which ONNX variant has to be importable.
+
+    Without this, the NVIDIA check ran first and matched on ASR_DEVICE alone (it was the
+    only vendor check not given preprocess_device at all). On a hybrid NVIDIA+Intel host
+    with ASR_DEVICE=AUTO, that loaded onnxruntime-gpu, which carries no OpenVINO provider,
+    so ASR_PREPROCESS_DEVICE=GPU ran UVR through CPUExecutionProvider while the logs named
+    the iGPU -- 0.48x against 2.40x on CUDA, five times slower while claiming acceleration.
+
+    Only an explicit request is honoured here. AUTO falls through to the original
+    ASR-device-led order, so nothing changes for hosts that do not ask for anything.
+    """
+    normalized = (preprocess_device or "").strip().lower()
+    if normalized in ("", "auto"):
+        return None
+    if normalized == "cpu":
+        return "/app/libs/cpu", "CPU"
+    return _explicit_vendor_library(preprocess_device, is_nvidia_hw, is_intel_hw, is_amd_hw)
+
+
+def _explicit_vendor_library(preprocess_device: str, is_nvidia_hw: bool, is_intel_hw: bool, is_amd_hw: bool) -> tuple[str, str] | None:
+    """The vendor runtime an explicitly named, non-CPU preprocess device asks for.
+
+    Intel first, then AMD, then NVIDIA -- the same precedence the paired branches had, kept
+    as an ordered table so the order is visible in one place rather than implied by control
+    flow. None when the named device does not match any vendor present on this host.
+    """
+    vendors = (
+        (_should_use_intel_path(preprocess_device, is_intel_hw), "/app/libs/intel", "Intel OpenVINO"),
+        (_should_use_amd_path(preprocess_device, is_amd_hw), "/app/libs/amd", "AMD ROCm"),
+        (_should_use_nvidia_path(preprocess_device, is_nvidia_hw), "/app/libs/nvidia", "NVIDIA CUDA"),
+    )
+    return next(((path, label) for matched, path, label in vendors if matched), None)
 
 
 def _is_auto_device_pair(device: str, preprocess_device: str) -> bool:
@@ -185,6 +229,10 @@ def _should_use_amd_path(device: str, is_amd_hw: bool) -> bool:
 
 
 def _should_use_nvidia_path(device: str, is_nvidia_hw: bool) -> bool:
+    # Per-vendor images may ship without this runtime; an explicit ASR_DEVICE=CUDA must
+    # not claim a path that does not exist, or resolution returns before the CPU fallback.
+    if not os.path.exists("/app/libs/nvidia"):
+        return False
     normalized = device.lower()
     return _is_explicit_nvidia_device(normalized) or _can_use_auto_nvidia_path(normalized, is_nvidia_hw)
 
@@ -197,10 +245,17 @@ def _can_use_auto_nvidia_path(normalized_device: str, is_nvidia_hw: bool) -> boo
     return normalized_device == "auto" and is_nvidia_hw and os.path.exists("/app/libs/nvidia")
 
 
+def _is_explicit_intel_device(normalized_device: str) -> bool:
+    return normalized_device in {"intel", "gpu", "npu"} or normalized_device.startswith("intel")
+
+
 def _should_use_intel_path(device: str, is_intel_hw: bool) -> bool:
+    # Same guard as the NVIDIA path above: explicit intel/gpu/npu must not resolve to a
+    # runtime the image does not carry.
+    if not os.path.exists("/app/libs/intel"):
+        return False
     normalized = device.lower()
-    explicit_intel = normalized in {"intel", "gpu", "npu"} or normalized.startswith("intel")
-    return explicit_intel or (normalized == "auto" and is_intel_hw and os.path.exists("/app/libs/intel"))
+    return _is_explicit_intel_device(normalized) or (normalized == "auto" and is_intel_hw)
 
 
 def _is_valid_target_lib(target_lib: str | None) -> bool:
@@ -209,19 +264,58 @@ def _is_valid_target_lib(target_lib: str | None) -> bool:
     return os.path.exists(target_lib)
 
 
+def _fallback_to_cpu_library(boot_logger, target_lib: str | None) -> tuple[str | None, str]:
+    """Substitute the CPU runtime for an unavailable vendor library.
+
+    Defense in depth: the image build uninstalls the global onnxruntime, so returning
+    nothing here would leave sys.path with no ONNX Runtime at all.
+    """
+    fallback_lib, fallback_reason = _check_cpu_library()
+    if not _is_valid_target_lib(fallback_lib):
+        return None, fallback_reason
+    boot_logger.warning(
+        "ONNX runtime path %s is unavailable in this image; falling back to %s",
+        target_lib,
+        fallback_reason,
+    )
+    return fallback_lib, fallback_reason
+
+
 def _activate_target_library(boot_logger, target_lib: str | None, context_reason: str):
     if not _is_valid_target_lib(target_lib):
-        return
-    if target_lib not in sys.path:
-        sys.path.insert(0, target_lib)
-        boot_logger.info("Context: %s -> Path: %s", context_reason, target_lib)
-
-    importlib.invalidate_caches()
-    if "onnxruntime" in sys.modules:
-        del sys.modules["onnxruntime"]
-    _log_onnxruntime_load(boot_logger, target_lib)
+        target_lib, context_reason = _fallback_to_cpu_library(boot_logger, target_lib)
+        if not _is_valid_target_lib(target_lib):
+            return
+    _prepend_to_sys_path(boot_logger, target_lib, context_reason)
+    _reimport_onnxruntime(boot_logger, target_lib)
     if context_reason == "Intel OpenVINO":
         _log_intel_runtime_diagnostics(boot_logger)
+
+
+def _prepend_to_sys_path(boot_logger, target_lib: str, context_reason: str) -> None:
+    """Put the chosen vendor directory ahead of site-packages, once."""
+    if target_lib in sys.path:
+        return
+    sys.path.insert(0, target_lib)
+    boot_logger.info("Context: %s -> Path: %s", context_reason, target_lib)
+
+
+def _reimport_onnxruntime(boot_logger, target_lib: str) -> None:
+    """Drop any already-imported onnxruntime so the next import resolves to ``target_lib``.
+
+    Without evicting the module, an onnxruntime imported before the path was adjusted stays
+    in sys.modules and keeps serving the wrong vendor's build for the life of the process --
+    which is the whole failure this bootstrap exists to prevent.
+    """
+    importlib.invalidate_caches()
+    # The whole namespace, not just the top-level name. onnxruntime.capi holds the native
+    # extension, and leaving those submodules behind meant the "fresh" import rebound the
+    # package while every provider still came from the previous vendor's .so -- the exact
+    # cross-vendor mixture this bootstrap exists to prevent, made invisible by a top-level
+    # name that looked correctly reloaded.
+    for name in [m for m in sys.modules if m == "onnxruntime" or m.startswith("onnxruntime.")]:
+        del sys.modules[name]
+    _log_onnxruntime_load(boot_logger, target_lib)
 
 
 def _log_onnxruntime_load(boot_logger, target_lib: str):

@@ -3,6 +3,7 @@
 import importlib
 import sys
 from argparse import Namespace
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -99,7 +100,9 @@ class TestIntelWhisperEngine:
             list(segments)
 
             mock_get_timestamps.assert_called_once()
-            engine.pipeline.generate.assert_called_once()
+            # Construction runs one warmup generate() call (see _verify_device_executes),
+            # so this is the second call, not the only one.
+            assert engine.pipeline.generate.call_count == 2
             generated_audio = engine.pipeline.generate.call_args[0][0]
             # Verify non-suppressed region remains unchanged.
             assert np.all(generated_audio[:8000] == 1.0)
@@ -291,3 +294,152 @@ def test_intel_detect_language_branches():
         engine.pipeline.generate.side_effect = RuntimeError("Detect Fail")
         lang, _, _ = engine.detect_language(np.zeros(16000))
         assert lang == "en"
+
+
+class TestRepetitionPenaltyIsScopedToGreedy:
+    """OpenVINO GenAI rejects repetition_penalty under beam search, as a hard error.
+
+        'repetition_penalty' is not currently supported by beam search and should be
+        1.0f, but got 1.15
+
+    That is a RuntimeError on every request, not a warning. It hid on Intel GPU and NPU
+    because those are already clamped to greedy, and surfaced only on the CPU path --
+    including the NPU-cannot-execute fallback, which rewrites the device to CPU and so
+    re-enables beam search. Found on the Intel NUC.
+    """
+
+    def _config_for(self, device, beam_size):
+        with mock.patch("importlib.import_module") as mock_imp:
+            mock_imp.return_value = mock.MagicMock()
+            engine = intel_engine.IntelWhisperEngine("path", device)
+        # A plain object, so an unset attribute is genuinely absent rather than a MagicMock
+        # that would satisfy any assertion about it.
+        engine.pipeline.get_generation_config.return_value = SimpleNamespace()
+        return engine.prepare_gen_config("en", "transcribe", beam_size=beam_size)
+
+    def test_cpu_beam_search_leaves_the_penalty_untouched(self):
+        config = self._config_for("CPU", beam_size=5)
+
+        assert config.num_beams == 5, "the CPU path keeps beam search"
+        assert getattr(config, "repetition_penalty", 1.0) == 1.0, (
+            "setting repetition_penalty alongside beam search is rejected by OpenVINO GenAI"
+        )
+
+    def test_greedy_still_gets_the_loop_guard(self):
+        config = self._config_for("GPU", beam_size=5)
+
+        assert config.num_beams == 1, "GPU is clamped to greedy"
+        assert config.repetition_penalty == 1.15
+
+    def test_cpu_with_an_explicitly_greedy_request_gets_the_guard(self):
+        config = self._config_for("CPU", beam_size=1)
+
+        assert config.num_beams == 1
+        assert config.repetition_penalty == 1.15
+
+
+class TestIntelInitializationBranches:
+    """Warmup verification, CPU fallback, and the corrupted-model retry.
+
+    The NPU builds a WhisperPipeline in about four seconds and then fails every generate()
+    with a Level Zero error, because the shipped IR is dynamic-shaped and the NPU plugin
+    needs static upper bounds. Without the warmup the service starts healthy, prints
+    "ASR Runtime: OpenVINO (NPU)", and returns 500 for every request -- so these branches are
+    the difference between a broken service and one that says what it is really running on.
+    """
+
+    @staticmethod
+    def _engine(monkeypatch, *, generate=None, load=None, device="NPU"):
+        """Build an IntelWhisperEngine with the pipeline construction stubbed out."""
+        pipelines = []
+
+        def fake_init(_model_path, dev):
+            pipeline = mock.MagicMock(name=f"pipeline-{dev}")
+            if generate is not None:
+                pipeline.generate.side_effect = generate
+            pipelines.append((dev, pipeline))
+            return pipeline
+
+        monkeypatch.setattr(intel_engine, "_init_intel_pipeline", load or fake_init)
+        return intel_engine.IntelWhisperEngine("/models/ov", device=device), pipelines
+
+    def test_a_successful_npu_warmup_leaves_the_device_alone(self, monkeypatch):
+        engine, pipelines = self._engine(monkeypatch)
+
+        assert engine.device == "NPU"
+        assert pipelines[0][0] == "NPU"
+        pipelines[0][1].generate.assert_called_once()
+
+    def test_a_failed_warmup_moves_asr_to_the_cpu_and_rewrites_the_device(self, monkeypatch):
+        """The device attribute is what /status reports, so it has to follow the fallback.
+
+        CPU rather than the iGPU deliberately: this engine serves an NPU unit on a machine
+        whose GPU unit already runs ASR, and sending both to one device would serialise them.
+        """
+        calls = {"n": 0}
+
+        def generate(_audio):
+            calls["n"] += 1
+            raise RuntimeError("L0 pfnAppendGraphExecute result: ZE_RESULT_ERROR_UNKNOWN")
+
+        engine, pipelines = self._engine(monkeypatch, generate=generate)
+
+        assert engine.device == "CPU"
+        assert [dev for dev, _ in pipelines] == ["NPU", "CPU"]
+        # Only the NPU pipeline is warmed up; the CPU path is exercised constantly and is
+        # not made to pay a warmup on every start.
+        assert calls["n"] == 1
+
+    def test_a_failed_warmup_whose_cpu_fallback_also_fails_raises(self, monkeypatch):
+        """Serving 500s silently is the outcome this whole path exists to prevent."""
+
+        def load(_model_path, dev):
+            if dev == "CPU":
+                raise RuntimeError("no CPU plugin either")
+            pipeline = mock.MagicMock()
+            pipeline.generate.side_effect = RuntimeError("ZE_RESULT_ERROR_UNKNOWN")
+            return pipeline
+
+        with pytest.raises(RuntimeError, match="cannot execute this model"):
+            self._engine(monkeypatch, load=load)
+
+    def test_a_corrupted_model_is_purged_reprovisioned_and_retried(self, monkeypatch):
+        """Purging deletes the directory, so a retry without re-provisioning cannot succeed."""
+        attempts = {"n": 0}
+
+        def load(_model_path, dev):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("corrupted OpenVINO model")
+            pipeline = mock.MagicMock(name=dev)
+            return pipeline
+
+        monkeypatch.setattr(intel_engine.os.path, "isdir", lambda _p: True)
+        monkeypatch.setattr(intel_engine.os, "listdir", lambda _p: [])
+        monkeypatch.setattr(intel_engine.model_integrity, "verify_openvino_model_dir", lambda _p: False)
+        purge = mock.MagicMock(return_value=True)
+        provision = mock.MagicMock(return_value=True)
+        monkeypatch.setattr(intel_engine.model_integrity, "purge_corrupted_path", purge)
+        monkeypatch.setattr(intel_engine.model_provisioning, "ensure_openvino_whisper", provision)
+
+        engine, _ = self._engine(monkeypatch, load=load, device="GPU")
+
+        assert engine.device == "GPU"
+        assert attempts["n"] == 2
+        purge.assert_called_once()
+        provision.assert_called_once()
+
+    def test_a_failed_reprovision_preserves_the_original_failure(self, monkeypatch):
+        """A bounded retry means one attempt, and no attempt at all when it cannot help."""
+
+        def load(_model_path, _dev):
+            raise RuntimeError("corrupted OpenVINO model")
+
+        monkeypatch.setattr(intel_engine.os.path, "isdir", lambda _p: True)
+        monkeypatch.setattr(intel_engine.os, "listdir", lambda _p: [])
+        monkeypatch.setattr(intel_engine.model_integrity, "verify_openvino_model_dir", lambda _p: False)
+        monkeypatch.setattr(intel_engine.model_integrity, "purge_corrupted_path", lambda *a, **k: True)
+        monkeypatch.setattr(intel_engine.model_provisioning, "ensure_openvino_whisper", lambda *a, **k: False)
+
+        with pytest.raises(RuntimeError, match="corrupted OpenVINO model"):
+            self._engine(monkeypatch, load=load, device="GPU")

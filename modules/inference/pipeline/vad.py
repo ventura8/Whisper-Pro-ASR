@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from types import ModuleType
 from typing import Any
 
@@ -116,6 +117,29 @@ def decode_audio(audio_path: str, start_offset: float | None = None, duration: f
     if _should_decode_directly(start_offset, duration):
         return fw_decode_audio(audio_path, sampling_rate=16000)
     return _decode_audio_slice_with_ffmpeg(fw_decode_audio, audio_path, start_offset, duration)
+
+
+def extract_slice_to_file(audio_path: str, start_offset: float, duration: float) -> str:
+    """Extract [start_offset, start_offset+duration) into a new temp WAV file, returning its path.
+
+    Unlike decode_audio (which extracts to a temp file internally and immediately deletes
+    it after decoding to a numpy array), the caller here needs the path to persist:
+    IsolatedEngine runs in a worker subprocess and can only be handed a path, never
+    decoded samples -- passing an array raises TypeError there. The caller owns the
+    returned file and must remove it.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=config.get_temp_dir()) as tmp:
+        temp_path = tmp.name
+    try:
+        cmd = _build_ffmpeg_decode_cmd(audio_path, temp_path, start_offset=start_offset, duration=duration)
+        process_exec.run_capture(cmd, check=True)
+    except BaseException:
+        # The caller owns the file only on success; a failed decode must not leave one
+        # behind, because nothing downstream ever learns the path to clean it up.
+        with suppress(OSError):
+            os.remove(temp_path)
+        raise
+    return temp_path
 
 
 def _should_decode_directly(start_offset: float | None = None, duration: float | None = None) -> bool:

@@ -1,0 +1,33 @@
+---
+# Intel target WITH the XPU PyTorch build, for GPU-accelerated openai-whisper on an Intel
+# GPU. Opt-in because XPU torch plus the oneAPI/SYCL runtime adds ~6GB over the plain
+# intel target (5.2GB -> ~11.2GB).
+# Use docker-compose.intel.yml unless you specifically need a torch-based engine on the
+# GPU: INTEL-WHISPER (OpenVINO) and UVR (onnxruntime-openvino) do not use torch at all.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.intel.yml \
+#                       -f docker-compose.intel-xpu.yml up -d
+# Set BUILD_TARGET=intel-xpu in .env.
+#
+# docker-compose.intel.yml is REQUIRED in that command, not optional: this file deliberately
+# declares no group_add and no devices, because both come from there. Applied on its own it
+# produced a container with no render-group membership, so the XPU torch build found no
+# device and openai-whisper ran on the CPU -- the exact thing this ~6GB target exists to
+# avoid. The devices are declared once, in intel.yml, so the merge cannot duplicate them.
+#
+# REQUIRES Intel Arc (Alchemist) or newer. torch's XPU backend reports the device as
+# available on older integrated GPUs but cannot execute Whisper on them: verified on
+# UHD Graphics, where even the `tiny` model fails with
+# "level_zero backend failed with error: 45 (UR_RESULT_ERROR_INVALID_ARGUMENT)".
+# On such hardware use docker-compose.intel.yml, where INTEL-WHISPER (OpenVINO) runs
+# on the iGPU natively.
+services:
+  whisper-pro-asr:
+    build:
+      args:
+        RUNTIME_BASE: openvino/ubuntu24_runtime:2026.3.1@sha256:fdfa0f1c42f69b4cbf010999482a32279ac04a07b2fb53f449e67246dcb5f1df
+    # group_add, devices and the /dev/dri bind mount all come from docker-compose.intel.yml,
+    # which the usage line above requires. Compose concatenates override lists rather than
+    # replacing them, so restating any of them here duplicates the entry: the repeated
+    # group_add produced "group_add items at 0 and 1 are equal" and refused to start, and a
+    # repeated /dev/dri does the same for the device list. This file therefore contributes
+    # only the build argument.

@@ -40,6 +40,7 @@ This catalog lists all available project skills and when to use them.
 - `runtime/language_detection_priority_skill.md`: Priority orchestration rules and expected ASR/detect interaction.
 - `runtime/model_lifecycle_management_skill.md`: Idle timeout/offload behavior and memory lifecycle.
 - `runtime/storage_persistence_hygiene_skill.md`: Temp file cleanup, persistent volumes, and retention behavior.
+- `runtime/remote_hardware_validation_skill.md`: Validate accelerator paths over SSH on a host with silicon this machine lacks.
 - `runtime/troubleshooting_playbook_skill.md`: Reproduce and isolate deadlocks, stalls, and queue anomalies.
 
 ## Monitoring Skills

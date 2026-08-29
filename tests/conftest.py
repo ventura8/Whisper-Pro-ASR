@@ -201,6 +201,21 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def disable_engine_isolation():
+    """Keep engines and preprocessing in-process for the default suite.
+
+    Isolation is a deployment default, but a test that merely exercises pool or
+    scheduler logic should not pay to spawn a worker -- and with mocked engines the
+    spawned process would import the real engine stack only to fail. Tests that mean to
+    cover the out-of-process path opt back in explicitly (see
+    tests/inference/engines/test_isolated_engine.py and the init_unit isolation tests).
+    """
+    with mock.patch("modules.core.config.ISOLATE_ENGINES", False):
+        with mock.patch("modules.core.config.ISOLATE_PREPROCESSING", False):
+            yield
+
+
+@pytest.fixture(autouse=True)
 def reset_module_state():
     """Reset module-level state between tests to prevent test pollution."""
     # Force reset module state before test

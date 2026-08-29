@@ -282,12 +282,16 @@ def test_stream_alignment_probing_applies_identically_across_all_transcription_a
     mock_convert.assert_called_once_with(bazarr_wav, input_flags=[], stream_index=1, delay_filter="adelay=45:all=1")
 
 
-@pytest.mark.parametrize("language", ["EN", "en-US", "eng"])
+@pytest.mark.parametrize("language", ["EN", "en-US", "eng", "xx"])
 def test_asr_local_path_stream_alignment_forwards_language_as_given(bazarr_client: FlaskCompatibleClient, bazarr_wav: str, language: str):
     """Whatever language format the caller sends (uppercase, locale-style, alpha-3)
     must be forwarded to the alignment probe verbatim -- stream-matching's own
     substring logic (see utils_helpers._select_audio_stream_index) is responsible
-    for normalizing/truncating it, not this call site."""
+    for normalizing/truncating it, not this call site.
+
+    "xx" is included deliberately: the ASR path drops unsupported codes so CTranslate2
+    cannot turn them into a 500, and it is tempting to do that normalisation where the
+    request is parsed -- which would silently break this forwarding contract."""
     with (
         mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav),
         mock.patch("modules.core.utils.get_stream_alignment_directives", return_value=(None, None)) as mock_alignment,

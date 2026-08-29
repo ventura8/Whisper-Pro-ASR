@@ -33,8 +33,28 @@ def _group_for(nodeid: str) -> str:
     return nodeid
 
 
-def _result_char(outcome: str) -> str:
-    return {"passed": ".", "skipped": "s", "failed": "F", "error": "E"}.get(outcome, "?")
+_RESULT_CHARS = {"passed": ".", "skipped": "s", "failed": "F", "error": "E", "xfailed": "x", "xpassed": "X"}
+# pytest spells these two categories differently in verbose output than in its stats keys.
+_VERBOSE_WORDS = {"xfailed": "XFAIL", "xpassed": "XPASS"}
+
+
+def _result_char(category: str) -> str:
+    return _RESULT_CHARS.get(category, "?")
+
+
+def _category_for(report: pytest.TestReport) -> str:
+    """Return pytest's status category for a report, preserving xfail and xpass.
+
+    An xfail report carries outcome "skipped" plus a ``wasxfail`` attribute; pytest's own
+    skipping plugin turns that into the "xfailed" category. This hook runs ``tryfirst`` and
+    would otherwise report it as a plain skip, which files an exception-shaped ``longrepr``
+    into the skipped bucket -- and the folded-skip summary that ``-ra``/``-rs`` renders
+    asserts those are (path, lineno, reason) tuples, so it crashes the terminal summary
+    after the whole run has finished.
+    """
+    if hasattr(report, "wasxfail"):
+        return "xfailed" if report.outcome == "skipped" else "xpassed"
+    return report.outcome
 
 
 def _flush_group(group: str) -> None:
@@ -94,10 +114,11 @@ def pytest_report_teststatus(report: pytest.TestReport, config: pytest.Config) -
     if _should_record(report):
         _SEEN.add(report.nodeid)
         group = _group_for(report.nodeid)
-        _RESULTS[group] = _RESULTS.get(group, "") + _result_char(report.outcome)
+        _RESULTS[group] = _RESULTS.get(group, "") + _result_char(_category_for(report))
         _flush_group(group)
     if _suppress_default_char(report):
-        return report.outcome, "", report.outcome.upper()
+        category = _category_for(report)
+        return category, "", _VERBOSE_WORDS.get(category, category.upper())
     return None
 
 

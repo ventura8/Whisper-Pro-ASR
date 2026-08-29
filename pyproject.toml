@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "whisper-pro-asr"
-version = "1.2.2"
+version = "1.3.0"
 description = "Enterprise-grade Whisper Automatic Speech Recognition web service"
 authors = ["DeepMind Team"]
 package-mode = false
@@ -49,6 +49,11 @@ audio-separator = "0.44.5"
 # not declare it as a dependency; it previously came in transitively via
 # librosa, which dropped audioread as of librosa 1.0.0 above.
 audioread = "3.1.0"
+# Backs ASR_ENGINE=OPENAI-WHISPER. The engine was already accepted by
+# engine_registry and documented in the README, but the package was never installed,
+# so selecting it failed at load in every image. Unlike WhisperX it pins nothing, so it
+# resolves against the torch above rather than needing a segregated stack.
+openai-whisper = "20250625"
 
 # WhisperX 3.8.6 (latest published release) hard-pins torch~=2.8.0,
 # torchaudio~=2.8.0, torchvision~=0.23.0 and huggingface-hub<1.0.0, which
@@ -74,6 +79,31 @@ check-jsonschema = "0.38.0"
 taplo = "0.9.3"
 bandit = "1.9.4"
 pip-audit = "2.10.1"
+
+
+# Fixture-generation tooling. Deliberately optional and NOT installed in Dockerfile.test:
+# piper-tts pulls in onnxruntime (~200 MB), which would inflate every CI image pull and
+# widen the pip-audit surface the lint stage scans, to install something CI never runs --
+# the committed core-tier fixtures are read, never regenerated, in CI. Developers who need
+# to regenerate or extend the audio matrix run `poetry install --with tools`.
+[tool.poetry.group.tools]
+optional = true
+
+[tool.poetry.group.tools.dependencies]
+# The ja/zh extras carry the Japanese and Chinese phonemizers (pyopenjtalk-plus, g2pW);
+# without them those two voices synthesize an empty waveform rather than failing loudly.
+piper-tts = { version = "1.7.0", extras = ["ja", "zh"] }
+# Meta MMS-TTS supplies the nine languages Piper has no voice for (am, gu, km, my, pa,
+# ta, th, tl, yo). Like Piper it is a VITS model, so this widens coverage without
+# dropping fidelity.
+#
+# transformers and torch are deliberately NOT re-declared here: they are already pinned
+# in the `ml` group, and a second declaration could only either duplicate those pins or
+# drift from them. Generating MMS fixtures therefore needs both groups:
+#     poetry install --with tools --with ml
+# uroman romanizes scripts whose MMS model was trained on romanized text (Amharic among
+# the nine); without it those models emit an empty waveform rather than failing loudly.
+uroman = "1.3.1.1"
 
 
 [build-system]

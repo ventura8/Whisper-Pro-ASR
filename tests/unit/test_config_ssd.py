@@ -12,6 +12,7 @@ from unittest import mock
 import pytest
 
 import modules.core.config as config_module
+from modules.core.mount_helpers import _extract_mount_point
 
 
 @pytest.mark.usefixtures("restore_config_after_reload")
@@ -102,8 +103,9 @@ class TestConfigSSD:
                 # chain deterministic regardless of the real filesystem
                 # permissions of whatever process runs this test (e.g.
                 # /app/model_cache is not actually writable in the CI container).
-                mock.patch("modules.core.config.open", mock.mock_open(), create=True),
-                mock.patch("os.remove"),
+                # is_path_writable now uses tempfile.TemporaryFile(dir=path); patch
+                # that constructor so every candidate appears writable here.
+                mock.patch("modules.core.mount_helpers.tempfile.TemporaryFile"),
             ):
                 importlib.reload(config_module)
                 # STATE_DIR/LOG_DIR intentionally reuse PERSISTENT_DIR's own
@@ -117,6 +119,7 @@ class TestConfigSSD:
                 # up as its first writable candidate — "./test_state" is only
                 # reached if that also fails, which isn't this scenario.
                 expected_persistent_fallback = os.path.normpath(os.path.abspath(os.path.join(config_module.OV_CACHE_DIR, ".state")))
+                expected_persistent_temp = os.path.normpath(os.path.abspath(os.path.join(config_module.OV_CACHE_DIR, "temp")))
                 assert (
                     config_module.TEMP_DIR,
                     os.path.normpath(config_module.PERSISTENT_DIR),
@@ -128,7 +131,7 @@ class TestConfigSSD:
                     expected_persistent_fallback,
                     expected_persistent_fallback,
                     expected_persistent_fallback,
-                    os.path.normpath(os.path.join(config_module.OV_CACHE_DIR, "temp")),
+                    expected_persistent_temp,
                 )
 
     def test_validate_thread_concurrency_error(self):
@@ -197,3 +200,25 @@ shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0
             mounts = config_module.get_custom_mount_points()
             assert {"/tv", "/movies"}.issubset(set(mounts))
             assert {"/sys", "/proc", "/dev/shm"}.isdisjoint(set(mounts))
+
+    def test_get_custom_mount_points_decodes_octal_escapes(self):
+        """Escaped mount points (e.g. \\040 for space) must be decoded before being returned."""
+        # \040 is the octal escape for space (0x20)
+        line = r"/dev/sdb1 /my\040movies ext4 rw,relatime 0 0"
+        result = _extract_mount_point(line)
+        assert result == "/my movies"
+
+    def test_persistent_temp_dir_file_exists_fallback(self):
+        """When persistent temp path conflicts with a regular file, fall back to tempfile.gettempdir()."""
+
+        def mock_makedirs(path, *_args, **_kwargs):
+            # *_args because os.makedirs' real signature is (name, mode=0o777, exist_ok=False)
+            # and mode is routinely passed positionally; a keyword-only stub raises TypeError
+            # for such a call, which surfaces as a failure in whatever code made it rather
+            # than as the FileExistsError this test is actually exercising.
+            if "temp" in str(path):
+                raise FileExistsError("[Errno 17] File exists")
+
+        with mock.patch("os.makedirs", side_effect=mock_makedirs):
+            importlib.reload(config_module)
+            assert config_module.PERSISTENT_TEMP_DIR == os.path.abspath(tempfile.gettempdir())

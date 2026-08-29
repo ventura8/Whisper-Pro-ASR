@@ -12,6 +12,27 @@ def test_create_separator_passes_expected_defaults():
     execution.create_separator(lazy_import, "out")
     sep_cls.assert_called_once()
 
+    kwargs = sep_cls.call_args.kwargs
+    assert kwargs["output_dir"] == "out"
+    assert kwargs["output_format"] == "WAV"
+    assert kwargs["output_single_stem"] == "Vocals"
+
+
+def test_create_separator_does_not_attenuate_the_vocal_stem():
+    """normalization_threshold is a ceiling, so a low value silently destroys quality.
+
+    audio-separator only attenuates when the stem peak exceeds this value; it never
+    amplifies. A small threshold scales every stem down to that peak, and the 16-bit PCM
+    Whisper is fed then quantizes the result -- 0.01 left ~9 effective bits and turned
+    "the quick brown fox jumps" into "...dumps" on the known-text fixture.
+    """
+    sep_cls = mock.MagicMock()
+    execution.create_separator(mock.MagicMock(return_value=sep_cls), "out")
+
+    threshold = sep_cls.call_args.kwargs["normalization_threshold"]
+    assert threshold >= 0.5, f"normalization_threshold={threshold} attenuates the stem into 16-bit quantization noise"
+    assert threshold <= 1.0, "normalization_threshold must stay within the library's (0, 1] range"
+
 
 def test_enable_separator_acceleration_flag_sets_only_for_accelerated_providers():
     """Hardware acceleration flag should be enabled for CUDA/OpenVINO providers only."""

@@ -24,6 +24,7 @@ from modules.monitoring.history_helpers import (
     iter_unique_legacy_paths,
     merge_legacy_analytics,
     new_stats_payload,
+    truncate_large_segments,
 )
 from modules.monitoring.io_utils import load_json_list_file
 
@@ -370,9 +371,17 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
         _update_log_count(task_data)
         _update_segments_processed(task_data)
         _log_result_shape(task_data)
-        _truncate_large_segments(task_data)
 
-        module.HISTORY_CACHE.insert(0, task_data.copy())
+        # Copy first, then truncate the copy. truncate_large_segments replaces
+        # ``task_data["result"]`` rather than mutating the segments list -- which fixed the
+        # in-place mutation but still rebinds the key on the *caller's* dict, so the request
+        # handler and update_analytics below both went on to see the clipped transcript.
+        # That is the same defect one level out: a 169-segment result reaching the client as
+        # 100. The history file gets the small copy; everyone else keeps the full one.
+        history_entry = task_data.copy()
+        truncate_large_segments(history_entry)
+
+        module.HISTORY_CACHE.insert(0, history_entry)
         module.HISTORY_CACHE = module.HISTORY_CACHE[:MAX_HISTORY_DISK]
 
         # Invalidate stats cache so it's recalculated on next request
@@ -454,18 +463,6 @@ def _log_result_shape(task_data: Dict[str, Any]) -> None:
         logger.info("[History] Saving task with result keys: %s (Text len: %d)", res_keys, text_len)
         return
     logger.warning("[History] Saving task WITHOUT result field! Task: %s", task_data.get("task_id"))
-
-
-def _truncate_large_segments(task_data: Dict[str, Any]) -> None:
-    if "result" not in task_data:
-        return
-    result = task_data["result"]
-    segments = result.get("segments")
-    if not segments or len(segments) <= 100:
-        return
-    result["segments_total_count"] = len(segments)
-    result["segments_truncated"] = True
-    result["segments"] = segments[:100]
 
 
 def flush_history() -> None:

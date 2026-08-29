@@ -10,7 +10,7 @@ import pytest
 
 from modules.core import config
 from modules.inference import scheduler
-from modules.inference.runtime import model_manager, model_segment_processing
+from modules.inference.runtime import model_manager, model_segment_processing, preprocessor_pool
 
 
 def test_model_lock_ctx_success():
@@ -80,6 +80,53 @@ class TestLoadModel:
             assert model_manager.MODEL_POOL["CPU"] == mock_engine
             mock_create.assert_called_once_with(config.ASR_ENGINE, config.MODEL_ID, unit)
 
+    def test_init_unit_builds_an_isolated_engine_when_isolation_is_enabled(self):
+        """With isolation on, the unit's model must live behind a worker, not in-process."""
+        unit = {"id": "CPU", "type": "CPU", "name": "CPU"}
+        proxy = mock.MagicMock()
+
+        with mock.patch("modules.core.config.ISOLATE_ENGINES", True):
+            with mock.patch("modules.core.config.engine_for_unit", return_value="FASTER-WHISPER"):
+                with mock.patch("modules.inference.engines.isolated_engine.IsolatedEngine", return_value=proxy) as mock_isolated:
+                    with mock.patch("modules.inference.engines.engine_factory.create_engine") as mock_local:
+                        model_manager.init_unit(unit)
+
+        assert model_manager.MODEL_POOL["CPU"] is proxy
+        mock_isolated.assert_called_once_with(config.ASR_ENGINE, config.MODEL_ID, unit)
+        # A bare `mock_local.assert_not_called(), "..."` builds a tuple and throws it away:
+        # the call still ran, but pairing it with a string made the statement an expression
+        # whose value nothing checks, so the intent read as an assertion while asserting
+        # nothing about the message.
+        assert not mock_local.called, "isolation must not also build an in-process engine"
+
+    def test_amd_units_are_isolated_through_the_generic_path(self):
+        """AMD needs no engine-specific worker: it uses the same isolation as every unit.
+
+        CTranslate2 has no ROCm backend, so Faster-Whisper on an AMD unit runs on the CPU
+        by design (engine_factory._resolve_device_str). The isolation value for AMD is
+        crash containment and reclamation, which the generic path already provides.
+        """
+        unit = {"id": "amd:0", "type": "AMD", "name": "AMD GPU 0"}
+        proxy = mock.MagicMock()
+
+        with mock.patch("modules.core.config.ISOLATE_ENGINES", True):
+            with mock.patch("modules.inference.engines.isolated_engine.IsolatedEngine", return_value=proxy) as mock_isolated:
+                model_manager.init_unit(unit)
+
+        assert model_manager.MODEL_POOL["amd:0"] is proxy
+        mock_isolated.assert_called_once()
+
+    def test_whisperx_is_not_double_isolated(self):
+        """WhisperX already proxies to its own worker; wrapping it again wastes a process."""
+        unit = {"id": "CPU", "type": "CPU", "name": "CPU"}
+
+        with mock.patch("modules.core.config.ISOLATE_ENGINES", True):
+            with mock.patch("modules.core.config.engine_for_unit", return_value="WHISPERX"):
+                with mock.patch("modules.inference.engines.engine_factory.create_engine", return_value=mock.MagicMock()) as mock_local:
+                    model_manager.init_unit(unit)
+
+        mock_local.assert_called_once()
+
     def test_init_unit_failure(self):
         """Test error handling during unit initialization."""
         unit = {"id": "CPU", "type": "CPU", "name": "CPU"}
@@ -103,7 +150,7 @@ class TestSharedPreprocessorSelection:
             instance = mock.MagicMock()
             mock_pm.return_value = instance
 
-            result = model_manager._shared_preprocessor_for_type("NPU")
+            result = preprocessor_pool._shared_preprocessor_for_type(model_manager.PREPROCESSOR_POOL, "NPU")
 
             assert result is instance
             mock_pm.assert_called_once_with(npu_unit)
@@ -119,10 +166,12 @@ class TestSharedPreprocessorSelection:
             instance = mock.MagicMock()
             mock_pm.return_value = instance
 
-            result = model_manager._shared_preprocessor_for_type("NPU")
+            result = preprocessor_pool._shared_preprocessor_for_type(model_manager.PREPROCESSOR_POOL, "NPU")
 
             assert result is instance
-            mock_pm.assert_called_once_with()
+            # create_manager() forwards the (absent) unit explicitly, so the manager sees
+            # None rather than a bare call -- same meaning, one less special case.
+            mock_pm.assert_called_once_with(None)
             assert model_manager.PREPROCESSOR_POOL["PREPROCESS::NPU"] is instance
 
 
@@ -163,7 +212,9 @@ class TestRunTranscription:
                 with mock.patch("os.path.exists", return_value=True):
                     with mock.patch("os.remove") as mock_remove:
                         model_manager.run_transcription("original.wav", language="en", task="transcribe", batch_size=1)
-                        pm.preprocess_audio.assert_called_with("original.wav", force=False, yield_cb=model_manager.check_preemption)
+                        pm.preprocess_audio.assert_called_with(
+                            "original.wav", force=False, yield_cb=model_manager.check_preemption, stage="Vocal Separation"
+                        )
                         mock_remove.assert_called_with("isolated.wav")
 
     def test_run_transcription_checks_preemption_on_stage_transitions(self):
@@ -378,9 +429,33 @@ def test_model_manager_forwards_new_params():
         beam_size=config.DEFAULT_BEAM_SIZE,
         initial_prompt="hello test",
         vad_filter=False,
-        vad_parameters={"min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS},
+        vad_parameters={
+            "min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS,
+            "threshold": config.VAD_THRESHOLD,
+        },
         word_timestamps=True,
+        # language="en" was asked for, so per-window re-detection stays off: it would
+        # override the request and still report the requested language back.
+        multilingual=False,
     )
+
+
+def test_model_manager_enables_per_window_detection_when_language_was_detected():
+    """An auto-detected language may be revised per window; a requested one may not.
+
+    The engine sees a resolved language either way -- detection has already run by this
+    point -- so the distinction has to be forwarded explicitly or it is lost.
+    """
+    mock_model = mock.MagicMock()
+    mock_info = mock.MagicMock(language="es", language_probability=0.95, duration=5.0)
+    mock_model.transcribe.return_value = ([mock.MagicMock(start=0.0, end=1.0, text="hola")], mock_info)
+    mock_model.detect_language.return_value = ("es", 0.95, [("es", 0.95)])
+
+    model_manager.MODEL_POOL["CPU"] = mock_model
+
+    model_manager.run_transcription("test.wav", language=None, task="transcribe")
+
+    assert mock_model.transcribe.call_args.kwargs["multilingual"] is True
 
 
 def test_preprocessor_resolution_paths_cover_shared_and_cpu_fallbacks():

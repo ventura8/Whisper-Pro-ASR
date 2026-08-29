@@ -400,3 +400,27 @@ def test_extract_ext_extensionless_original_with_local_path():
     assert extract_ext("audio_file_no_ext", "/mnt/media/local_audio.mp3") == ".mp3"
     assert extract_ext("", "/mnt/media/local_audio.flac") == ".flac"
     assert extract_ext("audio.wav", "/mnt/media/local_audio.mp3") == ".wav" and extract_ext("", "") == ".tmp"
+
+
+def test_extract_ext_input_flags_and_candidates():
+    """_extract_ext honors THREAD_CONTEXT.input_flags and validates candidate extensions."""
+    extract_ext = routes_utils.extract_ext
+
+    # Active THREAD_CONTEXT.input_flags forces .raw regardless of original filename extension
+    with mock.patch.object(routes_utils.utils.THREAD_CONTEXT, "input_flags", ["-f", "s16le"]):
+        assert extract_ext("audio.wav", "/mnt/media/file.mp3") == ".raw"
+        assert extract_ext("recording.flac", None) == ".raw"
+
+    # Valid candidate extensions
+    assert extract_ext("audio.m4a", None) == ".m4a"
+    assert extract_ext("audio.opus", None) == ".opus"
+    assert extract_ext('"audio.mp3"', None) == ".mp3"
+
+    # Missing / empty extensions fall back to local_path or .tmp
+    assert extract_ext("audio_no_ext", None) == ".tmp"
+    assert extract_ext("", None) == ".tmp"
+    assert extract_ext(None, None) == ".tmp"
+
+    # Overlength candidate extension (> 6 chars) rejected and falls back
+    assert extract_ext("file.toolongextension", None) == ".tmp"
+    assert extract_ext("file.toolongextension", "file.wav") == ".wav"

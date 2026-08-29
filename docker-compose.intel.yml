@@ -1,0 +1,23 @@
+---
+# Intel iGPU / Arc / NPU target.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d
+# Set BUILD_TARGET=intel in .env, and set the host render group explicitly:
+#   echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD128)" >> .env
+services:
+  whisper-pro-asr:
+    build:
+      # The base Compose file intentionally defaults CPU to Ubuntu; Intel targets must
+      # restore the pinned OpenVINO base that supplies Level Zero and NPU support.
+      args:
+        RUNTIME_BASE: openvino/ubuntu24_runtime:2026.3.1@sha256:fdfa0f1c42f69b4cbf010999482a32279ac04a07b2fb53f449e67246dcb5f1df
+    group_add:
+      - "${HOST_INTEL_RENDER_GID:-990}"
+    devices:
+      - /dev/dri:/dev/dri
+      # Uncomment on hosts with an Intel NPU (check: ls /dev/accel):
+      # - /dev/accel:/dev/accel
+    volumes:
+      # `devices:` alone can drop the Intel entry from /dev/dri/by-path, which Intel's
+      # compute-runtime uses to enumerate GPUs, even when renderD* is present and
+      # openable. This bind mount mirrors the host directory exactly and fixes that.
+      - /dev/dri:/dev/dri

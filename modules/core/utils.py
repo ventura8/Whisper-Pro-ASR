@@ -20,6 +20,7 @@ from modules.core.pcm_helpers import (
     calculate_pcm_fallback_duration,
     format_duration,
     pcm_bytes_per_second,
+    probe_audio_duration,
 )
 from modules.core.subtitles import (
     format_single_srt_block,
@@ -481,21 +482,9 @@ def parse_ffmpeg_progress(process, duration, yield_cb=None):
 
 def get_audio_duration(file_path: str, input_flags: list[str] | None = None) -> float:
     """Extract precise media duration via ffprobe, with PCM-byte fallback."""
-    if input_flags is None:
-        input_flags = getattr(THREAD_CONTEXT, "input_flags", None)
-    try:
-        cmd = ["ffprobe", "-v", "error"]
-        if input_flags:
-            cmd.extend(input_flags)
-        cmd.extend(
-            [
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                file_path,
-            ]
-        )
-        return float(process_exec.check_output_text(cmd, timeout=10).strip())
-    except tuple([Exception]):
-        return calculate_pcm_fallback_duration(file_path, input_flags)
+    return probe_audio_duration(
+        file_path,
+        input_flags,
+        getattr(THREAD_CONTEXT, "input_flags", None),
+        process_exec.check_output_text,
+    )

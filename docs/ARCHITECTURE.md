@@ -38,10 +38,15 @@ All core runtime modules are consolidated under `modules/core/` for improved org
 | Pipeline Stage | CPU (Generic) | NVIDIA (CUDA) | AMD (ROCm/DirectML) | Intel iGPU / Arc | Intel NPU |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Media Standardization** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Vocal Isolation (UVR)** | ✅ | ✅ | ✅ (ONNX ROCm on native Linux `/dev/kfd`; DirectML on Windows host only — not inside Linux Docker/WSL2) | ✅ (OpenVINO) | ✅ (OpenVINO) |
-| **VAD Verification** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) | ⚠️ (CPU Fallback) |
-| **Speaker Diarization** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Vocal Isolation (UVR)** | ✅ | ✅ | ❔ (ONNX ROCm on native Linux `/dev/kfd`; DirectML on Windows host only — not inside Linux Docker/WSL2) | ✅ (OpenVINO) | ✅ (OpenVINO) |
+| **VAD Verification** | ✅ | ✅ | ❔ | ✅ | ✅ |
+| **Whisper ASR Inference** | ✅ | ✅ | ⚠️ (CPU Fallback) | ✅ *with `ASR_ENGINE=INTEL-WHISPER`; otherwise CPU* | ⚠️ (CPU Fallback) |
+| **Speaker Diarization** | ✅ | ✅ | ❔ | ✅ | ✅ |
+
+✅ measured on real hardware &nbsp;·&nbsp; ⚠️ works, but on CPU &nbsp;·&nbsp; ❔ **implemented, never exercised on supported AMD silicon**
+
+The AMD column records what is implemented, not what has been measured -- see the AMD note
+in `README.md` and the architecture table in `docs/SETUP.md`, which must stay in step.
 
 ---
 
@@ -102,7 +107,9 @@ graph LR
     end
 ```
 
-**WhisperX Process Isolation**: `whisperx` is not imported in the main service process. WhisperX 3.8.6 hard-pins a torch/torchaudio/torchvision/huggingface-hub stack that is incompatible with the versions the rest of the application uses, and that stack cannot be safely reloaded inside one live interpreter. `whisperx_engine.py` instead calls `whisperx_worker_client.call(...)` / `call_with_generation(...)`, which lazily spawns and owns a dedicated child process (`whisperx_worker.py`, launched via `multiprocessing.get_context("spawn")` against the isolated install at `WHISPERX_LIB_PATH`). Spawn re-imports app `__main__` as `__mp_main__`; `whisper_pro_asr.py` skips FastAPI/torch construction on that path, and `modules` / `modules.inference.engines` package inits stay lazy so importing `whisperx_worker` does not pull the main stack before `_activate_isolated_lib_path()` runs. `diarization.py` talks to alignment/diarization models through this client using opaque handles instead of live Python objects. `ALIGN_POOL`/`DIARIZE_POOL` still track per-unit handles in the main process; the underlying models live in the worker. Load paths that cache handles use `call_with_generation(...)`, which returns `(result, generation)` under the same `_LOCK` so the stamped generation cannot race a mid-load worker respawn. Parent-side access remains serialized under one shared `_LOCK` (a deliberate single-worker design for this isolation layer; concurrent WhisperX across distinct scheduler hardware units is not multiplexed yet). Callers that block beyond `WHISPERX_WORKER_LOCK_WARN_SEC` (default 5s) emit an operational warning identifying the waiting operation (`call`/`generation`/`shutdown`) without changing lock semantics. RPC deadlines are off by default (`WHISPERX_WORKER_CALL_TIMEOUT_SEC=0`); set a positive value only to enforce a hung-worker ceiling. The isolated install is pinned with hashes via `requirements/whisperx.lock.txt` (`pip install --require-hashes`) in the production Dockerfile. Releasing GPU/VRAM for these models (`unload_models()` / idle cleanup) shuts down and respawns the worker rather than just dropping references. A `WhisperXWorkerError` from the client falls back to unlabeled segments rather than failing the whole transcription.
+**WhisperX Process Isolation & Packaging**: `whisperx` is not imported in the main service process. WhisperX 3.8.6 hard-pins a torch/torchaudio/torchvision/huggingface-hub stack that is incompatible with the versions the rest of the application uses, and that stack cannot be safely reloaded inside one live interpreter. `whisperx_engine.py` instead calls `whisperx_worker_client.call(...)` / `call_with_generation(...)`, which lazily spawns and owns a dedicated child process (`whisperx_worker.py`, launched via `multiprocessing.get_context("spawn")` against the isolated install at `WHISPERX_LIB_PATH`). Spawn re-imports app `__main__` as `__mp_main__`; `whisper_pro_asr.py` skips FastAPI/torch construction on that path, and `modules` / `modules.inference.engines` package inits stay lazy so importing `whisperx_worker` does not pull the main stack before `_activate_isolated_lib_path()` runs. `diarization.py` talks to alignment/diarization models through this client using opaque handles instead of live Python objects. `ALIGN_POOL`/`DIARIZE_POOL` still track per-unit handles in the main process; the underlying models live in the worker. Load paths that cache handles use `call_with_generation(...)`, which returns `(result, generation)` under the same `_LOCK` so the stamped generation cannot race a mid-load worker respawn. Parent-side access remains serialized under one shared `_LOCK` (a deliberate single-worker design for this isolation layer; concurrent WhisperX across distinct scheduler hardware units is not multiplexed yet). Callers that block beyond `WHISPERX_WORKER_LOCK_WARN_SEC` (default 5s) emit an operational warning identifying the waiting operation (`call`/`generation`/`shutdown`) without changing lock semantics. RPC calls carry a finite deadline of 1800 seconds (`WHISPERX_WORKER_CALL_TIMEOUT_SEC`, default `1800`); set `0` to disable it. The isolated install is pinned with hashes via `requirements/whisperx.lock.txt` (`pip install --require-hashes`) with CPU PyTorch in the production Dockerfile's `full` target (~27.4 GB); every per-vendor target (`cpu`, `intel`, `nvidia`, `nvidia-intel`, `amd`) omits this layer entirely. If diarization is invoked on a non-`full` image or when `WHISPERX_LIB_PATH` is absent, `run_diarization()` cleanly falls back to unlabeled segments with an operational notice without raising an exception. Releasing GPU/VRAM for these models (`unload_models()` / idle cleanup) shuts down and respawns the worker rather than just dropping references. A `WhisperXWorkerError` from the client falls back to unlabeled segments rather than failing the whole transcription.
+
+The `full` image size cited for disk planning is ~29.8 GB uncompressed on disk, measured locally with `docker images`; registry transfer sizes may be lower because layers are compressed. On an RPC timeout the worker is shut down, and the next alignment or diarization request respawns it.
 
 ### Priority Detection Flow (/detect-language)
 
@@ -202,8 +209,15 @@ The system features a thread-aware logging and telemetry engine designed for ind
 ### 5. Long-Movie Processing & Audio Chunking
 
 - **Intel ASR Chunking & Streaming**: Refactored OpenVINO engine transcription (`IntelWhisperEngine`) to split long media files dynamically into structured chunks (configured via `INTEL_ASR_CHUNK_DURATION`, default 300 seconds), guided by speech VAD timestamps (`find_split_points()`), and auto-detecting/locking the language on the first chunk to ensure stability on very long movies.
-- **UVR Chunk Progress Tracking**: Patches the UVR vocal separation process dynamically on the scheduler to compute and emit real-time chunk progress status according to `UVR_CHUNK_DURATION` (default 600 seconds) to prevent visual hangs.
+- **UVR Chunk Progress Tracking**: Patches the UVR vocal separation process dynamically on the scheduler to compute and emit real-time chunk progress status according to `UVR_CHUNK_DURATION` (default 600 seconds) to prevent visual hangs. Duration probing utilizes native container probe precedence in `modules.core.pcm_helpers` so video containers (`.mkv`, `.mp4`) and high-sample-rate stereo WAV files are accurately measured without inflation from raw-PCM input flags.
 - **Graceful Temp-Storage Fallback**: Establishes a 2GB minimum free space threshold and 1.5x file-size headroom multiplier to fallback gracefully to persistent storage (`PERSISTENT_TEMP_DIR`) when tmpfs runs low on space.
+
+### 6. Model Download Integrity & Self-Healing
+
+All ingested models and neural weights are protected by `modules/core/model_integrity.py`:
+
+- **Structural & Checksum Verification**: Validates artifact completeness before inference (CTranslate2 structure & binary size $\ge 10\text{ MB}$, OpenVINO XML/BIN pairs with binary size $\ge 50\text{ MB}$, and SHA-256 for UVR & Silero VAD ONNX models).
+- **Auto-Purge & Redownload**: Damaged or truncated model files are automatically purged from disk cache with bounded retry mechanisms (`download_with_integrity_retry`) in preload scripts and inference engine initializers.
 
 ---
 
@@ -211,7 +225,7 @@ The system features a thread-aware logging and telemetry engine designed for ind
 
 - **Intel NPU/GPU**: Leverages `/dev/dri` and `/dev/accel` nodes.
 - **NVIDIA CUDA**: Requires the **NVIDIA Container Toolkit** on the host.
-- **AMD GPU (ROCm/DirectML)**: Leverages `/dev/kfd` and `/dev/dri` on Linux; uses `/dev/dxg` (WSL GPU bridge) on Windows. `onnxruntime-rocm` is isolated under `/app/libs/amd` and loaded automatically when AMD hardware is detected. Whisper ASR runs on CPU while UVR vocal isolation offloads to the AMD GPU via ONNX Runtime ROCm/DirectML.
+- **AMD GPU (ROCm/DirectML)**: Leverages `/dev/kfd` and `/dev/dri` on Linux; uses `/dev/dxg` (WSL GPU bridge) on Windows. `onnxruntime-rocm` is isolated under `/app/libs/amd` and loaded automatically when AMD hardware is detected. Published images ship ROCm kernels for consumer Radeon RDNA2/RDNA3/RDNA4. Whisper ASR runs on CPU while UVR vocal isolation offloads to the AMD GPU via ONNX Runtime ROCm/DirectML on supported consumer hardware.
 - **SSD Optimization**: All transient I/O is redirected to a RAM-backed `tmpfs` volume to prevent physical wear.
 - **Standardization Layer**: All incoming media (MKV, AVI, MP4, etc.) is standardized to 16kHz Mono WAV before entering the pipeline, ensuring consistent results across all formats.
 - **Diarization Models**: WhisperX alignment and PyAnnote diarization models are cached per hardware unit in `ALIGN_POOL` and `DIARIZE_POOL`. These are purged alongside Whisper models during `unload_models()`.
@@ -274,7 +288,7 @@ graph TD
 │   │   ├── config.py        # Global settings (DIARIZATION_HF_TOKEN, MODEL_IDLE_TIMEOUT, etc.)
 │   │   ├── config_helpers.py # Hardware detection helpers (AMD, Intel, CUDA state)
 │   │   ├── constants.py     # Shared constants
-│   │   ├── engine_registry.py # AUTO_ENGINE_PRIORITY ordering
+│   │   ├── engine_registry.py # AUTO default engine + device ordering
 │   │   ├── logging_setup.py # Task-specific logging
 │   │   ├── process_exec.py  # Subprocess execution helpers
 │   │   ├── subtitles.py     # Subtitle formatting (SRT/VTT wrapping, promo card)

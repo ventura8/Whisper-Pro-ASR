@@ -5,20 +5,22 @@ High-Level Model Orchestration and Hardware Lifecycle Management for Whisper Pro
 import importlib
 import logging
 import os
+import sys
 import threading
 import time
 import typing
 
-from modules.core import config, logging_setup, utils
+from modules.core import config, engine_registry, logging_setup, utils
 from modules.inference import scheduler
 from modules.inference.engines import engine_factory
-from modules.inference.pipeline import diarization, post_processing, preprocessing, vad
+from modules.inference.pipeline import diarization, language_detection, post_processing, preprocessing, vad
 from modules.inference.pipeline.language_detection_core import (
     run_batch_language_detection,
     run_batch_language_detection_direct,
     run_language_detection,
     run_language_detection_core,
 )
+from modules.inference.runtime import gap_filling, preprocessor_pool
 from modules.inference.runtime.concurrency import _check_preemption, _get_current_task_info, model_lock_ctx
 from modules.inference.runtime.model_lifecycle import (
     _clear_uvr_models,
@@ -76,14 +78,11 @@ def _post_process_results(result, audio_path=None):
 
 def get_status():
     """Return dashboard status payload for runtime callers."""
-    return {
-        "active_units": list(MODEL_POOL.keys()),
-        "total_units": len(config.HARDWARE_UNITS),
-    }
+    return {"active_units": list(MODEL_POOL.keys()), "total_units": len(config.HARDWARE_UNITS)}
 
 
 def dummy_engine(*args, **kwargs):
-    """Dummy engine function to satisfy pylint type checker for callable targets."""
+    """Placeholder callable so the lazy engine slots below start out type-correct."""
     return (args, kwargs)
 
 
@@ -93,11 +92,7 @@ def is_engine_actually_loaded() -> bool:
 
 
 # Lazy load containers for engines
-_ENGINES: typing.Dict[str, typing.Any] = {
-    "WhisperModel": dummy_engine,
-    "ctranslate2": dummy_engine,
-    "IntelWhisperEngine": dummy_engine,
-}
+_ENGINES: typing.Dict[str, typing.Any] = {"WhisperModel": dummy_engine, "ctranslate2": dummy_engine, "IntelWhisperEngine": dummy_engine}
 
 
 def _lazy_import_engines():
@@ -138,71 +133,21 @@ _CLEANER_TIMER_LOCK = threading.Lock()
 _POOL_LOCK = threading.Lock()
 
 
-def _is_accelerated_preprocess_device() -> bool:
-    return config.PREPROCESS_DEVICE in {"CUDA", "GPU", "NPU", "OPENVINO", "AMD"}
-
-
-def _pool_preprocessor_by_type(preferred_type: str):
-    for preprocessor in PREPROCESSOR_POOL.values():
-        if getattr(preprocessor, "device_type", None) == preferred_type:
-            return preprocessor
-    return None
-
-
-def _unit_preprocessor_by_type(preferred_type: str):
-    for unit in config.HARDWARE_UNITS:
-        if unit.get("type") == preferred_type:
-            preprocessor = PREPROCESSOR_POOL.get(unit.get("id"))
-            if preprocessor is not None:
-                return preprocessor
-    return None
-
-
-def _shared_preprocessor_for_type(preferred_type: str):
-    shared_key = f"PREPROCESS::{preferred_type}"
-    preprocessor = PREPROCESSOR_POOL.get(shared_key)
-    if preprocessor is None:
-        matched_unit = next((u for u in config.HARDWARE_UNITS if u.get("type") == preferred_type), None)
-        if matched_unit is not None:
-            preprocessor = preprocessing.PreprocessingManager(matched_unit)
-        else:
-            preprocessor = preprocessing.PreprocessingManager()
-        PREPROCESSOR_POOL[shared_key] = preprocessor
-    return preprocessor
+def _resolve_preprocessor_for_unit(unit_id: str):
+    """Pick the preprocessor for ``unit_id``; the policy lives in preprocessor_pool."""
+    return preprocessor_pool.resolve_preprocessor_for_unit(PREPROCESSOR_POOL, unit_id)
 
 
 def _preferred_preprocessor() -> typing.Any:
     """Return a preprocessor pinned to the configured preprocess device when available."""
-    preferred_type = config.PREPROCESS_DEVICE
-    preprocessor = _pool_preprocessor_by_type(preferred_type)
-    if preprocessor is not None:
-        return preprocessor
-
-    preprocessor = _unit_preprocessor_by_type(preferred_type)
-    if preprocessor is not None:
-        return preprocessor
-
-    return _shared_preprocessor_for_type(preferred_type)
-
-
-def _resolve_preprocessor_for_unit(unit_id: str):
-    if _is_accelerated_preprocess_device():
-        # Prefer the preprocessor bound to the currently assigned accelerator unit
-        # so concurrent tasks can use distinct hardware (e.g., CUDA + AMD) in parallel.
-        unit_preprocessor = PREPROCESSOR_POOL.get(unit_id)
-        if unit_preprocessor is not None:
-            unit_type = str(getattr(unit_preprocessor, "device_type", "")).upper()
-            if unit_type in {"CUDA", "GPU", "NPU", "OPENVINO", "AMD"}:
-                return unit_preprocessor
-        return _preferred_preprocessor()
-    return PREPROCESSOR_POOL.get(unit_id)
+    return preprocessor_pool.preferred_preprocessor(PREPROCESSOR_POOL)
 
 
 def load_model():
     """Initializes hardware resource mapping without eager RAM loading."""
     for unit in config.HARDWARE_UNITS:
         # Initialize preprocessor managers (they are lazy and won't load models yet)
-        PREPROCESSOR_POOL[unit["id"]] = preprocessing.PreprocessingManager(unit)
+        PREPROCESSOR_POOL[unit["id"]] = preprocessing.create_manager(unit)
 
     scheduler.STATE.engine_initialized = True
     if config.ENABLE_VOCAL_SEPARATION:
@@ -214,22 +159,73 @@ def load_model():
 init_pool = load_model
 
 
+def _should_isolate(engine_type: str) -> bool:
+    """Whether this unit's engine should run in its own process.
+
+    WhisperX is excluded because it already proxies to its own dedicated worker;
+    wrapping it again would spawn a second process for no benefit.
+    """
+    if not getattr(config, "ISOLATE_ENGINES", False):
+        return False
+    return engine_type != engine_registry.ENGINE_WHISPERX
+
+
+def _build_engine(engine_type: str, model_id: str, unit: dict):
+    """Create the engine for ``unit``, in-process or behind a worker."""
+    if not _should_isolate(engine_type):
+        return engine_factory.create_engine(engine_type, model_id, unit)
+    # Imported lazily so a deployment with isolation disabled never pays for the
+    # multiprocessing machinery.
+    isolated_engine = importlib.import_module("modules.inference.engines.isolated_engine")
+    return isolated_engine.IsolatedEngine(engine_type, model_id, unit)
+
+
 def init_unit(unit):
     """Loads model for a specific hardware unit."""
     _lazy_import_engines()
     with _POOL_LOCK:
+        # Bound before the try: the handler reports it, and the first statements inside can
+        # themselves fail (a malformed unit dict), which would turn the real error into a
+        # NameError naming nothing useful.
+        engine_type = getattr(config, "ASR_ENGINE", "unknown")
         try:
-            logger.info("[Engine] Loading %s on %s...", config.MODEL_ID, unit["name"])
+            engine_type = config.engine_for_unit(unit)
+            model_id = config.model_id_for_engine(engine_type)
+            logger.info("[Engine] Loading %s (%s) on %s...", model_id, engine_type, unit["name"])
 
-            model = engine_factory.create_engine(config.ASR_ENGINE, config.MODEL_ID, unit)
+            model = _build_engine(engine_type, model_id, unit)
 
             MODEL_POOL[unit["id"]] = model
-            PREPROCESSOR_POOL[unit["id"]] = preprocessing.PreprocessingManager(unit)
+            PREPROCESSOR_POOL[unit["id"]] = preprocessing.create_manager(unit)
             scheduler.STATE.whisper_loaded = True
             scheduler.STATE.engine_initialized = True
+            LAST_INIT_ERROR.pop(unit["id"], None)
             logger.info("[Engine] %s ready.", unit["id"])
         except (ValueError, RuntimeError, ImportError, AttributeError, KeyError, OSError, TypeError) as e:
-            logger.error("[Engine] Failed to load %s: %s", unit["id"], e)
+            unit_id = unit.get("id", "?") if isinstance(unit, dict) else "?"
+            logger.error("[Engine] Failed to load %s: %s", unit_id, e)
+            LAST_INIT_ERROR[unit_id] = _describe_init_failure(engine_type, unit, e)
+
+
+#: unit_id -> why its last load attempt failed, so the scheduler can report the actual
+#: cause instead of the downstream "engine pool is empty" symptom.
+LAST_INIT_ERROR: dict[str, str] = {}
+
+
+def _describe_init_failure(engine_type: str, unit: dict, error: Exception) -> str:
+    """Turn a load failure into something a caller can act on.
+
+    A missing engine dependency is the common case and the least obvious one: not every
+    image ships every engine (WhisperX is only in the `full` target), so the honest
+    message names the engine and the image rather than the empty pool it causes.
+    """
+    if isinstance(error, ImportError):
+        return (
+            f"ASR engine {engine_type} is not available in this image "
+            f"(missing dependency: {error.name or error}). Use an image that ships it, or select a different ASR_ENGINE."
+        )
+    label = unit.get("name") or unit.get("id", "?") if isinstance(unit, dict) else "?"
+    return f"ASR engine {engine_type} failed to load on {label}: {type(error).__name__}: {error}"
 
 
 def run_transcription(
@@ -253,6 +249,8 @@ def run_transcription(
         _update_audio_duration_metadata(audio_path)
 
         processed_path = _isolate_vocals_if_needed(audio_path, unit_id, perf)
+        was_auto_detect = not language
+        language, _multilingual_suspected = _detect_language_after_isolation(language, processed_path, model)
 
         try:
             params = {
@@ -265,6 +263,10 @@ def run_transcription(
                 "initial_prompt": initial_prompt,
                 "vad_filter": vad_filter,
                 "word_timestamps": word_timestamps,
+                # Gap-filling (see _fill_language_gaps) needs to know whether the caller
+                # forced a language: an explicit request must never be second-guessed by
+                # re-detecting and re-transcribing a "gap" in a different language.
+                "was_auto_detect": was_auto_detect,
             }
             return _execute_transcription_pipeline(
                 model,
@@ -285,10 +287,36 @@ def _update_audio_duration_metadata(audio_path):
         logger.warning("[Engine] Failed to get audio duration early: %s", e)
 
 
+def will_isolate_vocals() -> bool:
+    """Whether this request will run vocal separation inside the transcription pipeline.
+
+    Callers use this to decide whether to detect the language up front or leave it to
+    run_transcription, which detects *after* separation so detection sees the same clean
+    audio the decoder does (and so the dashboard never shows separation after detection).
+    """
+    clean_audio_override = getattr(utils.THREAD_CONTEXT, "clean_audio", None)
+    return config.ENABLE_VOCAL_SEPARATION if clean_audio_override is None else bool(clean_audio_override)
+
+
+def _detect_language_after_isolation(language, processed_path, model):
+    """Detect the language on already-separated audio, reusing the held unit.
+
+    Returns (language, multilingual_suspected). An explicit request short-circuits with
+    suspected=False: forcing one language throughout is exactly what the caller asked
+    for, and per-segment re-detection must never override that.
+    """
+    if language:
+        return language, False
+    res = language_detection.run_voting_detection_on_isolated(processed_path, model, sys.modules[__name__])
+    detected = (res or {}).get("detected_language")
+    if not detected:
+        logger.info("[LD] No confident consensus on separated audio; leaving detection to the engine.")
+    return detected, bool((res or {}).get("multilingual_suspected"))
+
+
 def _isolate_vocals_if_needed(audio_path, unit_id, perf):
     processed_path = audio_path
-    clean_audio_override = getattr(utils.THREAD_CONTEXT, "clean_audio", None)
-    should_clean_audio = config.ENABLE_VOCAL_SEPARATION if clean_audio_override is None else bool(clean_audio_override)
+    should_clean_audio = will_isolate_vocals()
     if should_clean_audio:
         perf["start_iso"] = time.time()
         check_preemption()
@@ -315,6 +343,7 @@ def _execute_transcription_pipeline(
     initial_prompt = params.get("initial_prompt")
     vad_filter = params.get("vad_filter")
     word_timestamps = params.get("word_timestamps")
+    was_auto_detect = params.get("was_auto_detect", not language)
     op_name = "translation" if str(task).lower() == "translate" else "transcription"
 
     logger.info("[ASR] Starting %s on hardware unit %s", op_name, unit_id)
@@ -332,7 +361,14 @@ def _execute_transcription_pipeline(
         initial_prompt=initial_prompt,
         vad_filter=vad_filter,
         word_timestamps=word_timestamps,
-        vad_parameters={"min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS},
+        vad_parameters={
+            "min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS,
+            "threshold": config.VAD_THRESHOLD,
+        },
+        # `language` here is always resolved -- detection has already run -- so the engine
+        # cannot tell an auto-detected language from one the caller demanded. Only the
+        # former may be revised per window; an explicit request must be honoured as given.
+        multilingual=was_auto_detect,
     )
 
     results = consume_transcription_segments(
@@ -348,6 +384,34 @@ def _execute_transcription_pipeline(
         preemption_check=check_preemption,
     )
 
+    segment_languages = [
+        {
+            "start": 0.0,
+            "end": round(trans_res[1].duration, 2),
+            "language": trans_res[1].language,
+            "confidence": trans_res[1].language_probability,
+        }
+    ]
+    # Diarization is excluded: it speaker-fingerprints processed_path as one whole file,
+    # and a gap re-transcribed on its own slice would get its own local speaker numbering
+    # with no correspondence to the rest -- reconciling that is real work of its own.
+    if was_auto_detect and not diarize and config.ASR_MULTILINGUAL_SEGMENTATION:
+        results, segment_languages = gap_filling.fill_language_gaps(
+            model,
+            processed_path,
+            results,
+            segment_languages,
+            options={
+                "task": task,
+                "initial_prompt": initial_prompt,
+                "vad_filter": vad_filter,
+                "word_timestamps": word_timestamps,
+            },
+            duration_sec=trans_res[1].duration,
+            unit_id=unit_id,
+            preemption_check=check_preemption,
+        )
+
     perf["dur_inf"] = time.time() - perf["start_inf"]
     perf["dur_queue"] = _get_queue_duration_from_registry()
 
@@ -357,6 +421,7 @@ def _execute_transcription_pipeline(
         "language": trans_res[1].language,
         "language_probability": trans_res[1].language_probability,
         "video_duration_sec": trans_res[1].duration,
+        "segment_languages": segment_languages,
         "performance": {
             "queue_sec": round(perf["dur_queue"], 2),
             "isolation_sec": round(perf["dur_iso"], 2),
@@ -396,13 +461,13 @@ def run_vocal_isolation(audio_path, force=False):
         return run_vocal_isolation_direct(audio_path, unit_id, force)
 
 
-def run_vocal_isolation_direct(audio_path, unit_id, force=False):
+def run_vocal_isolation_direct(audio_path, unit_id, force=False, stage="Vocal Separation"):
     """Direct isolation without re-acquiring the lock."""
     preprocessor = _resolve_preprocessor_for_unit(unit_id)
     if not preprocessor:
         return audio_path
 
-    result_path = preprocessor.preprocess_audio(audio_path, force=force, yield_cb=check_preemption)
+    result_path = preprocessor.preprocess_audio(audio_path, force=force, yield_cb=check_preemption, stage=stage)
     if preprocessor.separator:
         scheduler.STATE.uvr_loaded = True
 
@@ -450,6 +515,27 @@ def _cancel_idle_cleanup():
             logger.info("[Engine] Cancelled scheduled memory cleanup because a new task arrived")
 
 
+def _shutdown_isolated_workers() -> None:
+    """Terminate every engine worker, which is the only way device memory comes back.
+
+    In-process teardown reclaims none of a CUDA/ROCm/OpenVINO context's device memory --
+    an idle purge on this codebase logged ``CUDA VRAM=193 MB -> 193 MB (Delta: +0 MB)``.
+    Killing the process returns it to the OS unconditionally; the next request respawns
+    a worker and reloads on demand.
+    """
+    try:
+        isolated_engine = importlib.import_module("modules.inference.engines.isolated_engine")
+        isolated_engine.shutdown_all()
+    except (ImportError, RuntimeError, OSError) as exc:
+        logger.warning("[Engine] Failed to shut down isolated engine workers: %s", exc)
+
+    try:
+        isolated_prep = importlib.import_module("modules.inference.pipeline.preprocessing.isolated")
+        isolated_prep.shutdown_all()
+    except (ImportError, RuntimeError, OSError) as exc:
+        logger.warning("[Engine] Failed to shut down isolated preprocessing workers: %s", exc)
+
+
 def unload_models():
     """Purge all models from RAM/VRAM with extreme prejudice."""
     with _POOL_LOCK:
@@ -462,6 +548,7 @@ def unload_models():
         uvr_count = _clear_uvr_models(PREPROCESSOR_POOL)
         _clear_whisperx_models(DIARIZE_POOL, ALIGN_POOL)
         _run_garbage_collection_and_reclamation(_ENGINES)
+        _shutdown_isolated_workers()
         scheduler.STATE.whisper_loaded = False
         scheduler.STATE.uvr_loaded = False
         time.sleep(0.2)

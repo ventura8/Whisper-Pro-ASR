@@ -9,8 +9,14 @@ LICENSE
 .dockerignore
 .pytest_cache
 .coverage
+.coverage.*
 coverage.xml
 coverage_output.txt
+coverage_output*.txt
+pytest.xml
+pytest*.xml
+pytest-*.xml
+complexity_output.txt
 htmlcov
 __pycache__/
 **/__pycache__/
@@ -37,4 +43,10 @@ coverage-js
 playwright-report
 test-results-real
 .ruff_cache
+.mypy_cache
 .playwright-tmp
+# Gitignored for the same reason they must stay out of the build context: the plan names
+# hosts and usernames, and the logs carry whatever those runs printed. Dockerfile.test does
+# a bare `COPY . .`, so without these the private data ships in the test image.
+.validation-matrix.conf
+.validation-logs/

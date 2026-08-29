@@ -8,6 +8,8 @@ __pycache__/
 env/
 venv/
 ENV/
+.mypy_cache/
+.ruff_cache/
 
 # Docker build artifacts
 .buildx-cache
@@ -28,12 +30,16 @@ media/
 # Docker
 .docker/
 .docker-build-cache/
+.docker-build-cache.new/
+.docker-build-cache.old/
 
-# IDEs
+# IDEs and OS
 .vscode/
 .idea/
 *.swp
 *.swo
+.DS_Store
+Thumbs.db
 
 # Project Scripts (Debug/Diagnostic)
 inspect_ov_api.py
@@ -44,10 +50,14 @@ shim_snippet.py
 # Testing and Coverage
 .pytest_cache/
 .coverage
+.coverage.*
 coverage.xml
 coverage.md
 coverage_output.txt
+coverage_output*.txt
 pytest.xml
+pytest*.xml
+pytest-*.xml
 report.xml
 htmlcov/
 test_results.log
@@ -55,6 +65,7 @@ reports/
 test_data/
 test_state/
 pylint_report.txt
+complexity_output.txt
 
 # Runtime local state/logs (keep local only)
 data/
@@ -74,6 +85,16 @@ test-results-real/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-# Package Locks
+
+# Package Locks & State
 uv.lock
 state/
+
+# Container-side toolchain for scripts/generate_fixtures_docker.sh (torch, piper voices)
+.fixture-tooling/
+
+# Transient validation run logs
+.validation-logs/
+
+# Local machine plan for the validation matrix -- names hosts and usernames
+.validation-matrix.conf
