@@ -29,7 +29,16 @@ Maintain a zero-regression quality baseline.
 19. In Docker test images, Radon source enumeration must be filesystem-based (e.g., `find ... -name '*.py'`) and must not depend on `.git` metadata.
 20. Dockerfile lint gate must pass with Hadolint (`hadolint --failure-threshold warning --disable-ignore-pragma Dockerfile Dockerfile.test`) inside the Docker test image.
 21. PowerShell script lint gate must pass with PSScriptAnalyzer inside the Docker test image.
-22. Shell script lint gate must pass with ShellCheck inside the Docker test image.
+22. Shell script lint gate must pass with ShellCheck **and shfmt** inside the Docker test
+    image, over **every** `*.sh` in the repository -- the list is discovered with `find`, not
+    hardcoded. It previously named three files, which left the whole of `scripts/docker/`
+    unchecked; that is where two build-breaking defects lived undetected (a bare
+    `apt-get purge` in a stage with no package index, fatal in every target's final layer,
+    and a missing `libhipsparse.so.4` for the ROCm torch build). `scripts/remote_validate.sh`
+    and the two remote setup scripts are checked with `-e SC2016 -e SC2088`, because in those
+    the flagged pattern is the correct one: the command string is expanded on the remote host,
+    so single quotes and a literal `~` are required. The exclusions live in the gate
+    invocation, never as inline `shellcheck disable` comments.
 23. CSS lint gate must run explicitly (`npm run lint:css`) inside the Docker test image.
 24. HTML lint gate must run explicitly (`npm run lint:html`) inside the Docker test image.
 25. Python formatter checks must run in the Docker test image using `black --check .` and `isort --check-only .`.

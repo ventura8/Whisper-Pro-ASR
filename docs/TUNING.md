@@ -52,7 +52,7 @@ Then rebuild: `docker compose up -d --build`
 
 ## Long Movies (4h+)
 
-- **Intel ASR Chunking & Streaming**: For Intel Whisper runtime workloads, set `INTEL_ASR_CHUNK_DURATION` (default `300` seconds) to chunk audio processing. This keeps long jobs bounded and preserves continuous progress metrics. The `INTEL-WHISPER` engine still falls back to `FASTER-WHISPER` when Intel GPU/NPU execution is unavailable.
+- **Intel ASR Chunking & Streaming**: For Intel Whisper runtime workloads, set `INTEL_ASR_CHUNK_DURATION` (default `300` seconds) to chunk audio processing. This keeps long jobs bounded and preserves continuous progress metrics. `INTEL-WHISPER` accelerates ASR on Intel GPUs; Intel NPUs are for vocal isolation, so ASR falls back to CPU when no Intel GPU is available.
 - **UVR Preprocessing Chunking**: Set `UVR_CHUNK_DURATION` (default `600` seconds / 10 minutes) to segment vocal separation. This caps peak RAM utilization and enables periodic chunk-level progress updates on the dashboard.
 - **Bazarr timeout**: Set to `36000` (10 hours) for high reliability.
 - **RAM**: 32GB recommended for language detection on extremely large libraries.
@@ -61,10 +61,10 @@ Then rebuild: `docker compose up -d --build`
 
 | Issue | Fix |
 | ------- | ----- |
-| NPU hangs | Reduce `ASR_BATCH_SIZE` to 1 or `ASR_BEAM_SIZE` to 4 |
+| NPU preprocessing fails or hangs | Use `ASR_PREPROCESS_DEVICE=CPU`, or reduce `UVR_CHUNK_DURATION` so each separation pass fits the NPU's static-shape memory budget. `ASR_BEAM_SIZE` and `ASR_BATCH_SIZE` are decoder settings and do not affect UVR. The NPU is not an ASR execution target. |
 | Model load fails | Reduce `ASR_BEAM_SIZE` to 4 |
 | Build fails | Check disk space/RAM (~17GB needed) |
-| Slow first run | Normal - NPU compilation takes 2-5 min |
+| Slow first run | Normal — OpenVINO compilation for Intel GPU/NPU preprocessing can take 2–5 min |
 
 ## 🛠 Hardware Acceleration (FFmpeg)
 
@@ -112,17 +112,47 @@ When set to a positive value (in seconds), models remain warm in memory after th
 
 When `MODEL_IDLE_TIMEOUT > 0`, it takes precedence over `AGGRESSIVE_OFFLOAD`.
 
+## WhisperX Worker Deadline
+
+WhisperX runs in its own process (it pins an older torch/transformers stack than the rest
+of the app). A call across that boundary has a finite deadline, so a wedged worker cannot
+hold the channel lock forever -- on expiry the channel shuts the worker down and the next
+call respawns it.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `WHISPERX_WORKER_CALL_TIMEOUT_SEC` | `1800` | Deadline for one worker call (transcription, alignment, or diarization). |
+
+Setting `WHISPERX_WORKER_CALL_TIMEOUT_SEC=0` **disables the deadline entirely**: the channel
+then waits indefinitely for the worker while holding the lock that serialises every WhisperX
+call, so one wedged worker stops all diarization for the life of the process rather than
+being replaced. Keep a non-zero value in production. Raise it instead of clearing it when a
+legitimate call is being cut short -- a multi-hour CPU-only alignment can exceed 1800s, and
+the symptom is a call that dies at exactly the deadline.
+| `WHISPERX_WORKER_LOCK_WARN_SEC` | `5` | Log a warning when a caller blocks this long waiting for serialized worker access. |
+
+**Raise it for long media on a CPU-only image.** 1800s is comfortable for a feature-length
+file on CUDA, where the measured long-form RTF is 0.0134 -- about 16 seconds of compute for
+a 20-minute clip. It is *not* generous on a host with no GPU: WhisperX falls back to CPU
+there, diarization is the slowest stage, and a multi-hour source can exceed the deadline
+and be killed mid-run. If transcription of long files stops with a worker timeout, raise
+this before assuming the model is at fault:
+
+```yaml
+environment:
+  - WHISPERX_WORKER_CALL_TIMEOUT_SEC=7200
+```
+
 ## ⚙️ ASR Backend Engines (ASR_ENGINE)
 
 The service supports multiple ASR backend engines to run inference. You can configure this using the `ASR_ENGINE` environment variable. The following options are available:
 
-- **`AUTO`**: Automatically resolves the engine by available hardware in this order: `CUDA` -> `Intel GPU` -> `Intel NPU` -> `CPU`.
-  - `CUDA` resolves to `FASTER-WHISPER`
-  - `Intel GPU` resolves to `INTEL-WHISPER`
-  - `Intel NPU` resolves to `INTEL-WHISPER`
-  - `CPU` resolves to `FASTER-WHISPER`
-- **`FASTER-WHISPER`** (Default): Uses the CTranslate2 engine. This is the recommended choice for general CPU and NVIDIA CUDA environments, offering extremely fast processing and low memory footprint.
-- **`INTEL-WHISPER`**: Uses the Intel Whisper engine (`IntelWhisperEngine`). It is optimized for Intel NPUs and Integrated/Arc GPUs. If Intel GPU/NPU execution is unavailable, runtime falls back to `FASTER-WHISPER`.
+- **`AUTO`** (Default): The configured default value of `ASR_ENGINE`. Always resolves to `FASTER-WHISPER`, for reproducible decoding across hardware.
+  Hardware selection still chooses the task's unit; CUDA accelerates Faster-Whisper, while
+  Intel/AMD units remain available for preprocessing. An explicit `ASR_DEVICE` constrains
+  that unit selection, and an explicit engine selects an engine-specific backend.
+- **`FASTER-WHISPER`**: Uses the CTranslate2 engine, and is what `AUTO` resolves to. This is the recommended choice for general CPU and NVIDIA CUDA environments, offering extremely fast processing and low memory footprint.
+- **`INTEL-WHISPER`**: Uses the Intel Whisper engine (`IntelWhisperEngine`) on Intel Integrated/Arc GPUs. Intel NPUs accelerate vocal isolation only; ASR falls back to CPU when no Intel GPU is available.
 - **`OPENAI-WHISPER`**: Uses the reference OpenAI Whisper Python backend.
 - **`WHISPERX`**: Uses the WhisperX backend, supporting batch inference.
 
@@ -161,8 +191,11 @@ In your `docker-compose.yml`, add:
 environment:
   - WHISPER_TEMP_DIR=/tmp/whisper
 tmpfs:
-  - /tmp/whisper:size=2G
+  - /tmp/whisper:size=2G,mode=1777
 ```
+
+`mode=1777` is required for restart-safe uploads: `docker compose restart`
+remounts tmpfs, so permissions from the image layer are not retained.
 
 ### Sizing Guidance
 

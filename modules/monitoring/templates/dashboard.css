@@ -603,3 +603,38 @@ summary:hover { opacity: 0.8; }
         font-size: 16px;
     }
 }
+
+/* Hardware card: the stage badge and, beside it, where that stage actually executes.
+   The unit's own name says where a task is DISPATCHED; these say where it landed, which
+   is the difference between "NPU" and "the NPU could not run it, so the CPU did". */
+.hw-engine-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.hw-engine-badge {
+    padding: 2px 6px;
+    font-size: 9px;
+    border-radius: 4px;
+    line-height: 1.2;
+}
+
+.hw-exec {
+    padding: 2px 5px;
+    font-size: 9px;
+    line-height: 1.2;
+    border-radius: 4px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.18));
+    color: var(--text-muted, #9aa0a6);
+    white-space: nowrap;
+}
+
+/* Deliberately warning-coloured rather than error-coloured: a CPU fallback is a correct,
+   working configuration that is simply slower than the card's title implies. */
+.hw-exec-fallback {
+    border-color: var(--warning, #e8a33d);
+    color: var(--warning, #e8a33d);
+    font-weight: 600;
+}

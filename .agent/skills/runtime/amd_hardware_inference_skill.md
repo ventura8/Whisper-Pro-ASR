@@ -4,7 +4,11 @@ This skill documents instructions for configuring, debugging, and testing ROCm/D
 
 ## Architecture Summary
 
-- **ONNX Runtime Segregation**: AMD uses `/app/libs/amd` pointing to `onnxruntime-rocm==1.22.2.post3`, isolated from Intel OpenVINO, NVIDIA CUDA, and CPU paths.
+- **Published-image support boundary**: `amd` and `full` ship consumer RDNA2/RDNA3/RDNA4 ROCm kernels
+  only (`gfx1030`, `gfx1100`, `gfx1101`, `gfx1102`, `gfx1200`, `gfx1201`). AMD Instinct CDNA accelerators are
+  intentionally unsupported and use CPU fallback in published images.
+
+- **ONNX Runtime Segregation**: AMD uses `/app/libs/amd` pointing to `onnxruntime-rocm==1.22.2.post3` for ROCm 7.0, isolated from Intel OpenVINO, NVIDIA CUDA, and CPU paths.
 - **Split Execution Model**: UVR vocal isolation runs on AMD GPU via ONNX ROCm / MIGraphX (`MIGraphXExecutionProvider` or `ROCMExecutionProvider` on native Linux with `/dev/kfd`). Whisper ASR inference falls back to CPU (CTranslate2 has no ROCm backend) with `int8` compute type.
 - **Dual-GPU Support**: When both NVIDIA and AMD are detected, bootstrap loads `/app/libs/amd` for ONNX Runtime (used by UVR), while CTranslate2 bypasses ONNX entirely and binds directly to NVIDIA CUDA for ASR.
 - **Scheduler Unit ID**: AMD GPUs register as `amd:0` (index from `MAX_AMD_UNITS`) only when a usable provider exists (`/dev/kfd`, AMD DRM, or Windows DirectML). WSL `/dev/dxg` without `/dev/kfd` is detection-only and does not register a schedulable AMD unit.
@@ -119,5 +123,5 @@ For UVR provider diagnostics, look for these log lines per task:
 - **`amd:0` pool empty after init**: Check that `/dev/dxg` (Windows) or `/dev/kfd`+`/dev/dri` (Linux) are mapped in docker-compose.yml.
 - **UVR using CPU instead of GPU (WSL2)**: This is expected behavior inside Linux containers — DirectML is not accessible from Linux Docker processes. For AMD GPU acceleration on Windows via DirectML, run natively on the Windows host (outside Docker): install `pip install onnxruntime-directml audio-separator` and set `ASR_PREPROCESS_DEVICE=GPU` (DirectML will be selected automatically when a DirectML-capable ONNX Runtime is present). UVR GPU acceleration inside Docker requires native Linux with `/dev/kfd`.
 - **C++ `terminate()` crash on UVR load (HIP failure 100)**: This means `ROCMExecutionProvider` was passed to `ort.InferenceSession` without `/dev/kfd`. Ensure `_get_amd_provider_order()` in `openvino_provider_dispatch.py` gates `ROCMExecutionProvider` behind `/dev/kfd` existence check.
-- **`libhipfft.so.0` or `librocm_smi64.so.1` not found**: These are runtime deps of `libonnxruntime_providers_rocm.so`. The Dockerfile installs `hipfft` and `rocm-smi-lib` packages from the ROCm 6.2 apt repo, then creates compat symlinks `libamdhip64.so.7` → `.so.6` and `librocm_smi64.so.1` → `.so.7`.
+- **`libhipfft.so.0` or `librocm_smi64.so.1` not found**: These are runtime deps of `libonnxruntime_providers_rocm.so`. The Dockerfile installs `hipfft` and `rocm-smi-lib` packages from the ROCm 7.0.2 apt repo, then creates the required compatibility symlinks.
 - **float16 compute type error on CPU fallback**: Ensure `_create_non_intel_engine` coercion is applied (check engine_factory.py).

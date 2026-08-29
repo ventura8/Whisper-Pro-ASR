@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 type Violation = tuple[int, str, str]
 
@@ -15,7 +15,12 @@ EXCLUDE_DIRS = {
     ".git",
     ".ruff_cache",
     "state",
+    # Gitignored local caches of third-party source. They are absent on a CI runner, so
+    # scanning them found upstream's `# pragma: no cover` markers on a developer machine
+    # only -- a zero-suppression policy is about THIS repository's code.
     "model_cache",
+    ".fixture-tooling",
+    "test_data",
     "reports",
     "coverage-js",
     "test-results",
@@ -40,6 +45,16 @@ PATTERNS = {
     "isort-skip": re.compile(r"#\s*isort:\s*(skip|off)"),
     "formatter-ignore": re.compile(r"prettier-ignore|ruff:\s*noqa"),
     "html-validate-disable": re.compile(r"html-validate-disable"),
+    # PSScriptAnalyzer's attribute form. Absent from this list, four of them lived in
+    # scripts/*.ps1 for months under a policy that bans exactly this -- invisible rather
+    # than allowed. The exemption now lives in PSScriptAnalyzerSettings.psd1.
+    # The "Attribute" suffix is optional in PowerShell attribute syntax, so
+    # [Diagnostics.CodeAnalysis.SuppressMessage(...)] is the same suppression written in
+    # the shorter spelling and slipped past a pattern anchored on the long one.
+    # IGNORECASE: PowerShell resolves attribute names case-insensitively, so
+    # [diagnostics.codeanalysis.suppressmessage(...)] is the same suppression in a spelling
+    # the case-sensitive pattern did not see.
+    "psscriptanalyzer-suppress": re.compile(r"SuppressMessage(Attribute)?\s*\(", re.IGNORECASE),
 }
 
 logger = logging.getLogger(__name__)
@@ -75,11 +90,46 @@ def _report_violations(root_dir: str, filepath: str, violations: list[Violation]
         logger.error("  Line %d: [%s] %s", line_num, name, line)
 
 
+def _is_fence(line: str) -> bool:
+    """Whether a Markdown line opens or closes a fenced code block."""
+    stripped = line.lstrip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
+
+
+def _fenced_code_lines(handle: Iterable[str]) -> Iterator[tuple[int, str]]:
+    """Only the lines inside fenced code blocks, with their real line numbers."""
+    in_fence = False
+    for line_num, line in enumerate(handle, 1):
+        if _is_fence(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            yield line_num, line
+
+
+def _scannable_lines(filepath: str, handle: Iterable[str]) -> Iterator[tuple[int, str]]:
+    """The lines of a file where a suppression marker would be a real suppression.
+
+    In Markdown that is fenced code only. Prose has to be able to *name* these markers --
+    the policy is documented in README.md and in several skill files, and a rule that
+    cannot tell "never write `# noqa`" from an actual `# noqa` makes the ban undocumentable.
+    A fence is different: it is sample code, written to be copied, so a suppression there is
+    one this project is teaching someone to write.
+
+    Every other file type is scanned whole. Markdown is the only one where the difference
+    between mentioning code and being code is expressible.
+    """
+    if os.path.splitext(filepath)[1].lower() != ".md":
+        yield from enumerate(handle, 1)
+        return
+    yield from _fenced_code_lines(handle)
+
+
 def scan_file(filepath: str) -> list[Violation]:
     violations: list[Violation] = []
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            for line_num, line in enumerate(f, 1):
+            for line_num, line in _scannable_lines(filepath, f):
                 for name, pattern in PATTERNS.items():
                     if pattern.search(line):
                         violations.append((line_num, name, line.strip()))

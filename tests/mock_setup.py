@@ -1,6 +1,19 @@
 """
 Global mocks setup for Whisper Pro ASR tests.
 This module is imported first in conftest.py to intercept imports of heavy/ML libraries.
+
+The rule for what belongs here: mock a module only when it is genuinely not installed in
+the test image. Everything below is absent because installing it would mean shipping torch,
+CTranslate2, OpenVINO or ROCm into a lint-and-unit image -- gigabytes, for a container that
+never runs a model. Those tests run against the real stacks on hardware instead, through
+the `real_asr` suites in tests/real_audio and tests/integration.
+
+A mock for a module that *is* installed is worse than no test: it silently replaces the
+thing under test. tqdm, requests, soundfile, psutil and ffmpeg were all mocked here while
+being fully installed, and the tqdm entry was hiding a genuine failure -- huggingface_hub
+could not import through the MagicMock, so the one test checking our snapshot_download call
+against the real installed signature never ran. They now use the real modules; tests that
+need particular values patch them locally, where the substitution is visible.
 """
 
 import sys
@@ -49,32 +62,10 @@ sys.modules["flasgger"] = mock.MagicMock()
 sys.modules["audio_separator"] = mock.MagicMock()
 sys.modules["audio_separator.separator"] = mock.MagicMock()
 
-# 5. Soundfile mock
-mock_soundfile = mock.MagicMock()
-mock_soundfile.info = mock.MagicMock(return_value=mock.MagicMock(duration=10.0))
-sys.modules["soundfile"] = mock_soundfile
-
 # 6. CTranslate2 mock
 mock_ctranslate2 = mock.MagicMock()
 mock_ctranslate2.get_cuda_device_count = mock.MagicMock(return_value=0)
 sys.modules["ctranslate2"] = mock_ctranslate2
 
-# 7. Utility and System mocks
-mock_psutil = mock.MagicMock()
-mock_process = mock.MagicMock()
-mock_psutil.cpu_percent.return_value = 10.0
-mock_psutil.cpu_count.return_value = 8
-mock_psutil.virtual_memory.return_value.percent = 50.0
-mock_psutil.virtual_memory.return_value.used = 8 * (1024**3)
-mock_psutil.virtual_memory.return_value.total = 16 * (1024**3)
-mock_process.cpu_percent.return_value = 10.0
-mock_process.memory_info.return_value = mock.MagicMock(rss=100 * 1024 * 1024)
-mock_psutil.Process.return_value = mock_process
-sys.modules["psutil"] = mock_psutil
-
-sys.modules["tqdm"] = mock.MagicMock()
 sys.modules["pydub"] = mock.MagicMock()
 sys.modules["pydub.AudioSegment"] = mock.MagicMock()
-sys.modules["requests"] = mock.MagicMock()
-sys.modules["ffmpeg"] = mock.MagicMock()
-sys.modules["ffmpeg_python"] = mock.MagicMock()

@@ -608,6 +608,35 @@ git push
 - [ ] Commits pushed with clear messages
 - [ ] Resolution comments posted
 - [ ] CI/CD pipeline green
+- [ ] Accelerator paths validated on real hardware (see below)
 - [ ] Mergeable status confirmed
 - [ ] Ready for merge
 ```
+
+## Hardware Validation Before Closing the Wave (Mandatory)
+
+A green pipeline is **not** the end of a review wave. Every test in this repository except
+`tests/real_audio` and `tests/integration/test_transcription_accuracy.py` mocks the ASR
+engine, so an accelerator path this wave broke passes all of them -- and "CI/CD pipeline
+green" above is exactly the box that gets ticked in its place.
+
+Finish every wave by validating the touched paths on real silicon:
+
+```bash
+scripts/audit_hardware.sh                      # on the host, first -- never assume
+scripts/remote_validate.sh <user>@<host> --target <t> --device <d> --full --suite smoke
+```
+
+Pick the host by what the wave changed: NPU/engine/pool logic in `modules/core/config*.py`
+needs the Intel NPU box, CUDA decode paths need an NVIDIA box, preprocessor/isolation
+routing needs a hybrid NVIDIA+Intel box, and manifest or scoring changes need the
+real-audio matrix. Read the startup banner, not the HTTP status -- a 200 is entirely
+compatible with a silent CPU fallback.
+
+Watch that it is progressing, not merely running: check the task list rather than the
+elapsed time. Queued tasks spaced at exactly `REAL_ASR_TIMEOUT` apart mean nothing is
+completing at all.
+
+State the outcome before marking the PR ready, and name any change left unvalidated
+because its host was unreachable. See `.agent/instructions.md` for the full rule and the
+regression that caused it to be written down.

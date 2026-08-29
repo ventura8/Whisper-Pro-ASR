@@ -3,6 +3,7 @@
 import importlib
 import os
 import tempfile
+from collections import namedtuple
 from unittest import mock
 
 import pytest
@@ -68,3 +69,37 @@ class TestSSDOptimization:
             with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 res = config_module.get_temp_dir()
                 assert res == config_module.PERSISTENT_TEMP_DIR
+
+
+class TestTempDirNeverRaises:
+    """get_temp_dir selects a directory; it must not refuse to answer.
+
+    v1.3.0 added a RuntimeError for the case where neither directory clears the
+    threshold. That threshold is max(min_free, 1.5x required) -- desired headroom, not
+    the space the work needs -- and the function runs while resolving config on the
+    request path, so a full disk became a hard failure on every request instead of a
+    degraded one. Two tests had been failing since.
+    """
+
+    def test_returns_persistent_when_neither_has_the_preferred_headroom(self):
+        with mock.patch("shutil.disk_usage") as usage:
+            usage.return_value = mock.MagicMock(free=1024)  # 1 KB everywhere
+            with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
+                assert config_module.get_temp_dir(required_bytes=10 * 1024**3) == config_module.PERSISTENT_TEMP_DIR
+
+    def test_says_so_in_the_log_rather_than_failing(self, caplog):
+        import logging
+
+        with mock.patch("shutil.disk_usage") as usage:
+            usage.return_value = mock.MagicMock(free=1024)
+            with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
+                with caplog.at_level(logging.WARNING):
+                    config_module.get_temp_dir(required_bytes=10 * 1024**3)
+
+        assert any("Neither temp directory" in record.message for record in caplog.records)
+
+    def test_zero_free_space_still_returns_a_directory(self):
+        Usage = namedtuple("Usage", ["free"])
+        with mock.patch("shutil.disk_usage", return_value=Usage(free=0)):
+            with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
+                assert config_module.get_temp_dir(required_bytes=1_000_000) == config_module.PERSISTENT_TEMP_DIR

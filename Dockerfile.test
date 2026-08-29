@@ -18,7 +18,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV PYTHONUNBUFFERED=1
 
-ARG POETRY_VERSION=2.4.1
+ARG POETRY_VERSION=2.4.3
 # Keep in sync with PIP_VERSION in scripts/ci/dependencies.env
 ARG PIP_VERSION=26.2.1
 ARG SETUPTOOLS_VERSION=84.0.0
@@ -49,6 +49,7 @@ RUN --mount=type=cache,id=whisper-pro-asr-apt-cache,target=/var/cache/apt,sharin
     pkg-config=* \
     git=* \
     ccache=* \
+    libmp3lame-dev=* \
     && wget --progress=dot:giga -O /tmp/ffmpeg.tar.xz "${FFMPEG_URL}" \
     && wget --progress=dot:giga -O /tmp/ffmpeg.tar.xz.asc "${FFMPEG_SIG_URL}" \
     && wget --progress=dot:giga -O /tmp/ffmpeg-devel.asc https://ffmpeg.org/ffmpeg-devel.asc \
@@ -56,14 +57,25 @@ RUN --mount=type=cache,id=whisper-pro-asr-apt-cache,target=/var/cache/apt,sharin
     && gpg --batch --verify /tmp/ffmpeg.tar.xz.asc /tmp/ffmpeg.tar.xz \
     && tar -xf /tmp/ffmpeg.tar.xz -C /tmp
 
+# The ffmpeg build below asserts libmp3lame is present. The audio matrix has an adversarial
+# entry that is an mp3 named .wav, and without the encoder the generator fails that one clip
+# with "Encoder not found" -- which surfaces only during a full regeneration, long after the
+# image was built. Two traps in that one line, both already paid for once here:
+#   * a comment cannot go inside the RUN chain -- '#' there is a *shell* comment and
+#     swallows the rest of the continued line, truncating the build mid-ffmpeg;
+#   * the grep must NOT be `-q`. The RUN executes under `bash -o pipefail`, and `grep -q`
+#     exits on its first match, closing the pipe and handing ffmpeg a SIGPIPE that pipefail
+#     then reports as a failed build -- the same trap `find | head -n1` sprang in
+#     scripts/docker/verify_no_build_artifacts.sh. Plain grep consumes the whole stream.
 WORKDIR /tmp/ffmpeg-${FFMPEG_VERSION}
 
 RUN --mount=type=cache,id=whisper-pro-asr-ccache,target=/root/.ccache,sharing=locked \
-    CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local --disable-debug --disable-doc --disable-static --enable-shared --enable-pic --cc="ccache gcc" --cxx="ccache g++" \
+    CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local --disable-debug --disable-doc --disable-static --enable-shared --enable-pic --enable-libmp3lame --enable-gpl --cc="ccache gcc" --cxx="ccache g++" \
     && make -j"$(nproc)" \
     && make install \
     && ldconfig \
     && ffmpeg -version \
+    && ffmpeg -hide_banner -encoders 2>/dev/null | grep libmp3lame >/dev/null \
     && ffprobe -version \
     && rm -rf /tmp/ffmpeg* /root/.gnupg \
     && rm -rf /var/lib/apt/lists/*
@@ -86,12 +98,20 @@ COPY --from=powershell-bin /opt/microsoft/powershell/7 /opt/microsoft/powershell
 RUN ln -sf /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh
 
 # Keep pip resolver behavior aligned with production image and install Poetry + dependencies
+# huggingface-hub is pulled in on its own afterwards. It lives in the `ml` group, which this
+# image deliberately skips because that group drags torch and CTranslate2, but skipping it
+# also meant the one test that checks our snapshot_download call against the *real* installed
+# signature was silently importorskip-ed away -- and that test exists precisely because
+# huggingface_hub 1.x dropped a keyword we were passing. The version is read back out of
+# pyproject.toml rather than repeated here, so the two cannot drift apart.
 RUN --mount=type=cache,id=whisper-pro-asr-poetry,target=/root/.cache/pypoetry,sharing=locked \
     python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" "poetry==${POETRY_VERSION}" "setuptools==${SETUPTOOLS_VERSION}" && \
     poetry config virtualenvs.create false && \
     poetry config installer.max-workers 4 && \
     poetry config cache-dir /root/.cache/pypoetry && \
-    poetry install --no-root
+    poetry install --no-root && \
+    hub_version="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['poetry']['group']['ml']['dependencies']['huggingface-hub'])")" && \
+    python -m pip install --no-cache-dir "huggingface-hub==${hub_version}"
 
 
 # Stage 2: Test - Final image for running all quality gates and tests

@@ -1,5 +1,4 @@
 import glob
-import os
 
 
 def find_metrics():
@@ -12,7 +11,9 @@ def find_metrics():
         try:
             with open(p, "r") as f:
                 print(f"{p}: {f.read().strip()}%")
-        except:
+        except OSError:
+            # A sysfs attribute that exists but refuses to be read says nothing useful
+            # here; this script only reports what it can see.
             pass
 
     # NPU (Newer kernels use /sys/class/accel)

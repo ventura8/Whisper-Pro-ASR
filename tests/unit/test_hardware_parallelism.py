@@ -226,7 +226,10 @@ class TestAppendAmdUnits:
         """Appends single amd:0 unit when max_amd is 1."""
         append_amd_units_fn = getattr(ch, "_append_amd_units")
         units: list = []
-        with mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=1):
+        with (
+            mock.patch("modules.core.config_helpers._has_rocm_runtime", return_value=True),
+            mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=1),
+        ):
             append_amd_units_fn(1, units)
         assert len(units) == 1
         assert units[0] == {"type": "AMD", "id": "amd:0", "name": "AMD GPU 0"}
@@ -235,7 +238,10 @@ class TestAppendAmdUnits:
         """Appends 3 AMD units when max_amd is 3."""
         append_amd_units_fn = getattr(ch, "_append_amd_units")
         units: list = []
-        with mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=3):
+        with (
+            mock.patch("modules.core.config_helpers._has_rocm_runtime", return_value=True),
+            mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=3),
+        ):
             append_amd_units_fn(3, units)
         assert [u["id"] for u in units] == ["amd:0", "amd:1", "amd:2"]
 
@@ -243,7 +249,10 @@ class TestAppendAmdUnits:
         """Appends 12 AMD units when max_amd is 12."""
         append_amd_units_fn = getattr(ch, "_append_amd_units")
         units: list = []
-        with mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=12):
+        with (
+            mock.patch("modules.core.config_helpers._has_rocm_runtime", return_value=True),
+            mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=12),
+        ):
             append_amd_units_fn(12, units)
         assert len(units) == 12
 
@@ -272,6 +281,7 @@ class TestAppendAmdUnits:
         append_amd_units_fn = getattr(ch, "_append_amd_units")
         units: list = []
         with (
+            mock.patch("modules.core.config_helpers.sys.platform", "win32"),
             mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=0),
             mock.patch("os.path.exists", return_value=False),
             mock.patch("modules.core.config_helpers._has_amd_win32_hardware", return_value=True),

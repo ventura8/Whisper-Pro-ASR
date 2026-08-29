@@ -1,5 +1,8 @@
-"""Priority-preemption self-heal/race tests for section 3 (priority preemption) of
-docs/E2E_TEST_PLAN_ORCHESTRATION.md.
+"""Priority-preemption self-heal and race tests.
+
+Written against section 3 of an orchestration E2E test plan that was never committed to this
+repository, so the reference is kept as provenance only -- what each test covers is listed
+below rather than left to a document nobody can open.
 
 Covers:
 - 3.7: ASR task finishes naturally at (as close as deterministically achievable

@@ -201,6 +201,28 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def disable_engine_isolation():
+    """Keep engines and preprocessing in-process for the default suite.
+
+    Isolation is a deployment default, but a test that merely exercises pool or
+    scheduler logic should not pay to spawn a worker -- and with mocked engines the
+    spawned process would import the real engine stack only to fail. Tests that mean to
+    cover the out-of-process path opt back in explicitly (see
+    tests/inference/engines/test_isolated_engine.py and the init_unit isolation tests).
+    """
+    # Attribute patches only. A review finding asked for ASR_ISOLATE_ENGINES=0 in the
+    # environment as well, so that a test calling `importlib.reload(config)` would not
+    # recompute the deployment default -- but isolation is an *input* to hybrid-engine
+    # resolution (config_resolution.resolve_hybrid_engines requires it), so forcing it off
+    # in the environment turned HYBRID_ENGINES off in every reloading test and broke the
+    # CUDA+Intel hybrid cases outright. The engines those tests reload around are mocked,
+    # so the default the reload restores costs nothing; the env force does.
+    with mock.patch("modules.core.config.ISOLATE_ENGINES", False):
+        with mock.patch("modules.core.config.ISOLATE_PREPROCESSING", False):
+            yield
+
+
+@pytest.fixture(autouse=True)
 def reset_module_state():
     """Reset module-level state between tests to prevent test pollution."""
     # Force reset module state before test

@@ -5,6 +5,7 @@ ASR Transcription Routes for Whisper Pro ASR
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 from typing import Any, Optional, TypedDict
@@ -15,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from modules.api.support import request_utils as routes_utils
 from modules.api.support.local_path import normalize_bazarr_request_params
-from modules.core import config, utils
+from modules.core import config, languages, utils
 from modules.inference.pipeline import language_detection
 from modules.inference.runtime import model_manager
 from modules.inference.runtime.concurrency import _check_preemption
@@ -192,7 +193,11 @@ def _perform_transcription_task(
                 model_manager.record_task_failure(msg, code, context="ASR")
                 return None, source_path, err
 
-            lang = _detect_lang_for_transcription(params.get("language"), source_path, clean_wav)
+            # Normalize only here, not in params: stream alignment must keep the caller's
+            # exact spelling ("eng", "en-US") because _select_audio_stream_index does its
+            # own substring matching against the container's stream tags.
+            requested_lang = _normalize_language(params.get("language"))
+            lang = _detect_lang_for_transcription(requested_lang, source_path, clean_wav)
             result = _run_transcription(params, source_path, clean_wav, lang)
 
             if result:
@@ -235,6 +240,15 @@ def _detect_lang_for_transcription(
     source_path: str,
     clean_wav: Optional[str],
 ) -> Optional[str]:
+    """Detect the language up front, unless vocal separation is going to run.
+
+    When separation is enabled, run_transcription detects *after* isolating the vocals:
+    the detector then sees the same separated audio the decoder does, only one UVR pass
+    happens instead of two (the montage no longer needs its own), and the dashboard stops
+    showing "Vocal Separation" after "Language Detection".
+    """
+    if not lang and model_manager.will_isolate_vocals():
+        return None
     detection_target = clean_wav if clean_wav else source_path
     return _detect_lang_if_needed(lang, detection_target)
 
@@ -285,6 +299,58 @@ def _build_base_request_params(
     if "/translations" in request.url.path:
         params["task"] = "translate"
     return params
+
+
+#: ISO 639-2 (three-letter) codes to the two-letter codes the engines accept. Both the
+#: bibliographic and terminological spellings appear in the wild -- Bazarr sends "fre" and
+#: "fra" for the same language -- so both map here.
+_ISO_639_2_TO_1 = {
+    "eng": "en",
+    "fra": "fr",
+    "fre": "fr",
+    "deu": "de",
+    "ger": "de",
+    "spa": "es",
+    "por": "pt",
+    "ita": "it",
+    "nld": "nl",
+    "dut": "nl",
+    "rus": "ru",
+    "zho": "zh",
+    "chi": "zh",
+    "jpn": "ja",
+    "kor": "ko",
+}
+
+
+def _normalize_language(language: Optional[str]) -> Optional[str]:
+    """Drop an unsupported language code so the request auto-detects instead of failing.
+
+    Engines disagree on unknown codes: the Intel engine logs and falls back to
+    auto-detection, while CTranslate2 raises ``ValueError: 'xx' is not a valid language
+    code`` and turns the request into a 500. On a hybrid host the same request can land
+    on either unit, so the behaviour is settled before dispatch rather than left to
+    whichever engine happens to receive it.
+
+    Applies to the ASR path only. Stream alignment keeps the caller's spelling verbatim
+    -- Bazarr sends "eng"/"en-US"/"EN" and stream matching does its own truncation
+    against the container's tags.
+    """
+    if not language:
+        return language
+    code = language.strip().lower()
+    if code in languages.LANGUAGES:
+        return code
+    # Split on either separator. A POSIX-style "en_US" reached the ISO 639-2 lookup whole,
+    # matched nothing, and auto-detected -- while the identical "en-US" resolved to "en".
+    primary_code = re.split(r"[-_]", code, maxsplit=1)[0]
+    if primary_code in languages.LANGUAGES:
+        return primary_code
+    mapped_code = _ISO_639_2_TO_1.get(primary_code)
+    if mapped_code in languages.LANGUAGES:
+        return mapped_code
+    logger.warning("[ASR] Ignoring unsupported language code %r; falling back to auto-detection.", language)
+    return None
 
 
 def _apply_batch_and_diarization_params(

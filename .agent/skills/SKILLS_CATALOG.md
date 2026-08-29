@@ -40,6 +40,7 @@ This catalog lists all available project skills and when to use them.
 - `runtime/language_detection_priority_skill.md`: Priority orchestration rules and expected ASR/detect interaction.
 - `runtime/model_lifecycle_management_skill.md`: Idle timeout/offload behavior and memory lifecycle.
 - `runtime/storage_persistence_hygiene_skill.md`: Temp file cleanup, persistent volumes, and retention behavior.
+- `runtime/remote_hardware_validation_skill.md`: Validate accelerator paths over SSH on a host with silicon this machine lacks.
 - `runtime/troubleshooting_playbook_skill.md`: Reproduce and isolate deadlocks, stalls, and queue anomalies.
 
 ## Monitoring Skills
@@ -54,6 +55,8 @@ This catalog lists all available project skills and when to use them.
 
 ## Workflow Skills
 
+- `coderabbit-review-waves/SKILL.md`: Process a batch of CodeRabbit findings pasted into the conversation (30-60 at a time). Triage of findings whose premise is already false, fix batching, the gates your own fixes will trip (Radon rank-A, 140-col, 600-line modules, 90% per-file coverage), and the mandatory hardware validation that closes a wave.
+- `review-with-coderabbit/SKILL.md`: Run a CodeRabbit CLI review on local changes, or replay stored plugin/CLI findings. User-gated; ends with a fixed-how / skipped-why report.
 - `resolve-pr-comments/SKILL.md`: Guidelines for resolving PR review comments with `gh` (canonical skill entry).
 - `workflow/resolve-pr-comments-run.sh`: Shell helper for the PR comment resolution workflow. Auto-resolve requires explicit operator argv overrides (`EVIDENCE_TEST_PATH_OVERRIDE`, `LINKED_COMMIT_SHA_OVERRIDE`); the linked commit must be an ancestor of the PR head ref (not merely a local or foreign-branch commit). Bot comment bodies are never parsed for verification evidence.
 

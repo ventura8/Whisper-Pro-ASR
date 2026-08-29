@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from unittest import mock
 
-from modules.core import bootstrap
+from modules.core import boot_diagnostics, bootstrap
 
 
 def _fake_core():
@@ -39,7 +39,7 @@ def _fake_import_module(name: str):
 def test_log_intel_runtime_diagnostics_reports_runtime_and_devices():
     """Intel diagnostics should log provider, device, and node visibility details."""
     logger = mock.MagicMock()
-    log_diagnostics = getattr(bootstrap, "_log_intel_runtime_diagnostics")
+    log_diagnostics = boot_diagnostics.log_intel_runtime_diagnostics
 
     with (
         mock.patch.object(bootstrap.importlib, "import_module", side_effect=_fake_import_module),
@@ -57,7 +57,7 @@ def test_log_intel_runtime_diagnostics_reports_runtime_and_devices():
 def test_safe_ort_providers_returns_empty_when_provider_query_fails():
     """Provider diagnostics should tolerate provider query failures."""
     ort = SimpleNamespace(get_available_providers=mock.Mock(side_effect=RuntimeError("provider query failed")))
-    safe_providers = getattr(bootstrap, "_safe_ort_providers")
+    safe_providers = getattr(boot_diagnostics, "_safe_ort_providers")
 
     assert not safe_providers(ort)
 
@@ -119,7 +119,7 @@ def test_detect_intel_linux_nodes_uses_vendor_probe_when_nodes_missing():
 
 def test_parse_proc_status_line_handles_invalid_and_valid_rows():
     """Proc status parser should ignore malformed lines and parse key/value lines."""
-    parse_line = getattr(bootstrap, "_parse_proc_status_line")
+    parse_line = getattr(boot_diagnostics, "_parse_proc_status_line")
     assert parse_line("Malformed") == ("", "")
     assert parse_line("CapEff:\t00000000") == ("CapEff", "00000000")
 
@@ -127,21 +127,21 @@ def test_parse_proc_status_line_handles_invalid_and_valid_rows():
 def test_read_process_security_status_extracts_expected_keys():
     """Process security parser should extract known keys and keep defaults for absent keys."""
     with mock.patch.object(
-        bootstrap,
+        boot_diagnostics,
         "_iter_proc_status_entries",
         return_value=[("CapEff", "ffff"), ("Seccomp", "2"), ("Other", "x")],
     ):
-        assert getattr(bootstrap, "_read_process_security_status")() == ("ffff", "2", "unknown")
+        assert getattr(boot_diagnostics, "_read_process_security_status")() == ("ffff", "2", "unknown")
 
 
 def test_optional_openvino_probe_toggle_paths():
     """Optional target probe should no-op when disabled and invoke probe when enabled."""
     logger = mock.MagicMock()
-    optional_probe = getattr(bootstrap, "_log_optional_openvino_target_probe")
+    optional_probe = getattr(boot_diagnostics, "_log_optional_openvino_target_probe")
 
     with (
         mock.patch.object(bootstrap.os, "getenv", return_value="false"),
-        mock.patch.object(bootstrap, "_log_openvino_target_probe") as mock_probe,
+        mock.patch.object(boot_diagnostics, "_log_openvino_target_probe") as mock_probe,
     ):
         optional_probe(logger)
         mock_probe.assert_not_called()
@@ -150,7 +150,7 @@ def test_optional_openvino_probe_toggle_paths():
     logger.reset_mock()
     with (
         mock.patch.object(bootstrap.os, "getenv", return_value="true"),
-        mock.patch.object(bootstrap, "_log_openvino_target_probe") as mock_probe,
+        mock.patch.object(boot_diagnostics, "_log_openvino_target_probe") as mock_probe,
     ):
         optional_probe(logger)
         mock_probe.assert_called_once_with(logger)
@@ -158,7 +158,7 @@ def test_optional_openvino_probe_toggle_paths():
 
 def test_device_open_probe_reports_missing_and_open_failure():
     """Device open probe should return explicit status for missing and failed-open nodes."""
-    probe = getattr(bootstrap, "_device_open_probe")
+    probe = getattr(boot_diagnostics, "_device_open_probe")
 
     with mock.patch.object(bootstrap.os.path, "exists", return_value=False):
         assert probe("/dev/dri/renderD128") == "missing"
@@ -174,10 +174,10 @@ def test_device_open_probe_reports_missing_and_open_failure():
 def test_log_intel_access_diagnostics_warns_on_non_root_without_device_access():
     """Access diagnostics should warn when non-root process cannot open Intel devices."""
     logger = mock.MagicMock()
-    access_diag = getattr(bootstrap, "_log_intel_access_diagnostics")
+    access_diag = getattr(boot_diagnostics, "_log_intel_access_diagnostics")
 
     with (
-        mock.patch.object(bootstrap, "_device_open_probe", return_value="missing"),
+        mock.patch.object(boot_diagnostics, "_device_open_probe", return_value="missing"),
         mock.patch.object(bootstrap.os, "getuid", return_value=1000, create=True),
         mock.patch.object(bootstrap.os, "getgroups", return_value=[1000, 44], create=True),
     ):
@@ -215,7 +215,7 @@ def test_log_openvino_target_probe_success_and_target_level_errors():
     ov.Core.return_value = core
 
     with mock.patch.object(bootstrap.importlib, "import_module", return_value=ov):
-        getattr(bootstrap, "_log_openvino_target_probe")(logger)
+        getattr(boot_diagnostics, "_log_openvino_target_probe")(logger)
 
     logger.info.assert_called_once()
     assert "OpenVINO target probe" in logger.info.call_args[0][0]
@@ -225,20 +225,20 @@ def test_log_openvino_target_probe_handles_import_failure():
     """OpenVINO target probe should log a warning when runtime import fails."""
     logger = mock.MagicMock()
     with mock.patch.object(bootstrap.importlib, "import_module", side_effect=ImportError("missing")):
-        getattr(bootstrap, "_log_openvino_target_probe")(logger)
+        getattr(boot_diagnostics, "_log_openvino_target_probe")(logger)
     logger.warning.assert_called_once()
 
 
 def test_get_process_identity_returns_unknown_on_os_without_uid_api():
     """Process identity helper should return unknown tuple when uid/gid APIs are unavailable."""
     with mock.patch.object(bootstrap.os, "getuid", side_effect=AttributeError("no uid"), create=True):
-        assert getattr(bootstrap, "_get_process_identity")() == (-1, -1, [])
+        assert getattr(boot_diagnostics, "_get_process_identity")() == (-1, -1, [])
 
 
 def test_iter_proc_status_entries_returns_empty_on_read_failure():
     """Proc status iterator should return empty list when status file cannot be read."""
     with mock.patch("builtins.open", side_effect=OSError("denied")):
-        assert not getattr(bootstrap, "_iter_proc_status_entries")()
+        assert not getattr(boot_diagnostics, "_iter_proc_status_entries")()
 
 
 def test_log_intel_node_details_handles_stat_failure_and_success_paths():
@@ -255,10 +255,10 @@ def test_log_intel_node_details_handles_stat_failure_and_success_paths():
     bad_node.stat.side_effect = OSError("broken")
 
     with (
-        mock.patch.object(bootstrap, "glob", side_effect=[[str(ok_node)], [str(bad_node)]]),
+        mock.patch.object(boot_diagnostics, "glob", side_effect=[[str(ok_node)], [str(bad_node)]]),
         mock.patch.object(bootstrap, "Path", side_effect=lambda p: ok_node if p == str(ok_node) else bad_node),
     ):
-        getattr(bootstrap, "_log_intel_node_details")(logger)
+        getattr(boot_diagnostics, "_log_intel_node_details")(logger)
 
     assert logger.debug.call_count >= 2
 
@@ -267,7 +267,7 @@ def test_read_sysfs_file_returns_na_on_oserror():
     """Sysfs reader should return n/a for unreadable files."""
     path = mock.MagicMock()
     path.read_text.side_effect = OSError("denied")
-    assert getattr(bootstrap, "_read_sysfs_file")(path) == "n/a"
+    assert getattr(boot_diagnostics, "_read_sysfs_file")(path) == "n/a"
 
 
 def test_log_sysfs_class_nodes_resolve_failure_and_none_branch():
@@ -282,11 +282,11 @@ def test_log_sysfs_class_nodes_resolve_failure_and_none_branch():
     driver_link.resolve.side_effect = OSError("unresolved")
 
     with (
-        mock.patch.object(bootstrap, "glob", side_effect=[["/sys/class/drm/renderD128/device"], []]),
+        mock.patch.object(boot_diagnostics, "glob", side_effect=[["/sys/class/drm/renderD128/device"], []]),
         mock.patch.object(bootstrap, "Path", return_value=device_path),
-        mock.patch.object(bootstrap, "_read_sysfs_file", return_value="0x8086"),
+        mock.patch.object(boot_diagnostics, "_read_sysfs_file", return_value="0x8086"),
     ):
-        log_sysfs = getattr(bootstrap, "_log_sysfs_class_nodes")
+        log_sysfs = getattr(boot_diagnostics, "_log_sysfs_class_nodes")
         log_sysfs(logger, "drm-render", "/sys/class/drm/renderD*/device")
         log_sysfs(logger, "accel", "/sys/class/accel/accel*/device")
 
@@ -295,7 +295,7 @@ def test_log_sysfs_class_nodes_resolve_failure_and_none_branch():
 
 def test_device_open_probe_success_closes_fd_and_access_diag_handles_uid_failure():
     """Device open probe should close descriptors on success; access diagnostics should tolerate uid lookup failures."""
-    probe = getattr(bootstrap, "_device_open_probe")
+    probe = getattr(boot_diagnostics, "_device_open_probe")
     logger = mock.MagicMock()
 
     with (
@@ -308,10 +308,10 @@ def test_device_open_probe_success_closes_fd_and_access_diag_handles_uid_failure
         mock_close.assert_called_once_with(42)
 
     with (
-        mock.patch.object(bootstrap, "_device_open_probe", return_value="open_ok"),
+        mock.patch.object(boot_diagnostics, "_device_open_probe", return_value="open_ok"),
         mock.patch.object(bootstrap.os, "getuid", side_effect=AttributeError("missing"), create=True),
     ):
-        getattr(bootstrap, "_log_intel_access_diagnostics")(logger)
+        getattr(boot_diagnostics, "_log_intel_access_diagnostics")(logger)
     logger.warning.assert_not_called()
 
 
@@ -358,3 +358,43 @@ def test_ensure_wsl_library_path_prepends():
     ):
         ensure_wsl()
         assert bootstrap.os.environ.get("LD_LIBRARY_PATH") == "/usr/lib/wsl/lib:/other/lib"
+
+
+def test_explicit_cuda_falls_back_to_cpu_when_nvidia_libs_absent():
+    """A vendor-specific image without /app/libs/nvidia must not strand ASR_DEVICE=CUDA.
+
+    The image build uninstalls the global onnxruntime, so returning a nonexistent path
+    here would leave sys.path with no ONNX Runtime at all.
+    """
+    resolve_target_library = getattr(bootstrap, "_resolve_target_library")
+    with mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path == "/app/libs/cpu"):
+        target, reason = resolve_target_library("cuda", "auto", True, False, False)
+
+    assert target == "/app/libs/cpu"
+    assert reason == "CPU Runtime"
+
+
+def test_explicit_intel_falls_back_to_cpu_when_intel_libs_absent():
+    """Explicit intel/gpu/npu on an NVIDIA-only image must degrade to the CPU runtime."""
+    resolve_target_library = getattr(bootstrap, "_resolve_target_library")
+    with mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path == "/app/libs/cpu"):
+        target, reason = resolve_target_library("gpu", "auto", False, True, False)
+
+    assert target == "/app/libs/cpu"
+    assert reason == "CPU Runtime"
+
+
+def test_activate_target_library_falls_back_to_cpu_for_invalid_target():
+    """_activate_target_library must substitute the CPU runtime rather than returning bare."""
+    activate = getattr(bootstrap, "_activate_target_library")
+    boot_logger = mock.MagicMock()
+    with (
+        mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path == "/app/libs/cpu"),
+        mock.patch.object(bootstrap.importlib, "invalidate_caches"),
+        mock.patch.object(bootstrap, "_log_onnxruntime_load") as mock_log,
+    ):
+        activate(boot_logger, "/app/libs/nvidia", "NVIDIA CUDA")
+
+    boot_logger.warning.assert_called_once()
+    mock_log.assert_called_once()
+    assert mock_log.call_args[0][1] == "/app/libs/cpu"

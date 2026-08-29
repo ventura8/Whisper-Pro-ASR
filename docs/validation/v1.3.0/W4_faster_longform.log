@@ -1,0 +1,86 @@
+row: W4_faster_longform
+target=nvidia engine=FASTER-WHISPER device=CUDA preprocess=CUDA separation=on suite=longform transport=wsl:Ubuntu
+commit: 6f31b2f  date: 2026-09-08T13:51:10Z
+=== Preflight: <user>@<host> ===
+  ssh: OK (<user>@<host>)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  wsl: <user>@<host> kernel=<host>-microsoft-standard-WSL2
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  docker: usable without sudo (Docker version 29.7.2, build a7dcaa6)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  docker binary: /usr/bin/docker (native to the distro)
+  clock: Windows host within 0s of this machine
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  clock: within 1s of this machine
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  clock: build containers within 0s of this machine
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  disk: 868G free
+
+=== Hardware audit (vendor-agnostic) ===
+  {"os":"windows","nvidia":true,"amd":true,"amd_discrete":false,"intel_gpu":false,"gpus":["AMD Radeon(TM) Graphics","NVIDIA GeForce RTX 5090"],"wsl_distro":"Ubuntu","wsl_error":"","wsl_docker":"29.7.2","wsl_dxg":true,"wsl_nvidia_smi":"NVIDIA GeForce RTX 5090","wsl_docker_gpu":"GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-c5750e88-db83-f86e-1be2-f8d4e445c4fd)","wsl_docker_gpu_error":"","disk_free":"868G","recommended_target":"nvidia"}
+
+=== What actually loaded ===
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+2026-09-08 13:51:57,439        Whisper Pro ASR 1.3.0 nvidia
+2026-09-08 13:51:57,440    ASR Engine                    : FASTER-WHISPER
+2026-09-08 13:51:57,440    ASR Runtime                   : CUDA (Compute: float16)
+2026-09-08 13:51:57,440    Preprocess Device             : CUDA
+2026-09-08 13:51:57,440    Resource Pool                 : cuda:0
+2026-09-08 13:51:57,441    OpenVINO devices              : CPU
+
+=== Suite: longform (engine=FASTER-WHISPER, preprocess=CUDA, real speech over HTTP) ===
+  this can take ~2h for full/stress; output is trimmed to the last 80 lines
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+cachedir: /var/cache/whisper-pro-asr-tools/pytest
+rootdir: /app
+configfile: pytest.ini
+plugins: anyio-4.14.2, requests-mock-1.12.1, cov-7.1.0, xdist-3.8.0
+collected 6 items
+
+tests/real_audio/test_longform_stress.py                                 [100%]
+
+=========================== short test summary info ============================
+XFAIL tests/real_audio/test_longform_stress.py::test_each_utterance_is_transcribed_where_it_occurs - the decoder emits one language per 30-second window, so audio that changes language faster than that gets the dominant language's words over everything else. multilingual=True (per-window re-detection) was enabled 2026-09-04 and improved it materially: 78 -> 55 of 118 windows below the 0.4 overlap threshold on an RTX 5090, and 56/118 on the NUC with the same engine on CPU -- two environments, same result. The improvement is structural, not noise: before, the detected language was the only clean one (es 12/12, everything else failing wholesale); after, misses spread thin (ru 11->2, fr 8->3, pt 4->2) and no language is privileged. Still 5x the 11 allowed, because 30s granularity cannot follow a switch every 7.6s. Closing it needs decoding at utterance granularity; a coarse language map was measured as too imprecise to drive that (31% precision on real film, 12-24% false trigger on monolingual film), so the remaining path is not obvious
+XFAIL tests/real_audio/test_longform_stress.py::test_multiple_languages_are_recognized_across_the_clip - no shipped engine reports a per-segment language, so the assertion cannot be met by any configuration this project builds. faster-whisper's Segment carries id/seek/start/end/text/tokens/avg_logprob/compression_ratio/no_speech_prob/words/temperature and no language field (verified against the installed package on the RTX 5090 image, 2026-09-08), and the WhisperX path does not emit one either -- the longform row was run on both engines to check. _build_segment_dict therefore never sets the key. Until 2026-09-08 the test called pytest.skip when the key was absent, which meant it had never executed on any engine while still being counted as part of the real-audio matrix. Recorded here rather than skipped so it stays visible, and so it flips to XPASS on its own if per-segment language is ever exposed. The whole-clip language is still detected and reported; it is the per-segment breakdown that is missing
+XFAIL tests/real_audio/test_longform_stress.py::test_quiet_regions_do_not_hallucinate - silence, music and noise are filled with invented speech -- 10 of 25 quiet windows on an RTX 5090 with FASTER-WHISPER, measured 2026-09-04. WHISPERX does NOT have this defect (it XPASSES the test): its VAD chunking never hands silence to the decoder, so this is a property of how audio reaches the decoder rather than a limit of Whisper itself. Raising the transcription VAD threshold was tried and REJECTED: 0.6 removed one hallucinated window and cost seven real ones (window misses 55 -> 62, confirmed on a clean repeat run). The reason it underperforms here is that UVR has already stripped most non-vocal content before VAD sees it, so the threshold has little hallucination left to catch and plenty of quiet speech left to discard -- an engine-only sweep without UVR overstates its value. VAD_THRESHOLD is plumbed and configurable now for anyone re-testing on other audio. The remaining text is the same pangram that drove the long-form loop, so it is the decoder running away into silence
+=================== 3 passed, 3 xfailed in 139.39s (0:02:19) ===================
+
+=== Measured execution (post-suite) ===
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+2026-09-08 13:52:16,560  [prep-worker:105] [System] Initializing UVR (UVR-MDX-NET-Inst_HQ_3.onnx) on NVIDIA GPU 0... [ONNX provider: CUDAExecutionProvider]
+2026-09-08 13:52:48,783  [prep-worker:105] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:29 | Audio: 00:20:03 | Speed: 40.53x)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  NVIDIA GPU 0                 ASR=CUDA       measured=True  | UVR=CUDA       measured=True
+
+=== Done ===
+  host:   <host>
+  target: nvidia (ASR_DEVICE=CUDA, ASR_ENGINE=FASTER-WHISPER, preprocess=CUDA, separation=true)
+  A passing suite proves decoding worked. Confirm the accelerator was USED by sampling
+  it during a transcription -- see docs/REMOTE_VALIDATION.md.
+  result: passed

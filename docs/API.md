@@ -24,6 +24,18 @@ Health check and dashboard entry point. Returns JSON with service identity when 
 
 Returns hardware pool status, active sessions, telemetry history, and version.
 
+Three version-ish fields travel together: `version` is the bare release number (`"1.3.0"`),
+`edition` names the image variant (`"nvidia-intel"`, `"full"`, ...), and `version_display`
+combines the two (`"1.3.0 nvidia-intel"`). **Prefer `version_display` when showing a version
+to a person** -- two hosts on the same release can be running different images, and only that
+field distinguishes them.
+
+Each entry in `hardware_units` carries `asr_execution` and `uvr_execution`, describing where
+that stage actually runs on that unit — `device`, `accelerated`, `fallback` (an accelerator
+unit whose work landed on the CPU), and `measured` (read from a loaded engine, rather than
+resolved from configuration). A unit in the pool is where a task is *dispatched*; these say
+where it executed, which differs whenever the engine has no backend for that silicon.
+
 **Ordering Guarantee**: Returned task lists are sorted by task start/arrival time (`start_time`, then `task_id`) so dashboard and API consumers observe a stable FIFO chronology.
 
 ### `POST /detect-language`
@@ -74,6 +86,15 @@ Transcribe audio to SRT/VTT/JSON with optional speaker diarization. All incoming
 - If `local_path` is readable inside the service container (volume mapping works), the request uses that path directly and skips upload materialization.
 - If `local_path` is unavailable, a readable `video_file` inside the approved roots is used directly without upload materialization.
 - If neither path is usable, the service falls back to the uploaded payload (`audio_file`/`file`) when present.
+
+**Approved roots**. A `local_path` is only read when it resolves under an approved root, so
+this is what a request may ask the service to open on its behalf. The roots are the temp and
+persistent directories, the working directory, anything listed in `WHISPER_APPROVED_ROOTS`
+(comma-separated), and — by default — every non-system bind mount the container has, which is
+what makes a mounted media library work without further configuration. The auto-approved
+mounts are named in a startup log line. Set `WHISPER_AUTO_APPROVE_MOUNTS=false` to drop that
+last source and confine local-path reads to `WHISPER_APPROVED_ROOTS`; deployments that rely on
+local-path optimisation must then list their media roots explicitly.
 
 **Parameters**:
 

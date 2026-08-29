@@ -1,6 +1,8 @@
 """Bazarr-compatible output format contract/edge-case tests (pure formatter level).
 
-Closes coverage gaps identified in docs/E2E_TEST_PLAN_ORCHESTRATION.md section 6:
+Closes coverage gaps identified in section 6 of an orchestration E2E test plan that was never
+committed to this repository. The gaps themselves are listed here, so nothing depends on
+finding that document:
 
 - 6.6 Non-ASCII / multi-byte text correctness (accents, CJK, RTL) across SRT/VTT/JSON.
 - 6.8 Overlapping / out-of-order segment timestamps.

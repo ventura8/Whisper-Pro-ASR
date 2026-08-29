@@ -5,7 +5,7 @@
 ## AI & Development Rules
 
 - **Concurrency Priority #1**: Deadlock/livelock prevention and bounded progress always take precedence over performance tuning and feature additions in scheduler/resource code.
-- **File Size Constraint**: Never have a `.py` file larger than **500 lines**. If a file grows beyond this limit, refactor and modularize into smaller files within the `modules/` directory.
+- **File Size Constraint**: Never have a `.py` file larger than **600 lines** -- the limit the gate actually enforces (`max-module-lines=600` in both `.pylintrc` and `.pylintrc-tests`). If a file grows beyond it, refactor and modularize into smaller files within the `modules/` directory. This rule read **500** until v1.3.0 while the gate enforced 600, which is a discrepancy a reviewer can only resolve by guessing -- and at least one review finding was filed against the wrong number.
 - **Logging Standard**: Use the project's central logger (`logging`) instead of `print()` statements for all modules and scripts.
 - **Thread Compliance**: All multi-threaded components (FFmpeg, OpenVINO, ONNX Runtime) MUST strictly respect the thread limits set in `modules.core.config` (`ASR_THREADS`, `PREPROCESS_THREADS`, `FFMPEG_THREADS`). Language-detection work must honor those configured thread limits on each hardware unit it uses; do not exceed per-unit thread budgets when multiple units are active.
 - **Media Standardization**: All audio ingested MUST be converted to **16kHz, Mono, 16-bit PCM**. Always use `utils.STANDARD_AUDIO_FLAGS` and `utils.STANDARD_NORMALIZATION_FILTERS` for FFmpeg commands to ensure pipeline consistency.

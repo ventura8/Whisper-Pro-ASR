@@ -1,0 +1,57 @@
+row: X4_full_auto_uvr
+target=full engine=FASTER-WHISPER device=AUTO preprocess=AUTO separation=on suite=smoke
+commit: 41ec4f4  date: 2026-09-08T07:40:31Z
+=== Preflight: <user>@<host> ===
+  ssh: OK (<user>@<host>)
+  docker: usable without sudo (Docker version 29.8.0, build 88096ef)
+  disk: 179G free
+
+=== Hardware audit (vendor-agnostic) ===
+  {"nvidia":true,"nvidia_toolkit":true,"intel_gpu":false,"intel_npu":false,"amd":true,"render_gid":"","intel_gpu_top":false,"disk_free":"179G","recommended_target":"nvidia"}
+  target: full (overridden; audit said nvidia)
+
+=== What actually loaded ===
+2026-09-08 08:36:32,793        Whisper Pro ASR 1.3.0 full
+2026-09-08 08:36:32,793    ASR Engine                    : FASTER-WHISPER
+2026-09-08 08:36:32,793    ASR Runtime                   : CUDA (Compute: float16)
+2026-09-08 08:36:32,793    Preprocess Device             : CUDA
+2026-09-08 08:36:32,793    Resource Pool                 : cuda:0, amd:0
+2026-09-08 08:36:32,793    OpenVINO devices              : CPU, GPU
+
+=== Suite: smoke (engine=FASTER-WHISPER, preprocess=AUTO, real speech over HTTP) ===
+  this can take ~2h for full/stress; output is trimmed to the last 80 lines
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+cachedir: /var/cache/whisper-pro-asr-tools/pytest
+rootdir: /app
+configfile: pytest.ini
+plugins: xdist-3.8.0, anyio-4.14.2, requests-mock-1.12.1, cov-7.1.0
+collected 168 items / 144 deselected / 24 selected
+
+tests/real_audio/test_code_switched.py                                   [ 12%]
+tests/real_audio/test_degraded_audio.py                                  [ 20%]
+tests/real_audio/test_language_matrix.py                                 [ 66%]
+tests/real_audio/test_malformed_inputs.py                                [ 83%]
+tests/real_audio/test_request_contract_abuse.py                          [100%]
+
+=============================== warnings summary ===============================
+../usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469
+  /usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469: PytestCacheWarning: could not create cache path /var/cache/whisper-pro-asr-tools/pytest/v/cache/nodeids: [Errno 13] Permission denied: '/var/cache/whisper-pro-asr-tools/pytest-cache-files-egn5g761'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========== 24 passed, 144 deselected, 1 warning in 162.83s (0:02:42) ===========
+
+=== Measured execution (post-suite) ===
+2026-09-08 08:39:11,897  [prep-worker:338] [UVR] Isolation complete on AMD GPU 0 (Duration: 00:00:02 | Audio: 00:00:06 | Speed: 3.06x)
+2026-09-08 08:39:17,890  [prep-worker:159] [UVR] Isolation complete on NVIDIA GPU 0 (Duration: 00:00:03 | Audio: 00:00:06 | Speed: 2.06x)
+2026-09-08 08:39:20,351  [prep-worker:338] [UVR] Isolation complete on AMD GPU 0 (Duration: 00:00:02 | Audio: 00:00:06 | Speed: 3.06x)
+  NVIDIA GPU 0                 ASR=CUDA       measured=True  | UVR=CPU        measured=True
+  AMD GPU 0                    ASR=CPU        measured=True  | UVR=AMD GPU    measured=True
+
+=== Done ===
+  host:   <host>
+  target: full (ASR_DEVICE=AUTO, ASR_ENGINE=FASTER-WHISPER, preprocess=AUTO, separation=true)
+  A passing suite proves decoding worked. Confirm the accelerator was USED by sampling
+  it during a transcription -- see docs/REMOTE_VALIDATION.md.
+  result: passed

@@ -1,0 +1,29 @@
+# Intel NPU passthrough.
+#
+# Kept separate from docker-compose.intel.yml on purpose: `devices:` entries are not
+# optional in Compose, so listing /dev/accel unconditionally makes the container refuse to
+# start on every Intel host that has a GPU but no NPU -- which is most of them. Layer this
+# file on top only when `ls /dev/accel` shows a device:
+#
+#   BUILD_TARGET=intel ASR_DEVICE=NPU docker compose \
+#     -f docker-compose.yml -f docker-compose.intel.yml -f docker-compose.intel-npu.yml up -d
+#
+# Requires on the host: the `intel_vpu` kernel module loaded, and /dev/accel/accel0 owned
+# by the `render` group (the group_add in docker-compose.intel.yml already covers access).
+# The image ships the driver (libze_intel_npu.so); without this file OpenVINO simply
+# enumerates "CPU, GPU", so the NPU is not a schedulable unit at all and cannot run the
+# vocal-isolation preprocessing this passthrough exists for.
+#
+# **The NPU is a preprocessing target only. It cannot execute the shipped Whisper IR**, which
+# is dynamic-shaped while the NPU plugin requires static upper bounds -- so ASR never runs on
+# it, with or without this file (see docs/REMOTE_VALIDATION.md). An ASR_DEVICE=NPU request
+# therefore falls back per the selected engine: INTEL-WHISPER decodes on the Intel GPU when
+# the host has one and on the CPU otherwise, and the CTranslate2 and torch engines on the CPU.
+services:
+  whisper-pro-asr:
+    devices:
+      - /dev/accel:/dev/accel
+    volumes:
+      # Mirrored for the same reason as /dev/dri in the intel override: level-zero
+      # enumerates through the directory, not just the character device.
+      - /dev/accel:/dev/accel

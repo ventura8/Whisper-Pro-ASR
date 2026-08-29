@@ -147,9 +147,31 @@ if command -v id >/dev/null 2>&1; then
 fi
 chmod 0755 assets "$REPORTS_DIR"
 find "$REPORTS_DIR" -type f -exec chmod 0644 {} +
+# The real-audio stages need three things this wrapper did not pass, so the command the
+# README documents --
+#     RUN_REAL_ASR=1 PIPELINE_STAGE=real-audio scripts/ci/build-and-test.sh
+# -- silently ran the default `all` stage instead and never touched the live service:
+#   * PIPELINE_STAGE, or run_suite.sh defaults to "all";
+#   * RUN_REAL_ASR, or every real-audio test skips itself;
+#   * --network host, or the container cannot reach the service on the host's port 9000.
+# Forwarded only when set, so an ordinary run's `docker run` line is unchanged.
+STAGE_ARGS=()
+for var in PIPELINE_STAGE RUN_REAL_ASR RUN_GPU_LONG_ASR WHISPER_BASE_URL REAL_ASR_TIMEOUT REAL_ASR_ADVERSARIAL_TIMEOUT; do
+	if [ -n "${!var:-}" ]; then
+		STAGE_ARGS+=(-e "${var}=${!var}")
+	fi
+done
+case "${PIPELINE_STAGE:-}" in
+real-audio | real-audio-stress)
+	# Host networking, because these drive a container the operator started separately.
+	STAGE_ARGS+=(--network host)
+	;;
+esac
+
 set +e
 cat <<'DOCKER_TEST_SCRIPT' | "${DOCKER_CMD[@]}" run --rm -i \
 	-e CI=true \
+	${STAGE_ARGS[@]+"${STAGE_ARGS[@]}"} \
 	-v "${PROJECT_ROOT}/assets:/app/assets" \
 	-v "${REPORTS_DIR}:/reports" \
 	-v "${TOOL_CACHE_VOLUME}:/var/cache/whisper-pro-asr-tools" \
@@ -164,6 +186,16 @@ exit "$TEST_EXIT_CODE"
 DOCKER_TEST_SCRIPT
 TEST_EXIT_CODE=$?
 set -e
+
+# The real-audio stages run with --no-cov and produce no coverage.xml, so the badge step
+# below would fail on a successful run. Skipped for exactly those two stages.
+case "${PIPELINE_STAGE:-}" in
+real-audio | real-audio-stress)
+	if [ "$TEST_EXIT_CODE" -ne 0 ]; then exit "$TEST_EXIT_CODE"; fi
+	printf "\n--- Real-audio stage completed; skipping the coverage badge (this stage runs --no-cov) ---\n"
+	exit 0
+	;;
+esac
 
 printf "\n--- Regenerating Coverage Badge (Mandatory Final Stage) ---\n"
 "${DOCKER_CMD[@]}" run --rm \

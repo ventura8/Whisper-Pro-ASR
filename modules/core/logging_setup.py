@@ -461,7 +461,7 @@ def _banner_config_lines(cfg):
     preprocess_val = f"Vocals={config.ENABLE_VOCAL_SEPARATION} | LD-Pre={config.ENABLE_LD_PREPROCESSING}"
     lines = [
         "================================================================",
-        f"      {config.APP_NAME} {config.VERSION}",
+        f"      {config.APP_NAME} {config.VERSION_DISPLAY}",
         "================================================================",
         "  [ENGINE CONFIG]",
         f"  {'Whisper Model ID':<{w}}: {_get_real_model_name()}",

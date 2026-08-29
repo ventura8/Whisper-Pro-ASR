@@ -5,7 +5,16 @@
     "!node_modules/**",
     "!coverage-js/**",
     "!playwright-report/**",
-    "!test-results/**"
+    "!test-results/**",
+    // Local-only caches of third-party markdown, gitignored and absent in CI. Without these
+    // the gate passes in CI and fails on a developer machine, on files nobody here wrote:
+    // .fixture-tooling holds the pip install the audio-matrix generator makes, and
+    // model_cache holds the README shipped inside a downloaded model repository.
+    "!.fixture-tooling/**",
+    "!model_cache/**",
+    "!test_data/**",
+    // Stale copies of this repo's own markdown; linting them reports the same findings twice.
+    "!.claude/worktrees/**"
   ],
   "config": {
     "default": true,

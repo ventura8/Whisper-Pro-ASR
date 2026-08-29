@@ -1,0 +1,57 @@
+row: N8_isolate_preprocessing_off
+target=intel engine=INTEL-WHISPER device=GPU preprocess=GPU env: ASR_ISOLATE_PREPROCESSING=0
+commit: 41ec4f4  date: 2026-09-08T06:22:37Z
+
+=== Preflight: <user>@<host> ===
+  ssh: OK (<user>@<host>)
+  docker: usable without sudo (Docker version 29.4.1, build 055a478)
+  disk: 780G free
+
+=== Hardware audit (vendor-agnostic) ===
+  {"nvidia":false,"nvidia_toolkit":false,"intel_gpu":true,"intel_npu":true,"amd":false,"render_gid":"991","intel_gpu_top":true,"disk_free":"780G","recommended_target":"intel"}
+  target: intel (from audit)
+
+=== What actually loaded ===
+2026-09-08 06:26:04,758        Whisper Pro ASR 1.3.0 intel
+2026-09-08 06:26:04,758    ASR Engine                    : INTEL-WHISPER
+2026-09-08 06:26:04,759    ASR Runtime                   : OpenVINO (GPU)
+2026-09-08 06:26:04,759    Preprocess Device             : Intel(R) Graphics [0x7d51] (iGPU)
+2026-09-08 06:26:04,759    Resource Pool                 : GPU
+2026-09-08 06:26:04,759    OpenVINO devices              : CPU, GPU, NPU
+
+=== Suite: smoke (engine=INTEL-WHISPER, preprocess=GPU, real speech over HTTP) ===
+  this can take ~2h for full/stress; output is trimmed to the last 80 lines
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+cachedir: /var/cache/whisper-pro-asr-tools/pytest
+rootdir: /app
+configfile: pytest.ini
+plugins: anyio-4.14.2, requests-mock-1.12.1, xdist-3.8.0, cov-7.1.0
+collected 168 items / 144 deselected / 24 selected
+
+tests/real_audio/test_code_switched.py                                   [ 12%]
+tests/real_audio/test_degraded_audio.py                                  [ 20%]
+tests/real_audio/test_language_matrix.py                                 [ 66%]
+tests/real_audio/test_malformed_inputs.py                                [ 83%]
+tests/real_audio/test_request_contract_abuse.py                          [100%]
+
+=============================== warnings summary ===============================
+../usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469
+  /usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469: PytestCacheWarning: could not create cache path /var/cache/whisper-pro-asr-tools/pytest/v/cache/nodeids: [Errno 13] Permission denied: '/var/cache/whisper-pro-asr-tools/pytest-cache-files-tpawhgc9'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========== 24 passed, 144 deselected, 1 warning in 117.36s (0:01:57) ===========
+
+=== Measured execution (post-suite) ===
+2026-09-08 06:28:01,789 [es_core.flac] [UVR] Isolation complete on Intel(R) Graphics [0x7d51] (iGPU) (Duration: 00:00:01 | Audio: 00:00:06 | Speed: 4.62x)
+2026-09-08 06:28:05,588 [es_core.flac] [UVR] Isolation complete on Intel(R) Graphics [0x7d51] (iGPU) (Duration: 00:00:01 | Audio: 00:00:06 | Speed: 4.70x)
+2026-09-08 06:28:09,353 [es_core.flac] [UVR] Isolation complete on Intel(R) Graphics [0x7d51] (iGPU) (Duration: 00:00:01 | Audio: 00:00:06 | Speed: 4.71x)
+  Intel(R) Graphics [0x7d51]   ASR=Intel GPU  measured=True  | UVR=Intel GPU  measured=True
+
+=== Done ===
+  host:   <host>
+  target: intel (ASR_DEVICE=GPU, ASR_ENGINE=INTEL-WHISPER, preprocess=GPU, separation=true)
+  A passing suite proves decoding worked. Confirm the accelerator was USED by sampling
+  it during a transcription -- see docs/REMOTE_VALIDATION.md.
+  result: passed

@@ -1,0 +1,45 @@
+---
+# Full target: NVIDIA + Intel + AMD, with WhisperX speaker diarization.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.full.yml up -d
+# Set BUILD_TARGET=full in .env.
+#
+# Passes through every vendor's devices, including /dev/kfd for AMD. On a host missing one
+# of them, prefer the narrower override file instead -- Compose fails if a listed device
+# does not exist, so a machine with no AMD GPU should use docker-compose.nvidia-intel.yml.
+services:
+  whisper-pro-asr:
+    build:
+      args:
+        RUNTIME_BASE: openvino/ubuntu24_runtime:2026.3.1@sha256:fdfa0f1c42f69b4cbf010999482a32279ac04a07b2fb53f449e67246dcb5f1df
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Both GIDs must be distinct numbers. /dev/dri render nodes and /dev/kfd are different
+    # devices with different groups; if a host happens to give them the same GID, drop one
+    # of these lines -- Compose refuses to start on "group_add items at 0 and 1 are equal".
+    #   echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD* | head -n 1)" >> .env
+    #   echo "HOST_AMD_VIDEO_GID=$(stat -c '%g' /dev/kfd)" >> .env
+    group_add:
+      - "${HOST_INTEL_RENDER_GID:-990}"
+      - "${HOST_AMD_VIDEO_GID:-44}"
+    devices:
+      # /dev/kfd is what makes the AMD half of this image real. Without it ROCm enumerates
+      # nothing, UVR falls back to the CPU, and the group_add above grants access to a
+      # device that was never passed through -- an image advertising AMD support that
+      # cannot reach an AMD GPU at all.
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    security_opt:
+      # Required by ROCm on native Linux, same as docker-compose.amd.yml. Unused on WSL2.
+      - seccomp=unconfined
+    volumes:
+      - /dev/dri:/dev/dri
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      - HSA_ENABLE_DXG_DETECTION=1
+      - DIARIZATION_HF_TOKEN=${DIARIZATION_HF_TOKEN:-}

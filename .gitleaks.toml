@@ -1,0 +1,23 @@
+# gitleaks runs with --source=. --no-git, so it walks the working tree rather than history.
+# That sweeps in the gitignored local caches of third-party source -- .fixture-tooling holds
+# the TTS toolchain's site-packages (~4.5GB of torch/transformers/piper), model_cache the
+# provisioned weights, test_data the generated audio matrix. Upstream test fixtures contain
+# example API keys, so the scan reported dozens of "leaks" that are neither ours nor secret,
+# and only on a developer machine that had run the fixture generator: none of these paths
+# exist on a CI runner, so the gate passed there and failed locally.
+#
+# This allowlist is about scan SCOPE, not about tolerating a finding: nothing tracked by git
+# is exempted, and a real secret committed to this repository is still reported.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Gitignored local caches of third-party code and generated fixtures"
+paths = [
+  '''^\.fixture-tooling/''',
+  '''^model_cache/''',
+  '''^test_data/''',
+  '''^\.venv/''',
+  '''^node_modules/''',
+  '''^\.claude/worktrees/''',
+]

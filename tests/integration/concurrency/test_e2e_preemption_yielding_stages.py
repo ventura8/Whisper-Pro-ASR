@@ -83,8 +83,8 @@ def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str):
     events: list[str] = []
     uvr_started = threading.Event()
 
-    def mock_preprocess(audio_path: str, force: bool = False, yield_cb: Any = None) -> str:
-        del audio_path, force
+    def mock_preprocess(audio_path: str, force: bool = False, yield_cb: Any = None, stage: str = "Vocal Separation") -> str:
+        del audio_path, force, stage
         _execute_uvr_chunk_loop(events, uvr_started, yield_cb)
         return "clean_isolated.wav"
 

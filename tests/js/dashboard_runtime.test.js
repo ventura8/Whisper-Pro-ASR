@@ -4,7 +4,7 @@ const { loadScriptInContext, evalInContext } = require("./helpers");
 
 function buildStatusData(overrides = {}) {
   return {
-    version: "1.2.2",
+    version: "1.3.0",
     system: {
       app_cpu_percent: 5,
       cpu_percent: 20,
@@ -94,11 +94,24 @@ describe("runtime.js", () => {
   describe("_renderTopStats / _renderQueueCounters / _renderAnalyticsGrid", () => {
     it("renders top stats from status data", () => {
       context._renderTopStats(buildStatusData());
-      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.2.2");
+      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.3.0");
       expect(dom.window.document.getElementById("app-cpu-val").innerText).toBe("5%");
       expect(dom.window.document.getElementById("sys-cpu-val").innerText).toBe("20%");
       expect(dom.window.document.getElementById("app-mem-val").innerText).toBe("1.20 GB");
       expect(dom.window.document.getElementById("sys-mem-val").innerText).toBe("6.00 / 16.00 GB");
+    });
+
+    it("prefers version_display, which carries the image edition", () => {
+      // Two containers can run the same VERSION with completely different accelerator
+      // support, so the dashboard shows the edition alongside it. Only the fallback was
+      // covered, which passes identically whether version_display is read or ignored.
+      context._renderTopStats(buildStatusData({ version_display: "1.3.0 intel" }));
+      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.3.0 intel");
+    });
+
+    it("falls back to the bare version for payloads that predate version_display", () => {
+      context._renderTopStats(buildStatusData({ version_display: undefined }));
+      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.3.0");
     });
 
     it("renders queue counters, defaulting to 0", () => {
@@ -263,6 +276,74 @@ describe("runtime.js", () => {
       expect(html).toContain("Host CPU");
       expect(html).toContain("Intel GPU");
     });
+
+    it("labels the two stages by what they do, not by the model that happens to do it", () => {
+      // "Whisper" and "UVR" were both third-party MODEL names, and both are configurable
+      // (ASR_MODEL / VOCAL_SEPARATION_MODEL) -- so the badges could be flatly wrong.
+      const html = context._renderHardwareCard(
+        { id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "ready" },
+        { telemetry: {}, tasks: [] }
+      );
+      expect(html).toContain("Inference: ready");
+      expect(html).toContain("Vocal Isolation: ready");
+      expect(html).not.toContain("Whisper:");
+      expect(html).not.toContain("UVR:");
+    });
+
+    it("shows where the work actually landed next to each stage", () => {
+      const html = context._renderHardwareCard(
+        {
+          id: "CUDA.0",
+          type: "CUDA",
+          name: "NVIDIA GPU",
+          whisper_status: "busy",
+          uvr_status: "loaded",
+          asr_execution: { device: "CUDA", accelerated: true, fallback: false, measured: true },
+          uvr_execution: { device: "CUDA", accelerated: true, fallback: false, measured: true },
+        },
+        { telemetry: {}, tasks: [] }
+      );
+      expect(html).toContain("Inference: busy");
+      expect(html).toContain(">CUDA<");
+      expect(html).not.toContain("hw-exec-fallback");
+    });
+
+    it("calls out a CPU fallback on an accelerator unit", () => {
+      // The Intel NPU builds a Whisper pipeline it cannot execute, so the engine moves
+      // itself to the CPU. The card still says "NPU", which is exactly why this chip has
+      // to say otherwise.
+      const html = context._renderHardwareCard(
+        {
+          id: "NPU.0",
+          type: "NPU",
+          name: "Intel(R) AI Boost",
+          whisper_status: "ready",
+          uvr_status: "loaded",
+          asr_execution: { device: "CPU", accelerated: false, fallback: true, measured: true },
+          uvr_execution: { device: "Intel NPU", accelerated: true, fallback: false, measured: true },
+        },
+        { telemetry: {}, tasks: [] }
+      );
+      expect(html).toContain("hw-exec-fallback");
+      expect(html).toContain("CPU fallback");
+      // Only transcription fell back; vocal isolation genuinely runs on the NPU.
+      expect(html).toContain("Intel NPU");
+      expect(html.match(/hw-exec-fallback/g)).toHaveLength(1);
+    });
+
+    it("distinguishes a measured device from a predicted one in the tooltip", () => {
+      const measured = context._executionChip({ device: "CUDA", fallback: false, measured: true });
+      const predicted = context._executionChip({ device: "CUDA", fallback: false, measured: false });
+      expect(measured).toContain("Reported by the loaded engine");
+      expect(predicted).toContain("Resolved from configuration");
+    });
+
+    it("renders no chip at all when the payload carries no execution data", () => {
+      // An older service answering a newer dashboard: degrade to the previous display
+      // rather than showing an empty or "undefined" chip.
+      expect(context._executionChip(undefined)).toBe("");
+      expect(context._executionChip({})).toBe("");
+    });
   });
 
   describe("_renderLastUpdate", () => {
@@ -282,7 +363,7 @@ describe("runtime.js", () => {
     it("fetches status and renders top stats/queue/hardware on success", async () => {
       await context.updateStats();
       expect(fetchMock).toHaveBeenCalledWith("/status", { headers: expect.any(Object) });
-      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.2.2");
+      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.3.0");
       expect(evalInContext(context, "lastStatusData")).toBeTruthy();
     });
 

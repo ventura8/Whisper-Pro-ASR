@@ -32,7 +32,7 @@ if __name__ != "__mp_main__":
     from modules.api.support import security
 
     # CRITICAL: Bootstrap hardware path before ANY other first-party imports
-    from modules.core import bootstrap, config, logging_setup, utils
+    from modules.core import bootstrap, config, logging_setup, model_provisioning, utils
     from modules.inference.runtime import model_manager
 
     # Initialize global logger
@@ -76,6 +76,12 @@ if __name__ != "__mp_main__":
         """Manage application startup and shutdown lifecycle hooks."""
         _warm_up_torch_stack()
         model_manager.init_pool()
+
+        # Models are not baked into the image; fetch them into the persistent cache
+        # volume in the background so the server binds immediately. Tasks submitted
+        # before this finishes wait in the scheduler queue rather than failing.
+        if not getattr(fastapi_app.state, "testing", False):
+            model_provisioning.start_background_provisioning(config)
 
         # Dynamic import to break cyclic dependency
         telemetry = importlib.import_module("modules.monitoring.telemetry")

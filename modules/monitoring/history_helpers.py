@@ -1,5 +1,6 @@
 """Helper functions for history and analytics processing."""
 
+import math
 import ntpath
 import os
 from typing import Any, Dict, Optional
@@ -103,24 +104,110 @@ def _merge_single_legacy_day(date_str: str, daily_data: Any, new_cache: Dict[str
 
 
 def _has_all_category_keys(daily_data: dict) -> bool:
-    return all(cat in daily_data for cat in ["asr", "detectlang", "audio"])
+    """Whether a stored day carries a usable breakdown for every category.
+
+    Each value must be a mapping carrying numeric ``count`` and ``duration``, not merely a
+    mapping and not merely present. Both callers go on to ``dict(...)`` these, and a
+    hand-edited or half-migrated analytics file holding a number or a list under "asr"
+    turned that into a TypeError during history load -- taking the whole analytics rebuild
+    down instead of falling through to the legacy ASR backfill, which is exactly the path
+    such a file needs.
+
+    The field check is the other half of the same defect: a partial ``"asr": {}`` passed the
+    isinstance test, so the merge branch ran and ``_add_uncategorised_remainder`` then did
+    ``day["asr"]["count"] += ...`` on a mapping with no "count" -- a KeyError raised from
+    inside the rebuild, again losing the whole file rather than backfilling it.
+    """
+    return all(_is_usable_category(daily_data.get(cat)) for cat in ("asr", "detectlang", "audio"))
+
+
+def _is_usable_category(value: Any) -> bool:
+    """Whether one category holds the numeric count and duration the merge arithmetic needs."""
+    if not isinstance(value, dict):
+        return False
+    return all(_is_finite_number(value.get(field)) for field in ("count", "duration"))
+
+
+def _is_finite_number(value: Any) -> bool:
+    """A real count or duration: numeric, not a bool, and not NaN or infinity.
+
+    NaN and inf pass isinstance(float) but are not usable totals. A stored NaN duration
+    propagates through max() and += into every subsequent day, and serialises as bare
+    ``NaN`` -- invalid JSON that the dashboard's parser rejects outright, so one poisoned
+    day took the whole statistics endpoint down rather than being rebuilt.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value)
+
+
+def _numeric(value: Any, default):
+    """A stored total, or ``default`` when it is not a usable number.
+
+    _has_all_category_keys validates the per-category totals but says nothing about a day's
+    own count/duration, so a hand-edited file holding a string there reached max() and the
+    subtraction in the merge -- a TypeError raised from inside the rebuild, losing the whole
+    analytics file rather than backfilling the one bad day.
+    """
+    return value if _is_finite_number(value) else default
 
 
 def _merge_overlapping_legacy_day(old_day: dict, rebuilt_day: dict) -> None:
-    old_count = old_day.get("count", 0)
-    old_dur = old_day.get("duration", 0.0)
-    rebuilt_count = rebuilt_day.get("count", 0)
-    rebuilt_dur = rebuilt_day.get("duration", 0.0)
+    """Reconcile a stored day with the one rebuilt from history.
 
-    diff_count = max(0, old_count - rebuilt_count)
-    diff_dur = max(0.0, old_dur - rebuilt_dur)
+    The stored file is the fuller record: history is capped, so a rebuild only sees the
+    tasks that survived the cap. Totals therefore take the larger of the two.
+
+    How the categories are reconciled depends on what the stored day knows. A day that
+    already carries a full breakdown keeps it -- it was accumulated from real tasks, and
+    overwriting it with the rebuild's view discarded that. Measured on a day holding
+    40 ASR and 10 language-detection tasks: the merge reported 50 ASR and 0 detections,
+    silently rewriting history rather than preserving it.
+
+    A legacy day with no breakdown has nothing to preserve, so the difference is still
+    attributed to ASR -- the original heuristic, and the only guess available there.
+    """
+    # Coerced before use. _has_all_category_keys validates the per-category totals but says
+    # nothing about the day's own count/duration, and a hand-edited file holding a string
+    # there reached max() and the subtraction below -- a TypeError raised from inside the
+    # rebuild, losing the whole analytics file rather than backfilling the one bad day.
+    old_count = _numeric(old_day.get("count"), 0)
+    old_dur = _numeric(old_day.get("duration"), 0.0)
+    rebuilt_count = _numeric(rebuilt_day.get("count"), 0)
+    rebuilt_dur = _numeric(rebuilt_day.get("duration"), 0.0)
 
     rebuilt_day["count"] = max(old_count, rebuilt_count)
     rebuilt_day["duration"] = max(old_dur, rebuilt_dur)
-    if "asr" not in rebuilt_day:
-        rebuilt_day["asr"] = {"count": 0, "duration": 0.0}
-    rebuilt_day["asr"]["count"] += diff_count
-    rebuilt_day["asr"]["duration"] += diff_dur
+
+    if _has_all_category_keys(old_day):
+        for category in ("asr", "detectlang", "audio"):
+            rebuilt_day[category] = dict(old_day[category])
+        # The totals above took the max of the two views, so when the rebuild saw *more*
+        # than the stored file (a day whose stored copy predates some tasks), keeping the
+        # stored breakdown verbatim leaves the categories summing to less than the day's
+        # own count -- the analytics page then shows a total its own breakdown cannot
+        # account for. Attribute only the non-overlapping remainder, which is the same
+        # ASR-shaped guess the legacy branch below makes, and only when there is one.
+        _add_uncategorised_remainder(rebuilt_day, count=rebuilt_count - old_count, duration=rebuilt_dur - old_dur)
+        return
+
+    _add_uncategorised_remainder(rebuilt_day, count=old_count - rebuilt_count, duration=old_dur - rebuilt_dur)
+
+
+def _add_uncategorised_remainder(day: dict, *, count: int, duration: float) -> None:
+    """Attribute a count/duration remainder to ASR, the only guess available.
+
+    Negative or zero remainders are no-ops: the two views already agree, or the side that
+    is being kept is the larger one and there is nothing unaccounted for.
+    """
+    diff_count = max(0, count)
+    diff_dur = max(0.0, duration)
+    if not diff_count and not diff_dur:
+        return
+    if "asr" not in day:
+        day["asr"] = {"count": 0, "duration": 0.0}
+    day["asr"]["count"] += diff_count
+    day["asr"]["duration"] += diff_dur
 
 
 def _backfill_legacy_day_as_asr(daily_data: dict) -> dict:
@@ -208,3 +295,33 @@ def normalize_legacy_candidate(candidate: str) -> Optional[str]:
     if not candidate:
         return None
     return os.path.abspath(candidate)
+
+
+#: Segments kept in the history record. The full transcript still goes to the caller.
+MAX_HISTORY_SEGMENTS = 100
+
+
+def truncate_large_segments(task_data: dict) -> None:
+    """Shrink the history copy of a large transcript, leaving the caller's untouched."""
+    result = task_data.get("result")
+    # A non-dict result is treated as absent. A failed task can carry ``result: None``, and
+    # ``None.get`` is an AttributeError raised inside log_completed_task -- which catches
+    # only KeyError/ValueError/TypeError, so it escaped and lost the whole history entry
+    # for exactly the tasks whose record matters most.
+    if not isinstance(result, dict):
+        return
+    segments = result.get("segments")
+    if not segments or len(segments) <= MAX_HISTORY_SEGMENTS:
+        return
+    # Replace the result dict rather than mutating it. ``task_data["result"]`` is the same
+    # object the request handler returns to the caller, and ``log_completed_task`` only
+    # takes a shallow ``task_data.copy()`` afterwards -- so truncating in place silently
+    # clipped the client's transcript to keep the *history file* small. Measured on a
+    # 20-minute clip: 169 real segments reaching 1202s were delivered as 100 segments
+    # ending at 765s, a loss long recorded as an ASR "coverage" defect.
+    task_data["result"] = {
+        **result,
+        "segments": segments[:MAX_HISTORY_SEGMENTS],
+        "segments_total_count": len(segments),
+        "segments_truncated": True,
+    }

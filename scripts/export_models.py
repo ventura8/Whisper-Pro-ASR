@@ -1,24 +1,24 @@
-import json
+import importlib
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import types
 from pathlib import Path
 
-import torch
-
-# Shim for legacy libraries that expect torchaudio.backend (removed in 2.1+)
-# Must be applied BEFORE importing libraries that might depend on it (like demucs)
-import torchaudio
+# Shim for legacy libraries that expect torchaudio.backend (removed in 2.1+).
+# Must be applied BEFORE importing libraries that might depend on it (like demucs).
+#
+# importlib rather than a plain `import torchaudio`, because the ordering is the whole
+# point of the shim and a sorted import block is not a place it can live: isort/ruff hoist
+# a top-level import into the block above, which silently undoes it. This is the project's
+# sanctioned way to express a deliberately-placed import without an inline suppression.
+torchaudio = importlib.import_module("torchaudio")
 
 if not hasattr(torchaudio, "backend"):
     # Create or get backend
     try:
-        import torchaudio._backend as _backend
-
-        backend_obj = _backend
+        backend_obj = importlib.import_module("torchaudio._backend")
     except ImportError:
         backend_obj = types.ModuleType("torchaudio.backend")
 
@@ -39,7 +39,6 @@ if not hasattr(torchaudio, "backend"):
         sys.modules["torchaudio.backend.common"] = mock_common
         backend_obj.common = mock_common
 
-import urllib.request
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("model_exporter")

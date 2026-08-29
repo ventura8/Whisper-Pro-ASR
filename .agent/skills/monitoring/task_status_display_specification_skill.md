@@ -45,6 +45,37 @@ Distinguish between "Paused for Priority" and "Waiting for Hardware" using **sta
 
 Whisper hardware-unit busy state should follow the same active-ASR rule: while a unit is occupied by an active transcription, translation, or inference sub-stage, its `whisper_status` should be `busy`. UVR/vocal-separation remains tracked separately through `uvr_status`.
 
+### Hardware card labels and execution device
+
+The two per-unit badges are labelled **Transcription** and **Vocal Isolation** — the stage
+each performs, not the model performing it. They were previously "Whisper" and "UVR", which
+named two third-party models at different granularities, and both are operator-configurable
+(`ASR_MODEL`, `VOCAL_SEPARATION_MODEL`), so a deployment running anything else had badges
+that were simply wrong. The payload keys stay `whisper_status` / `uvr_status`: they are
+consumed by the dashboard and by tests, and `engines.whisper.status` in `/status` is
+documented API.
+
+Each badge carries a chip naming **where that stage actually executes**, from
+`asr_execution` / `uvr_execution` on each hardware unit:
+
+| Field | Meaning |
+| :--- | :--- |
+| `device` | Short label of the silicon that ran it (`CUDA`, `Intel GPU`, `Intel NPU`, `AMD GPU`, `CPU`). |
+| `accelerated` | False when the work landed on the CPU. |
+| `fallback` | True when the unit is an accelerator **and** the work landed on the CPU. This is what renders as `CPU fallback`. |
+| `measured` | True when read from a loaded engine or separator; false when resolved from configuration because nothing is loaded yet. |
+
+A unit in the scheduler pool says where a task is *dispatched*, never where it executes, and
+the two diverge routinely: CTranslate2 has no OpenVINO or ROCm backend, torch has no NPU
+backend, the Intel NPU cannot execute Whisper's dynamic-shaped IR at all, and UVR silently
+falls back to `CPUExecutionProvider` when the image ships no provider for the target device.
+Every one of those was invisible on a card showing only the unit's name.
+
+`measured` beats configuration wherever a live object exists, because only the object knows
+it moved: `IntelWhisperEngine` rewrites its own device to CPU after a failed NPU warmup, and
+the separator's `onnx_execution_provider` is the ground truth for isolation (reported even
+from a worker process, via `_SeparatorProbe`).
+
 - All other statuses: display as-is with their corresponding icon/color.
 
 ## Task Ordering Rules (Deterministic)
@@ -151,6 +182,7 @@ completed/failed → (archived)  (moved to history; removed from active list)
 | Ordering policy inconsistent between backend and frontend | Backend sorts one way, frontend renders differently | Validate ordering rules in both scheduler.py (payload assembly) and dashboard feature scripts (rendering) |
 | Unknown status leaks to dashboard | "Unknown" status appears in UI, confusing operators | Use defensive assertions in status-setting code; log all unknown-status cases as errors |
 | Generic history filename from Bazarr/local-path requests | History tab shows "Unknown Media" while audit payload contains `local_path` or path-as-JSON-key (`{"/tv/show.mkv": ""}`) | Backfill filename from `request_json.local_path`/path keys at history write and serve time; normalize Bazarr path-as-key payloads to `local_path` at request ingest; all registered-task failures must call `record_task_failure()` so history retains `result.error`, `response_json`, and execution logs |
+| Exaggerated video duration or inflated UVR chunk counts | Dashboard displays multiplied duration (e.g. 4h or 20h for a 44m video) and inflated UVR chunks (e.g. 25 segments for 5) | Ensure `probe_audio_duration` prioritizes native container probe before applying `THREAD_CONTEXT.input_flags`, while preserving explicit `input_flags` precedence so headerless raw-PCM inputs remain supported; clear `THREAD_CONTEXT.input_flags` once media is standardized or when mapped local paths are resolved |
 | Post-processing status never visible | Task seems to jump from active to completed without transition | Accept that post-processing is typically transient; include in status payload correctly but don't require visible UI presence |
 
 ## Done Criteria

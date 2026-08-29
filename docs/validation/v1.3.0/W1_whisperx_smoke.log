@@ -1,0 +1,87 @@
+row: W1_whisperx_smoke
+target=nvidia-whisperx engine=WHISPERX device=AUTO preprocess=CUDA separation=on suite=smoke transport=wsl:Ubuntu
+commit: 6f31b2f  date: 2026-09-08T13:35:11Z
+=== Preflight: <user>@<host> ===
+  ssh: OK (<user>@<host>)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  wsl: <user>@<host> kernel=<host>-microsoft-standard-WSL2
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  docker: usable without sudo (Docker version 29.7.2, build a7dcaa6)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  docker binary: /usr/bin/docker (native to the distro)
+  clock: Windows host within 0s of this machine
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  clock: within 1s of this machine
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  clock: build containers within 1s of this machine
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  disk: 873G free
+
+=== Hardware audit (vendor-agnostic) ===
+  {"os":"windows","nvidia":true,"amd":true,"amd_discrete":false,"intel_gpu":false,"gpus":["AMD Radeon(TM) Graphics","NVIDIA GeForce RTX 5090"],"wsl_distro":"Ubuntu","wsl_error":"","wsl_docker":"29.7.2","wsl_dxg":true,"wsl_nvidia_smi":"NVIDIA GeForce RTX 5090","wsl_docker_gpu":"GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-c5750e88-db83-f86e-1be2-f8d4e445c4fd)","wsl_docker_gpu_error":"","disk_free":"873G","recommended_target":"nvidia"}
+
+=== What actually loaded ===
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+2026-09-08 13:46:27,315        Whisper Pro ASR 1.3.0 nvidia-whisperx
+2026-09-08 13:46:27,315    ASR Engine                    : WHISPERX
+2026-09-08 13:46:27,315    ASR Runtime                   : CUDA (Compute: float16)
+2026-09-08 13:46:27,315    Preprocess Device             : CUDA
+2026-09-08 13:46:27,315    Resource Pool                 : cuda:0
+2026-09-08 13:46:27,316    OpenVINO devices              : CPU
+
+=== Suite: smoke (engine=WHISPERX, preprocess=CUDA, real speech over HTTP) ===
+  this can take ~2h for full/stress; output is trimmed to the last 80 lines
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+cachedir: /var/cache/whisper-pro-asr-tools/pytest
+rootdir: /app
+configfile: pytest.ini
+plugins: anyio-4.14.2, requests-mock-1.12.1, cov-7.1.0, xdist-3.8.0
+collected 168 items / 144 deselected / 24 selected
+
+tests/real_audio/test_code_switched.py                                   [ 12%]
+tests/real_audio/test_degraded_audio.py                                  [ 20%]
+tests/real_audio/test_language_matrix.py                                 [ 66%]
+tests/real_audio/test_malformed_inputs.py                                [ 83%]
+tests/real_audio/test_request_contract_abuse.py                          [100%]
+
+===================== 24 passed, 144 deselected in 52.24s ======================
+
+=== Measured execution (post-suite) ===
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+2026-09-08 13:47:25,910  [prep-worker:119] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:00 | Audio: 00:00:06 | Speed: 14.41x)
+2026-09-08 13:47:27,066  [prep-worker:119] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:00 | Audio: 00:00:06 | Speed: 14.86x)
+2026-09-08 13:47:28,250  [prep-worker:119] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:00 | Audio: 00:00:06 | Speed: 14.73x)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+  NVIDIA GPU 0                 ASR=CUDA       measured=True  | UVR=CUDA       measured=True
+
+=== Done ===
+  host:   <host>
+  target: nvidia-whisperx (ASR_DEVICE=AUTO, ASR_ENGINE=WHISPERX, preprocess=CUDA, separation=true)
+  A passing suite proves decoding worked. Confirm the accelerator was USED by sampling
+  it during a transcription -- see docs/REMOTE_VALIDATION.md.
+  result: passed

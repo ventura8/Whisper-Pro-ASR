@@ -20,7 +20,9 @@ max-line-length=140
 indent-string='    '
 
 [BASIC]
-good-names=i,j,k,ex,Run,_,fp,id,ip,e,v
+# Separator: a module-level alias for the audio_separator class, bound lazily after ONNX
+# path patching. It names a class, so CamelCase is correct and UPPER_CASE would be wrong.
+good-names=i,j,k,ex,Run,_,fp,id,ip,e,v,Separator
 
 [DESIGN]
 max-args=10

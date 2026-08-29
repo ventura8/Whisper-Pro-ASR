@@ -181,3 +181,32 @@ Report to the user:
 
 - [reference.md](reference.md) — `gh` install notes, GraphQL fetch/reply/resolve
 - [examples.md](examples.md) — reply templates and classification examples
+
+## Hardware Validation Before Closing the Wave (Mandatory)
+
+Applying the fixes and getting a green Docker suite is **not** the end of a review wave.
+The suite mocks the ASR engine, so an accelerator path this wave broke still passes it.
+
+Finish every wave by validating the touched paths on real silicon:
+
+```bash
+scripts/audit_hardware.sh                      # on the host, first -- never assume
+scripts/remote_validate.sh <user>@<host> --target <t> --device <d> --full --suite smoke
+```
+
+Pick the host by what the wave changed: NPU/engine/pool logic in `modules/core/config*.py`
+needs the Intel NPU box, CUDA decode paths need an NVIDIA box, preprocessor/isolation
+routing needs a hybrid NVIDIA+Intel box, and manifest or scoring changes need the
+real-audio matrix. Read the startup banner, not the HTTP status.
+
+`--full` selects the whole sync/build/run pipeline; `--suite` selects the test depth. Use
+`smoke` for a wave -- `full` and `stress` are release depth, and a wave that spends two
+hours per host is one that gets skipped next time.
+
+Watch that it is progressing, not merely running: check the task list rather than the
+elapsed time. Queued tasks spaced at exactly `REAL_ASR_TIMEOUT` apart mean nothing is
+completing at all.
+
+State the outcome in the wave report, and name any change left unvalidated because its host
+was unreachable. See `.agent/instructions.md` for the full rule and the regression that
+caused it to be written down.

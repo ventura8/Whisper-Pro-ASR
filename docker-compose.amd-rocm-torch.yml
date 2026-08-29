@@ -1,0 +1,28 @@
+---
+# AMD ROCm target WITH the ROCm PyTorch build, for GPU-accelerated openai-whisper.
+# Opt-in because ROCm torch adds ~7.7GB over the plain amd target (14.1GB -> ~21.8GB).
+# Use docker-compose.amd.yml instead unless you specifically need a torch-based engine on
+# the GPU: CTranslate2 has no ROCm backend and UVR already accelerates via onnxruntime-rocm.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.amd-rocm-torch.yml up -d
+# Set BUILD_TARGET=amd-rocm-torch in .env.
+services:
+  whisper-pro-asr:
+    build:
+      args:
+        RUNTIME_BASE: ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+    # Both GIDs must be distinct numbers. /dev/dri render nodes and /dev/kfd are different
+    # devices with different groups; if a host happens to give them the same GID, drop one
+    # of these lines -- Compose refuses to start on "group_add items at 0 and 1 are equal".
+    group_add:
+      - "${HOST_AMD_RENDER_GID:-990}"
+      - "${HOST_AMD_VIDEO_GID:-44}"
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    security_opt:
+      # Native Linux only; WSL2/DirectML does not use this.
+      - seccomp=unconfined
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+      # For RDNA/ROCm APU systems that need a gfx override:
+      # - HSA_OVERRIDE_GFX_VERSION=10.3.0

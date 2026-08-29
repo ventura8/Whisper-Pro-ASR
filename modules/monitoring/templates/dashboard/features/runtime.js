@@ -49,7 +49,9 @@ function _hasValidStatusData(data) {
 }
 
 function _renderTopStats(data) {
-    document.getElementById('app-version').innerText = `Version ${data.version}`;
+    // version_display carries the image edition (e.g. "1.3.0 intel"); fall back to the
+    // bare version for older payloads that predate it.
+    document.getElementById('app-version').innerText = `Version ${data.version_display || data.version}`;
     document.getElementById('app-cpu-val').innerText = `${data.system.app_cpu_percent}%`;
     document.getElementById('app-cpu-bar').style.width = `${Math.min(100, data.system.app_cpu_percent)}%`;
     document.getElementById('sys-cpu-val').innerText = `${Math.round(data.system.cpu_percent)}%`;
@@ -142,25 +144,55 @@ function _hardwareEngineStatusBadge(rawValue) {
     return { raw, cssClass, safe: escapeHtml(raw) };
 }
 
+// "Inference" and "Vocal Isolation", not "Whisper" and "UVR". The old pair named two
+// third-party MODELS at different granularities -- and both are configurable (ASR_MODEL,
+// VOCAL_SEPARATION_MODEL), so a deployment running a non-Whisper model had a badge that was
+// simply wrong. The stage each one performs does not change when the model does.
+const HW_STAGE_LABELS = { asr: 'Inference', uvr: 'Vocal Isolation' };
+
+function _executionChip(execution) {
+    // Absent on an older payload; render nothing rather than an empty chip.
+    if (!execution || !execution.device) {
+        return '';
+    }
+    const fallback = execution.fallback === true;
+    // "CPU fallback" is the whole point of this chip: the card already names an
+    // accelerator, so the fact worth surfacing is when the work did NOT land there.
+    const text = fallback ? 'CPU fallback' : execution.device;
+    const cssClass = fallback ? 'hw-exec hw-exec-fallback' : 'hw-exec';
+    return `<span class="${cssClass}" title="${escapeHtml(_executionTitle(execution))}">${escapeHtml(text)}</span>`;
+}
+
+function _executionTitle(execution) {
+    // "measured" separates a fact from a prediction: one was read off a loaded engine or
+    // separator, the other is where the work will go once something loads.
+    return execution.measured
+        ? `Reported by the loaded engine: running on ${execution.device}`
+        : `Resolved from configuration; nothing is loaded yet, so this is where it will run: ${execution.device}`;
+}
+
+function _engineRow(labelKey, status, execution) {
+    const badge = _hardwareEngineStatusBadge(status);
+    return `
+                        <div class="hw-engine-row">
+                            <span class="badge badge-${badge.cssClass} hw-engine-badge">${HW_STAGE_LABELS[labelKey]}: ${badge.safe}</span>
+                            ${_executionChip(execution)}
+                        </div>`;
+}
+
 function _renderHardwareCard(unit, data) {
     const usage = _resolveHardwareUsage(unit, data);
     const { statusText, statusClass } = _hardwareUsageBadge(usage.isUsed);
     const safeType = escapeHtml(unit.type ?? 'Unknown');
     const safeName = escapeHtml(unit.name ?? 'Unnamed Unit');
-    const uvr = _hardwareEngineStatusBadge(unit.uvr_status);
-    const whisper = _hardwareEngineStatusBadge(unit.whisper_status);
-    const uvrStatusClass = uvr.cssClass;
-    const whisperStatusClass = whisper.cssClass;
-    const uvrStatus = uvr.safe;
-    const whisperStatus = whisper.safe;
     return `
                 <div class="hw-card">
                     <div class="hw-card-title"><span class="material-icons-sharp" style="font-size:12px">${usage.icon}</span> ${safeType}</div>
                     <div style="font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 2px;">${safeName}</div>
                     <div class="hw-card-status ${statusClass}" style="margin-bottom: 6px;">${statusText}</div>
                     <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
-                        <span class="badge badge-${uvrStatusClass}" style="padding: 2px 6px; font-size: 9px; border-radius: 4px; line-height: 1.2;">UVR: ${uvrStatus}</span>
-                        <span class="badge badge-${whisperStatusClass}" style="padding: 2px 6px; font-size: 9px; border-radius: 4px; line-height: 1.2;">Whisper: ${whisperStatus}</span>
+${_engineRow('asr', unit.whisper_status, unit.asr_execution)}
+${_engineRow('uvr', unit.uvr_status, unit.uvr_execution)}
                     </div>
                 </div>
             `;

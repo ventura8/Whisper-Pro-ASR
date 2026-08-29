@@ -6,6 +6,7 @@ It strategically samples audio segments, performs one-token probability scans,
 and aggregates results using squared confidence weighting to ensure high accuracy.
 """
 
+import collections
 import importlib
 import logging
 import os
@@ -150,6 +151,38 @@ def _execute_batch_scan(audio_path, offsets, model_manager, scans, start_time=No
     return model_manager.run_language_detection(audio_path)
 
 
+def run_voting_detection_on_isolated(audio_path, model, model_manager, start_time=None):
+    """Voting detection that reuses a held hardware unit and already-separated audio.
+
+    The transcription pipeline separates vocals *before* detecting the language, so two
+    things differ from :func:`run_voting_detection`: the montage needs no second UVR pass
+    (the audio is already isolated), and the caller already owns the unit -- re-entering
+    ``model_lock_ctx`` here would deadlock against itself.
+
+    Returns the detection payload, or ``None`` to let the engine auto-detect.
+    """
+    duration = utils.get_audio_duration(audio_path) or 300
+    scans = _get_sampling_target(duration)
+    logger.info(
+        "[LD] Target: %s | Duration: %s | Density: %d segments (on separated audio)",
+        os.path.basename(audio_path),
+        utils.format_duration(duration),
+        scans,
+    )
+    offsets = _generate_sampling_tasks(audio_path, duration, scans)
+
+    perf = {"start_queue": start_time or time.time(), "dur_queue": 0.0, "dur_iso": 0.0}
+    montage_path = None
+    try:
+        montage_path = _step_create_montage(audio_path, offsets, scans, perf)
+        return _step_run_inference((model, model_manager), montage_path or audio_path, scans, perf)
+    except (OSError, ValueError, RuntimeError, ImportError, TypeError) as e:
+        logger.error("[LD] Batch consensus scan on separated audio failed: %s", e)
+        return None
+    finally:
+        _cleanup_batch_assets(montage_path, None)
+
+
 def _step_create_montage(audio_path, offsets, _scans, perf):
     perf["start_montage"] = time.time()
     scheduler.update_task_progress(10, "Montage")
@@ -168,7 +201,7 @@ def _step_isolate_vocals(montage_path, model_manager, unit_id, perf):
 
     perf["start_iso"] = time.time()
     scheduler.update_task_progress(20, "Vocal Isolation")
-    path = model_manager.run_vocal_isolation_direct(montage_path, unit_id, force=True)
+    path = model_manager.run_vocal_isolation_direct(montage_path, unit_id, force=True, stage="Vocal Isolation")
     # Register with request-level tracker as a second safety net
     if path and path != montage_path:
         utils.track_file(path)
@@ -191,6 +224,12 @@ def _step_run_inference(model_context, isolated_path, scans, perf):
         return None
 
     res = _format_detection_result(voting_details, scans)
+    # The montage already scatters `scans` short samples across the file and detects each
+    # independently before voting collapses them to one answer -- this is a free look at
+    # whether those samples actually agree. Disagreement is the cheap, always-computed
+    # signal that a full per-chunk scan (expensive; a full pass over the whole file) is
+    # only worth paying for on genuinely multi-lingual audio.
+    res["multilingual_suspected"] = _votes_disagree(results)
     res["performance"] = {
         "queue_sec": round(perf["dur_queue"], 2),
         "montage_sec": round(perf["dur_montage"], 2),
@@ -199,6 +238,61 @@ def _step_run_inference(model_context, isolated_path, scans, perf):
     }
     model_manager.update_task_metadata(result=res)
     return res
+
+
+#: Share of the confident votes a single-vote language must hold to count as real. Below
+#: this it is treated as a lone dissenter -- noise rather than a code-switch.
+_LONE_DISSENTER_SHARE = 1 / 3
+
+
+def _votes_disagree(results: list[dict]) -> bool:
+    """Whether the per-offset montage samples named more than one confident language.
+
+    Every vote must clear LD_MIN_CONFIDENCE, the same bar the vote itself uses. Beyond
+    that, a language backed by a single sample counts only when that sample is a
+    meaningful share of the evidence: one dissenting offset out of nine is far more likely
+    to be a misfire than a genuine second language, while one out of two is half of
+    everything the montage saw and cannot be dismissed.
+
+    The share test is what makes this usable on short files. Requiring two votes per
+    language outright would be stricter but useless there: a clip under ten minutes is
+    sampled at only one to three offsets (see _get_sampling_target), so no language could
+    ever reach a second vote and code-switching would be undetectable by construction.
+    """
+    langs = _confident_vote_counts(results)
+    total = sum(langs.values())
+    if total < 2:
+        return False
+    confirmed = sum(1 for count in langs.values() if _vote_is_credible(count, total))
+    return confirmed > 1
+
+
+def _top_language_of_vote(vote: dict) -> str | None:
+    """The highest-scoring real language in one offset's vote, ignoring bookkeeping keys.
+
+    _is_metadata_language_key, not a literal "_speech_duration" comparison: the vote dict
+    carries several bookkeeping keys, and any one of them other than that single hardcoded
+    name could win the max() and be returned as the detected language.
+    """
+    return max((key for key in vote if not _is_metadata_language_key(key)), key=vote.get, default=None)
+
+
+def _confident_vote_counts(results: list[dict]) -> collections.Counter:
+    """Count how many montage offsets named each language, skipping low-confidence ones."""
+    langs: collections.Counter = collections.Counter()
+    for result in results:
+        vote = _extract_segment_vote_or_none(result)
+        if vote is None:
+            continue
+        lang = _top_language_of_vote(vote)
+        if lang:
+            langs[lang] += 1
+    return langs
+
+
+def _vote_is_credible(count: int, total: int) -> bool:
+    """Whether a language's vote count is evidence rather than a single misfire."""
+    return count >= 2 or count / total >= _LONE_DISSENTER_SHARE
 
 
 def _collect_high_confidence_votes(results: list[dict]) -> list[dict]:

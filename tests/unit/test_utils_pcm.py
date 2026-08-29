@@ -84,3 +84,72 @@ def test_calculate_pcm_fallback_duration_branches():
 def test_pcm_bytes_per_second(flags, expected):
     """pcm_bytes_per_second derives rate from flags; defaults match STANDARD_AUDIO_FLAGS (16kHz mono s16le)."""
     assert utils.pcm_bytes_per_second(flags) == pytest.approx(expected)
+
+
+def test_get_audio_duration_native_probe_precedence_over_thread_context():
+    """Native container probe takes precedence over THREAD_CONTEXT.input_flags for media containers."""
+    ctx_flags = ["-f", "s16le", "-ar", "16000", "-ac", "1"]
+    token = utils.INPUT_FLAGS_VAR.set(ctx_flags)
+    captured_cmds = []
+
+    def _capture(cmd, **_kw):
+        captured_cmds.append(list(cmd))
+        return "2640.0"  # 44 minutes
+
+    try:
+        with mock.patch("modules.core.process_exec.check_output_text", side_effect=_capture):
+            result = utils.get_audio_duration("movie.mkv")
+        assert result == 2640.0
+        # The first probe command should NOT include the forced raw-PCM flags
+        assert "-f" not in captured_cmds[0]
+        assert "s16le" not in captured_cmds[0]
+    finally:
+        utils.INPUT_FLAGS_VAR.reset(token)
+
+
+def test_get_audio_duration_fallback_to_thread_context_when_native_fails():
+    """When native container probe fails on headerless raw PCM, ffprobe retries with THREAD_CONTEXT.input_flags."""
+    ctx_flags = ["-f", "s16le", "-ar", "16000", "-ac", "1"]
+    token = utils.INPUT_FLAGS_VAR.set(ctx_flags)
+    captured_cmds = []
+
+    def _capture(cmd, **_kw):
+        captured_cmds.append(list(cmd))
+        if "-f" not in cmd:
+            raise RuntimeError("Invalid data found when processing input")
+        return "120.0"
+
+    try:
+        with mock.patch("modules.core.process_exec.check_output_text", side_effect=_capture):
+            result = utils.get_audio_duration("raw_stream.pcm")
+        assert result == 120.0
+        assert len(captured_cmds) == 2
+        assert "-f" not in captured_cmds[0]
+        assert "-f" in captured_cmds[1]
+        assert "s16le" in captured_cmds[1]
+    finally:
+        utils.INPUT_FLAGS_VAR.reset(token)
+
+
+def test_get_audio_duration_fallback_to_size_when_both_probes_fail():
+    """When both ffprobe attempts fail, the size-based PCM fallback is used via THREAD_CONTEXT.input_flags."""
+    ctx_flags = ["-f", "s16le", "-ar", "16000", "-ac", "1"]
+    token = utils.INPUT_FLAGS_VAR.set(ctx_flags)
+    # 10 seconds of 16-bit mono 16kHz = 32000 B/s * 10 = 320000 bytes
+    file_size = 32000 * 10
+
+    def _capture(cmd, **_kw):
+        raise RuntimeError("Invalid data found when processing input")
+
+    try:
+        with (
+            mock.patch("modules.core.process_exec.check_output_text", side_effect=_capture),
+            mock.patch("os.path.exists", return_value=True),
+            mock.patch("os.path.getsize", return_value=file_size),
+        ):
+            result = utils.get_audio_duration("raw_stream.pcm")
+            expected = utils.calculate_pcm_fallback_duration("raw_stream.pcm", ctx_flags)
+        assert result == pytest.approx(expected)
+        assert result == pytest.approx(10.0)
+    finally:
+        utils.INPUT_FLAGS_VAR.reset(token)

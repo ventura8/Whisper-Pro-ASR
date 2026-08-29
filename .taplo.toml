@@ -1,0 +1,15 @@
+# taplo defaults to every **/*.toml under the working directory, which on a developer
+# machine sweeps in the gitignored local caches of third-party source: .fixture-tooling
+# holds the TTS toolchain's site-packages, model_cache the provisioned weights, test_data
+# the generated audio matrix. None exist on a CI runner, so `npm run lint:toml` passed
+# there and failed locally on upstream's formatting. Same exclusion set as [tool.ruff] in
+# pyproject.toml, .gitleaks.toml and scripts/ci/check-inline-ignores.py.
+include = ["**/*.toml"]
+exclude = [
+  ".fixture-tooling/**",
+  "model_cache/**",
+  "test_data/**",
+  "node_modules/**",
+  ".venv/**",
+  ".claude/worktrees/**",
+]

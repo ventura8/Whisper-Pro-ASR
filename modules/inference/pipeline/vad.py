@@ -10,10 +10,11 @@ import os
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from types import ModuleType
 from typing import Any
 
-from modules.core import config, process_exec, utils
+from modules.core import config, config_paths, process_exec, utils
 
 try:
     import faster_whisper.audio as fw_audio
@@ -118,6 +119,49 @@ def decode_audio(audio_path: str, start_offset: float | None = None, duration: f
     return _decode_audio_slice_with_ffmpeg(fw_decode_audio, audio_path, start_offset, duration)
 
 
+#: Upper bound on one ffmpeg decode. process_exec.run_capture defaults to timeout=None,
+#: which waits forever -- so an ffmpeg wedged on a damaged container (or a stalled network
+#: mount) held the calling task with nothing to say why. Generous rather than tight: a
+#: 20-minute source decoded on a busy CPU is minutes of real work, and killing a slow but
+#: healthy decode would be worse than the hang.
+#: float_env, not float(): this is read at import, so a ValueError here aborts startup
+#: before any log line names the variable. An empty VAD_FFMPEG_TIMEOUT_SEC= in a .env file
+#: is an ordinary way to write "leave it at the default" and must behave like one.
+_CONFIGURED_FFMPEG_TIMEOUT_SEC = config_paths.float_env("VAD_FFMPEG_TIMEOUT_SEC", 1800.0, minimum=0.0)
+
+#: None rather than 0. ``minimum=0.0`` admits a literal 0, and run_capture forwards its
+#: timeout to asyncio -- where 0 means "expire immediately", so every decode would fail
+#: instantly with a timeout. Nobody writes VAD_FFMPEG_TIMEOUT_SEC=0 to mean that; they mean
+#: "no limit", which is what None is on this call.
+FFMPEG_DECODE_TIMEOUT_SEC = _CONFIGURED_FFMPEG_TIMEOUT_SEC or None
+
+
+def extract_slice_to_file(audio_path: str, start_offset: float, duration: float) -> str:
+    """Extract [start_offset, start_offset+duration) into a new temp WAV file, returning its path.
+
+    Unlike decode_audio (which extracts to a temp file internally and immediately deletes
+    it after decoding to a numpy array), the caller here needs the path to persist:
+    IsolatedEngine runs in a worker subprocess and can only be handed a path, never
+    decoded samples -- passing an array raises TypeError there. The caller owns the
+    returned file and must remove it.
+    """
+    # abspath: the caller keeps this path and hands it to an engine that may run in a
+    # worker process with a different working directory, where a relative configured temp
+    # dir resolves somewhere else entirely.
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=os.path.abspath(config.get_temp_dir())) as tmp:
+        temp_path = tmp.name
+    try:
+        cmd = _build_ffmpeg_decode_cmd(audio_path, temp_path, start_offset=start_offset, duration=duration)
+        process_exec.run_capture(cmd, timeout=FFMPEG_DECODE_TIMEOUT_SEC, check=True)
+    except BaseException:
+        # The caller owns the file only on success; a failed decode must not leave one
+        # behind, because nothing downstream ever learns the path to clean it up.
+        with suppress(OSError):
+            os.remove(temp_path)
+        raise
+    return temp_path
+
+
 def _should_decode_directly(start_offset: float | None = None, duration: float | None = None) -> bool:
     return start_offset is None and duration is None
 
@@ -133,7 +177,7 @@ def _decode_audio_slice_with_ffmpeg(
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=config.get_temp_dir()) as tmp:
             temp_path = tmp.name
         cmd = _build_ffmpeg_decode_cmd(audio_path, temp_path, start_offset=start_offset, duration=duration)
-        process_exec.run_capture(cmd, check=True)
+        process_exec.run_capture(cmd, timeout=FFMPEG_DECODE_TIMEOUT_SEC, check=True)
         return fw_decode_audio(temp_path, sampling_rate=16000)
     finally:
         if temp_path and os.path.exists(temp_path):

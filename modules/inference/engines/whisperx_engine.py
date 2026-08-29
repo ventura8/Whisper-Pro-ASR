@@ -61,7 +61,7 @@ class WhisperXEngine(BaseASREngine):
         word_timestamps: bool = False,
         **kwargs: Any,
     ) -> tuple[Iterator[SegmentWrapper], InferenceInfo]:
-        unsupported_opts = _unsupported_whisperx_options(initial_prompt, vad_filter, word_timestamps)
+        unsupported_opts = _unsupported_whisperx_options(initial_prompt, vad_filter, word_timestamps, bool(kwargs.get("multilingual")))
         if unsupported_opts:
             logger.warning("[WhisperX] Ignoring unsupported options: %s", ", ".join(unsupported_opts))
 
@@ -98,8 +98,21 @@ class WhisperXEngine(BaseASREngine):
             del self.model_handle
 
 
-def _unsupported_whisperx_options(initial_prompt: Optional[str], vad_filter: bool, word_timestamps: bool) -> list[str]:
+def _unsupported_whisperx_options(
+    initial_prompt: Optional[str], vad_filter: bool, word_timestamps: bool, multilingual: bool = False
+) -> list[str]:
+    """Options the caller asked for that this backend cannot honour.
+
+    ``multilingual`` is listed because its absence is invisible in the output: WhisperX
+    commits to one language for the whole file, so on audio that changes language it
+    returns the dominant language's words for everything and reports a single language --
+    a plausible-looking transcript rather than an error. faster-whisper re-detects per
+    30-second window, so the same request behaves differently depending only on which
+    engine served it.
+    """
     unsupported = []
+    if multilingual:
+        unsupported.append("multilingual (per-window language detection)")
     if initial_prompt:
         unsupported.append("initial_prompt")
     if not vad_filter:

@@ -30,9 +30,9 @@ fi
 # gated but never duplicated, so "all" and any single stage share the same path.
 STAGE="${PIPELINE_STAGE:-all}"
 case "$STAGE" in
-all | lint | python-tests | js-unit-tests | e2e-fixture | e2e-real) ;;
+all | lint | python-tests | js-unit-tests | e2e-fixture | e2e-real | real-audio | real-audio-stress) ;;
 *)
-	echo "Error: unknown PIPELINE_STAGE '$STAGE'. Expected one of: all, lint, python-tests, js-unit-tests, e2e-fixture, e2e-real."
+	echo "Error: unknown PIPELINE_STAGE '$STAGE'. Expected one of: all, lint, python-tests, js-unit-tests, e2e-fixture, e2e-real, real-audio, real-audio-stress."
 	exit 1
 	;;
 esac
@@ -158,8 +158,10 @@ ensure_shellcheck() {
 run_powershell_script_analyzer() {
 	pwsh -NoLogo -NoProfile -Command - <<'POWERSHELL'
 $ErrorActionPreference = "Stop"
-$issues = Invoke-ScriptAnalyzer -Path scripts -Recurse `
-	-IncludeDefaultRules -Severity Warning,Error,Information
+# -Settings, not repeated inline attributes: the PSAvoidUsingWriteHost exemption for these
+# operator-facing console tools lives in PSScriptAnalyzerSettings.psd1, so it is one
+# reviewable decision rather than a suppression pasted into each script.
+$issues = Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
 if ($issues) {
 	$issues | Sort-Object ScriptName,Line,RuleName |
 		Format-Table ScriptName,Line,Severity,RuleName,Message -AutoSize
@@ -216,14 +218,42 @@ if stage_active lint; then
 			"${TOOL_CACHE_ROOT}/stylelint" \
 			2>/dev/null || true
 
-		shfmt_files=("scripts/ci/build-and-test.sh" "tests/run_suite.sh")
-		if [ -f ".agent/skills/workflow/resolve-pr-comments-run.sh" ]; then
-			shfmt_files+=(".agent/skills/workflow/resolve-pr-comments-run.sh")
-		fi
-		shellcheck_files=("scripts/ci/build-and-test.sh" "tests/run_suite.sh")
-		if [ -f ".agent/skills/workflow/resolve-pr-comments-run.sh" ]; then
-			shellcheck_files+=(".agent/skills/workflow/resolve-pr-comments-run.sh")
-		fi
+		# Every shell script in the repository, discovered rather than listed. The previous
+		# hardcoded trio covered build-and-test.sh, run_suite.sh and the PR-comments helper
+		# and nothing else -- so the whole of scripts/docker/, which decides what ships in
+		# every image, was unlinted. Two build-breaking defects lived there undetected: a
+		# bare `apt-get purge` in a stage with no package index (fatal in every target's
+		# final layer) and a missing libhipsparse.so.4 for the ROCm torch build.
+		#
+		# find, not `git ls-files`: the Docker test image carries no .git metadata.
+		# -print0/-d '' so a path containing whitespace stays one element.
+		mapfile -d '' -t shell_files < <(
+			find scripts tests .agent whisper_pro_asr.py -name '*.sh' -type f -print0 2>/dev/null | sort -z
+		)
+		shell_files+=("scripts/ci/build-and-test.sh")
+		# Deduplicate: build-and-test.sh is already under scripts/, and shellcheck reports a
+		# file once per occurrence, so a repeat turns one finding into two.
+		mapfile -t shell_files < <(printf '%s\n' "${shell_files[@]}" | sort -u)
+
+		# The remote-driving scripts are checked with two codes excluded, because in those
+		# three the pattern shellcheck flags is the correct one and "fixing" it is the bug:
+		#   SC2016 (expressions don't expand in single quotes) -- the command string is sent
+		#     over ssh and must expand on the REMOTE host, not here.
+		#   SC2088 (tilde does not expand in quotes) -- the literal ~ is handed to rsync/ssh
+		#     and expanded remotely; substituting the local $HOME points at the wrong box.
+		# Excluded here in the gate invocation rather than with per-line suppression comments
+		# in the scripts themselves, which this repository bans and
+		# scripts/ci/check-inline-ignores.py enforces -- it scans .sh too, so even naming that
+		# directive in a comment trips it. Every other script is checked with nothing excluded.
+		remote_shell_files=("scripts/remote_validate.sh" "scripts/setup_linux_remote.sh" "scripts/setup_macos_remote.sh")
+		strict_shell_files=()
+		for candidate in "${shell_files[@]}"; do
+			skip=0
+			for remote in "${remote_shell_files[@]}"; do
+				[ "$candidate" = "$remote" ] && skip=1
+			done
+			[ "$skip" -eq 0 ] && strict_shell_files+=("$candidate")
+		done
 
 		# The independent lint/security tools below share no inter-tool ordering
 		# dependency and no output files -- run them concurrently so wall-clock
@@ -243,12 +273,13 @@ if stage_active lint; then
 		run_bg "actionlint" actionlint
 		run_bg "check-jsonschema" check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
 		run_bg "Yamllint" yamllint -s -f parsable -c .yamllint .
-		run_bg "shfmt" shfmt -d "${shfmt_files[@]}"
+		run_bg "shfmt" shfmt -d "${shell_files[@]}"
 		run_bg "taplo" npm run lint:toml
 		run_bg "Black" black --check modules scripts tests whisper_pro_asr.py tests/check_coverage.py
 		run_bg "isort" isort --check-only modules scripts tests whisper_pro_asr.py tests/check_coverage.py
 		run_bg "Ruff Format" ruff format --check .
-		run_bg "ShellCheck" shellcheck -x "${shellcheck_files[@]}"
+		run_bg "ShellCheck" shellcheck -x "${strict_shell_files[@]}"
+		run_bg "ShellCheck (remote)" shellcheck -x -e SC2016 -e SC2088 "${remote_shell_files[@]}"
 		run_bg "Hadolint" hadolint --failure-threshold warning --disable-ignore-pragma Dockerfile Dockerfile.test
 		run_bg "ESLint" npm run lint:js
 		run_bg "ESLint (complexity)" npm run lint:js:complexity
@@ -257,17 +288,25 @@ if stage_active lint; then
 		run_bg "Markdownlint" npm run lint:md
 		run_bg "Ruff Check" ruff check .
 		run_bg "Flake8" flake8 modules whisper_pro_asr.py tests tests/check_coverage.py
-		run_bg "Pylint" pylint modules whisper_pro_asr.py tests tests/check_coverage.py
-		run_bg "Bandit" bandit -r modules whisper_pro_asr.py -x modules/core/utils.py,modules/core/utils_helpers.py,modules/inference/language_detection.py,modules/inference/vad.py,modules/monitoring/metrics_discovery.py,modules/inference/engines/whisperx_worker.py
-		# whisperx_worker.py only imports pickle to catch PicklingError when serializing RPC
-		# replies over multiprocessing.connection (no untrusted deserialization). Bandit's B403
-		# blacklist check fires identically on a static `import pickle` and on
-		# `importlib.import_module("pickle")`, so the exception type cannot be referenced here
-		# without suppressing B403; dropping PicklingError from the except tuple was tried and
-		# reverted -- it broke test_send_response_falls_back_to_error_reply_when_first_send_unpicklable,
-		# a real, intentional behavior guarantee. Scan it separately with only B403 skipped so
-		# every other Bandit check still runs against this file.
-		run_bg "Bandit (whisperx_worker.py, B403 only)" bandit modules/inference/engines/whisperx_worker.py --skip B403
+		# Two runs, two configs. Production code gets .pylintrc, which disables nothing.
+		# Tests get .pylintrc-tests, which relaxes exactly the four checks that make a test
+		# suite unwritable without inline disables -- and inline disables are banned here by
+		# check-inline-ignores. The relaxation is a reviewable decision in one file rather
+		# than a comment scattered across fourteen.
+		run_bg "Pylint" pylint modules whisper_pro_asr.py
+		run_bg "Pylint (tests)" pylint --rcfile=.pylintrc-tests tests tests/check_coverage.py
+		run_bg "Bandit" bandit -r modules whisper_pro_asr.py -x modules/core/utils.py,modules/core/utils_helpers.py,modules/inference/language_detection.py,modules/inference/vad.py,modules/monitoring/metrics_discovery.py,modules/inference/engines/whisperx_worker.py,modules/inference/engines/worker_runtime.py
+		# These two only import pickle to catch PicklingError when serializing RPC replies over
+		# multiprocessing.connection (no untrusted deserialization anywhere -- the pipe's peer
+		# is a process this code spawned). Bandit's B403 blacklist check fires identically on a
+		# static `import pickle` and on `importlib.import_module("pickle")`, so the exception
+		# type cannot be referenced here without suppressing B403; dropping PicklingError from
+		# the except tuple was tried and reverted -- it broke
+		# test_send_response_falls_back_to_error_reply_when_first_send_unpicklable, a real,
+		# intentional behavior guarantee. worker_runtime.py is the generalized copy of that same
+		# reply path, added with process isolation, and needs the identical treatment. Scan both
+		# separately with only B403 skipped so every other Bandit check still runs against them.
+		run_bg "Bandit (worker pickle files, B403 only)" bandit modules/inference/engines/whisperx_worker.py modules/inference/engines/worker_runtime.py --skip B403
 		run_bg "pip-audit" pip-audit
 		run_bg "gitleaks" gitleaks detect --source=. --no-git --verbose
 		run_bg "npm audit" npm audit --audit-level=low
@@ -322,7 +361,11 @@ if stage_active python-tests; then
 	echo ""
 	echo "--- Running Pytest (parallel bulk, -n auto) ---"
 	set +e
-	python3 -m pytest --verbosity=0 -ra "${IGNORE_ARGS[@]}" -n auto --dist=loadscope \
+	# "not gpu and not slow": GPU-marked tests need real silicon and are excluded from the
+	# CI stage the same way the multi-minute ones are. They carried their own skip guards,
+	# so this changes nothing today -- which is the point: a guard that is deleted or that
+	# mis-detects should not be the only thing keeping a GPU test out of a CPU-only runner.
+	python3 -m pytest --verbosity=0 -ra -m "not gpu and not slow" "${IGNORE_ARGS[@]}" -n auto --dist=loadscope \
 		--cov=. --cov-report= --junitxml=pytest-bulk.xml | tee coverage_output_bulk.txt
 	BULK_EXIT=${PIPESTATUS[0]}
 	set -e
@@ -330,7 +373,7 @@ if stage_active python-tests; then
 	echo ""
 	echo "--- Running Pytest (serial, timing-sensitive concurrency tests) ---"
 	set +e
-	python3 -m pytest --verbosity=0 -ra "${SERIAL_TEST_PATHS[@]}" \
+	python3 -m pytest --verbosity=0 -ra -m "not gpu and not slow" "${SERIAL_TEST_PATHS[@]}" \
 		--cov=. --cov-append --cov-report= --junitxml=pytest-serial.xml | tee coverage_output_serial.txt
 	SERIAL_EXIT=${PIPESTATUS[0]}
 	set -e
@@ -416,6 +459,61 @@ if stage_active e2e-real; then
 	else
 		echo "--- Skipping Real-Backend E2E Tests (SKIP_REAL_E2E=1) ---"
 	fi
+fi
+
+# Both real-audio stages are opt-in and never part of "all": they need a LIVE service with
+# a provisioned model cache, which neither CI nor a bare `run_suite.sh` invocation has.
+#
+#   real-audio         representative subset, budgeted under ~20 minutes -- the one a
+#                      pipeline or a pre-merge check should run.
+#   real-audio-stress  the whole matrix (~2 hours, dominated by UVR preprocessing) plus,
+#                      when RUN_GPU_LONG_ASR=1 and an NVIDIA host is present, the
+#                      20-minute long-form clip. Deliberately separate so nobody pays two
+#                      hours to learn something the smoke set would have caught.
+run_real_audio() {
+	# --no-cov keeps these from writing a partial .coverage that a later combine would read.
+	#
+	# if/else, not `if !`: inside the body of `if ! cmd`, `$?` is the status of the `!`
+	# compound -- which is 0 precisely when cmd FAILED. So exit_code was always 0, the
+	# `-eq 5` and `-ne 0` checks below could never fire, and a failing real-audio stage
+	# reported success. Verified: `if ! (exit 5); then ec=$?; fi` leaves ec=0.
+	#
+	# Still not `set +e`/`set -e`: toggling errexit inside a function leaves the caller's
+	# shell state to be restored by hand, and a later `return` on an untaken branch would
+	# leak the relaxed setting into the rest of the script.
+	local exit_code=0
+	if python3 -m pytest tests/real_audio "$@" -ra --no-cov; then
+		exit_code=0
+	else
+		exit_code=$?
+	fi
+	if [ "$exit_code" -eq 5 ]; then
+		# pytest's "no tests collected". Distinct from a real failure and worth naming: it
+		# means the marker expression selected nothing -- a renamed marker, or a manifest
+		# whose smoke entries all vanished -- and the stage would otherwise read as an
+		# ordinary failure with no clue which of the two happened.
+		echo "Error: real-audio stage collected no tests (pytest exit 5); the marker expression selected nothing."
+		exit 5
+	fi
+	if [ "$exit_code" -ne 0 ]; then
+		echo "Error: real-audio stage failed (exit=$exit_code)"
+		exit "$exit_code"
+	fi
+}
+
+if [ "$STAGE" = "real-audio" ]; then
+	echo ""
+	echo "--- Running Real-Audio Smoke Set (live service, target <20min) ---"
+	run_real_audio -m "real_audio and smoke"
+fi
+
+if [ "$STAGE" = "real-audio-stress" ]; then
+	echo ""
+	echo "--- Running Full Real-Audio Matrix (live service, ~2h) ---"
+	run_real_audio -m "real_audio and not slow"
+	echo ""
+	echo "--- Running Long-Form Stress (skipped unless RUN_GPU_LONG_ASR=1; runs on any supported accelerator, Intel and AMD included) ---"
+	run_real_audio -m "real_audio and slow"
 fi
 
 echo ""

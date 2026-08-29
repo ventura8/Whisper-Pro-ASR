@@ -98,7 +98,9 @@ class TestPreemptionAndPriority:
             model_manager.run_vocal_isolation_direct("test.wav", "CPU")
 
         # Verify preprocess_audio was called with yield_cb=check_preemption
-        pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager.check_preemption)
+        pm.preprocess_audio.assert_called_once_with(
+            "test.wav", force=False, yield_cb=model_manager.check_preemption, stage="Vocal Separation"
+        )
 
     def test_run_vocal_isolation_uses_preferred_preprocess_device(self):
         """When preprocess device is NPU, UVR should use NPU preprocessor even for CPU ASR units."""
@@ -113,7 +115,9 @@ class TestPreemptionAndPriority:
         with mock.patch("modules.core.config.PREPROCESS_DEVICE", "NPU"):
             model_manager.run_vocal_isolation_direct("test.wav", "CPU")
 
-        npu_pm.preprocess_audio.assert_called_once_with("test.wav", force=False, yield_cb=model_manager.check_preemption)
+        npu_pm.preprocess_audio.assert_called_once_with(
+            "test.wav", force=False, yield_cb=model_manager.check_preemption, stage="Vocal Separation"
+        )
         cpu_pm.preprocess_audio.assert_not_called()
 
     def test_run_vocal_isolation_uses_assigned_accelerator_preprocessor_per_unit(self):
@@ -126,12 +130,22 @@ class TestPreemptionAndPriority:
         model_manager.PREPROCESSOR_POOL["GPU"] = gpu_pm
         model_manager.PREPROCESSOR_POOL["NPU"] = npu_pm
 
-        with mock.patch("modules.core.config.PREPROCESS_DEVICE", "NPU"):
+        # Colocation is decided from the detected hardware, not from whichever preprocessors
+        # happen to have been built yet -- so a test whose premise is "two accelerator units
+        # each run their own" has to say so where the routing actually looks. Populating only
+        # the pool used to be enough, and that was the bug: at /status time a two-accelerator
+        # host still looked single-accelerator and the first task genuinely routed off-unit.
+        units = [{"id": "GPU", "type": "GPU", "name": "GPU unit"}, {"id": "NPU", "type": "NPU", "name": "NPU unit"}]
+        with mock.patch("modules.core.config.HARDWARE_UNITS", units), mock.patch("modules.core.config.PREPROCESS_DEVICE", "NPU"):
             model_manager.run_vocal_isolation_direct("gpu-task.wav", "GPU")
             model_manager.run_vocal_isolation_direct("npu-task.wav", "NPU")
 
-        gpu_pm.preprocess_audio.assert_called_once_with("gpu-task.wav", force=False, yield_cb=model_manager.check_preemption)
-        npu_pm.preprocess_audio.assert_called_once_with("npu-task.wav", force=False, yield_cb=model_manager.check_preemption)
+        gpu_pm.preprocess_audio.assert_called_once_with(
+            "gpu-task.wav", force=False, yield_cb=model_manager.check_preemption, stage="Vocal Separation"
+        )
+        npu_pm.preprocess_audio.assert_called_once_with(
+            "npu-task.wav", force=False, yield_cb=model_manager.check_preemption, stage="Vocal Separation"
+        )
 
     def test_check_preemption_waits_if_paused(self):
         """check_preemption must wait for resume when a priority task is live.

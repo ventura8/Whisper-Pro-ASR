@@ -1,0 +1,15 @@
+---
+# CPU-only target. No accelerator passthrough at all.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+# Set BUILD_TARGET=cpu in .env.
+services:
+  whisper-pro-asr:
+    build:
+      args:
+        RUNTIME_BASE: ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+    environment:
+      - ASR_DEVICE=CPU
+      - ASR_PREPROCESS_DEVICE=CPU
+      # AUTO honors ASR_DEVICE, so this remains Faster-Whisper even if a host exposes
+      # Intel devices through the base compose file.
+      - ASR_ENGINE=AUTO

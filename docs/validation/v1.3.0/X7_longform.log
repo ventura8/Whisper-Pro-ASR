@@ -1,0 +1,55 @@
+row: X7_longform
+target=nvidia engine=FASTER-WHISPER device=CUDA preprocess=CUDA separation=on suite=longform
+commit: 41ec4f4  date: 2026-09-08T10:38:41Z
+=== Preflight: <user>@<host> ===
+  ssh: OK (<user>@<host>)
+  docker: usable without sudo (Docker version 29.8.0, build 88096ef)
+  disk: 153G free
+
+=== Hardware audit (vendor-agnostic) ===
+  {"nvidia":true,"nvidia_toolkit":true,"intel_gpu":false,"intel_npu":false,"amd":true,"render_gid":"","intel_gpu_top":false,"disk_free":"153G","recommended_target":"nvidia"}
+  target: nvidia (from audit)
+
+=== What actually loaded ===
+2026-09-08 10:41:02,139        Whisper Pro ASR 1.3.0 nvidia
+2026-09-08 10:41:02,139    ASR Engine                    : FASTER-WHISPER
+2026-09-08 10:41:02,139    ASR Runtime                   : CUDA (Compute: float16)
+2026-09-08 10:41:02,139    Preprocess Device             : CUDA
+2026-09-08 10:41:02,139    Resource Pool                 : cuda:0
+2026-09-08 10:41:02,139    OpenVINO devices              : CPU
+
+=== Suite: longform (engine=FASTER-WHISPER, preprocess=CUDA, real speech over HTTP) ===
+  this can take ~2h for full/stress; output is trimmed to the last 80 lines
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+cachedir: /var/cache/whisper-pro-asr-tools/pytest
+rootdir: /app
+configfile: pytest.ini
+plugins: xdist-3.8.0, anyio-4.14.2, requests-mock-1.12.1, cov-7.1.0
+collected 6 items
+
+tests/real_audio/test_longform_stress.py                                 [100%]
+
+=============================== warnings summary ===============================
+../usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469
+  /usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469: PytestCacheWarning: could not create cache path /var/cache/whisper-pro-asr-tools/pytest/v/cache/nodeids: [Errno 13] Permission denied: '/var/cache/whisper-pro-asr-tools/pytest-cache-files-62ldgky2'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/real_audio/test_longform_stress.py:133: this engine does not report per-segment language
+XFAIL tests/real_audio/test_longform_stress.py::test_each_utterance_is_transcribed_where_it_occurs - the decoder emits one language per 30-second window, so audio that changes language faster than that gets the dominant language's words over everything else. multilingual=True (per-window re-detection) was enabled 2026-09-04 and improved it materially: 78 -> 55 of 118 windows below the 0.4 overlap threshold on an RTX 5090, and 56/118 on the NUC with the same engine on CPU -- two environments, same result. The improvement is structural, not noise: before, the detected language was the only clean one (es 12/12, everything else failing wholesale); after, misses spread thin (ru 11->2, fr 8->3, pt 4->2) and no language is privileged. Still 5x the 11 allowed, because 30s granularity cannot follow a switch every 7.6s. Closing it needs decoding at utterance granularity; a coarse language map was measured as too imprecise to drive that (31% precision on real film, 12-24% false trigger on monolingual film), so the remaining path is not obvious
+XFAIL tests/real_audio/test_longform_stress.py::test_quiet_regions_do_not_hallucinate - silence, music and noise are filled with invented speech -- 10 of 25 quiet windows on an RTX 5090 with FASTER-WHISPER, measured 2026-09-04. WHISPERX does NOT have this defect (it XPASSES the test): its VAD chunking never hands silence to the decoder, so this is a property of how audio reaches the decoder rather than a limit of Whisper itself. Raising the transcription VAD threshold was tried and REJECTED: 0.6 removed one hallucinated window and cost seven real ones (window misses 55 -> 62, confirmed on a clean repeat run). The reason it underperforms here is that UVR has already stripped most non-vocal content before VAD sees it, so the threshold has little hallucination left to catch and plenty of quiet speech left to discard -- an engine-only sweep without UVR overstates its value. VAD_THRESHOLD is plumbed and configurable now for anyone re-testing on other audio. The remaining text is the same pangram that drove the long-form loop, so it is the decoder running away into silence
+======== 3 passed, 1 skipped, 2 xfailed, 1 warning in 70.89s (0:01:10) =========
+
+=== Measured execution (post-suite) ===
+2026-09-08 10:41:16,212  [prep-worker:151] [System] Initializing UVR (UVR-MDX-NET-Inst_HQ_3.onnx) on NVIDIA GPU 0... [ONNX provider: CUDAExecutionProvider]
+2026-09-08 10:41:44,197  [prep-worker:151] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:25 | Audio: 00:20:03 | Speed: 46.65x)
+  NVIDIA GPU 0                 ASR=CUDA       measured=True  | UVR=CUDA       measured=True
+
+=== Done ===
+  host:   <host>
+  target: nvidia (ASR_DEVICE=CUDA, ASR_ENGINE=FASTER-WHISPER, preprocess=CUDA, separation=true)
+  A passing suite proves decoding worked. Confirm the accelerator was USED by sampling
+  it during a transcription -- see docs/REMOTE_VALIDATION.md.
+  result: passed

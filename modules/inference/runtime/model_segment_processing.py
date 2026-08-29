@@ -57,11 +57,50 @@ def _process_single_segment(segment, raw_segments, live_srt_blocks, *, info, tas
 
 def _build_segment_dict(segment) -> dict:
     seg_dict = {"start": round(segment.start, 2), "end": round(segment.end, 2), "text": segment.text.strip()}
-    if hasattr(segment, "words") and segment.words is not None:
-        seg_dict["words"] = [
-            {"start": w.start, "end": w.end, "word": w.word, "probability": getattr(w, "probability", 1.0)} for w in segment.words
-        ]
+    timed = _timed_words(getattr(segment, "words", None))
+    if timed:
+        seg_dict["words"] = timed
     return seg_dict
+
+
+def _timed_words(words) -> list[dict]:
+    """The words that carry both timings, in the dict shape the API and gap_filling expect.
+
+    Words with no start or end are dropped rather than passed on: gap_filling formats these
+    with "%.1f", so a single untimed word raised TypeError from inside gap detection and lost
+    the whole transcription. An empty result means the caller omits the key entirely -- an
+    empty "words": [] reads as "timestamps were requested and this segment genuinely has
+    none", which is a different claim.
+    """
+    return [w for w in (_word_dict(word) for word in words or ()) if _is_timed(w)]
+
+
+def _is_timed(word: dict) -> bool:
+    """Whether a converted word carries both of the timings gap_filling will format."""
+    return word["start"] is not None and word["end"] is not None
+
+
+def _word_dict(word) -> dict:
+    """Normalize one word timing to the dict shape gap_filling and the API expect.
+
+    Words arrive in two shapes. In-process engines yield objects with ``.start``/``.word``
+    attributes; an IsolatedEngine's segments come back over a pipe, so its words are already
+    plain dicts -- and attribute access on those raised AttributeError, failing every
+    isolated transcription that asked for word timestamps. Both are accepted; the output
+    shape is unchanged either way, because gap_filling reads these by key.
+    """
+    if isinstance(word, dict):
+        # A dict word missing "start"/"end" yielded None for them, and gap_filling formats
+        # those with "%.1f" -- so one untimed word raised TypeError from inside gap detection
+        # and lost the whole transcription. Dropping the timings here lets the caller skip the
+        # word instead; see _build_segment_dict, which filters them out.
+        return {
+            "start": word.get("start"),
+            "end": word.get("end"),
+            "word": word.get("word"),
+            "probability": word.get("probability", 1.0),
+        }
+    return {"start": word.start, "end": word.end, "word": word.word, "probability": getattr(word, "probability", 1.0)}
 
 
 def _update_live_srt_metadata(segment, seg_idx: int, live_srt_blocks: list):

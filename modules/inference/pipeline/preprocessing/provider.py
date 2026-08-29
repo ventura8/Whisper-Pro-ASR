@@ -1,7 +1,12 @@
 """Provider and OpenVINO resolution helpers for preprocessing."""
 
+import logging
+import os
+
 from modules.core import config
 from modules.inference.pipeline import openvino_provider_dispatch, openvino_resolver
+
+logger = logging.getLogger(__name__)
 
 ProviderConfig = tuple[list[str], list[dict[str, object]]]
 
@@ -237,6 +242,54 @@ def _block_openvino_alongside_cuda(result: ProviderConfig, device_id: str, avail
     isn't actually usable in onnxruntime.
     """
     providers, _options = result
-    if config.DEVICE == "CUDA" and "OpenVINOExecutionProvider" in providers:
-        return openvino_provider_dispatch.cuda_or_cpu_provider_config(device_id, available_providers)
-    return result
+    if config.DEVICE != "CUDA" or "OpenVINOExecutionProvider" not in providers:
+        return result
+    if not _cuda_is_reachable_from_this_process():
+        return result
+    substituted = openvino_provider_dispatch.cuda_or_cpu_provider_config(device_id, available_providers)
+    _warn_if_substitution_lost_acceleration(substituted[0], available_providers)
+    return substituted
+
+
+def _cuda_is_reachable_from_this_process() -> bool:
+    """Whether a CUDA context can exist here at all -- the only thing the block above guards.
+
+    The hazard is two contexts in ONE interpreter, so the question is about this process, not
+    about what the operator requested. ``ASR_ISOLATE_PREPROCESSING`` is deliberately not
+    consulted: it is a *request*, and isolation_policy refuses it on pre-Arc Intel graphics,
+    so on such a host it is granted in name only while UVR still runs in this interpreter
+    beside the live CUDA context.
+
+    ``CUDA_VISIBLE_DEVICES=""`` is ground truth instead. isolated.py sets it (with
+    HIP_VISIBLE_DEVICES) from worker_runtime.ISOLATION_ENV for every GPU and NPU preprocessing
+    worker, and preprocessing_worker._load applies it before importing this package at all --
+    so in that process CUDA cannot be initialised by anything, and an OpenVINO session has
+    nothing to collide with. Anywhere else the variable is unset or non-empty and the block
+    still applies, which keeps the failure closed: an unreadable or unexpected value reads as
+    "CUDA might be here".
+    """
+    for name in ("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES"):
+        if os.environ.get(name, None) == "":
+            return False
+    return True
+
+
+def _warn_if_substitution_lost_acceleration(providers: list[str], available_providers: list[str]) -> None:
+    """Say so when the CUDA substitution degraded to the CPU instead.
+
+    The block above substitutes CUDA on the assumption that it keeps preprocessing
+    accelerated. That holds only while the *loaded* ONNX Runtime carries a CUDA provider --
+    and an explicit ASR_PREPROCESS_DEVICE=GPU makes bootstrap load the Intel build, which
+    does not. The substitution then silently lands on CPUExecutionProvider: neither
+    accelerator, at roughly a fifth of CUDA's throughput, while every log line still names
+    a GPU. Measured on an RTX 3080 + UHD Graphics laptop.
+    """
+    if "CUDAExecutionProvider" in providers:
+        return
+    logger.warning(
+        "[UVR] OpenVINO is blocked next to a CUDA ASR context and the loaded ONNX Runtime has no "
+        "CUDA provider (available: %s), so vocal isolation runs on the CPU. Set "
+        "ASR_ISOLATE_PREPROCESSING=1 to run UVR in its own process and keep OpenVINO, or leave "
+        "ASR_PREPROCESS_DEVICE unset so the CUDA runtime is loaded.",
+        available_providers,
+    )

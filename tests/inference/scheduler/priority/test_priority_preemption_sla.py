@@ -1,5 +1,8 @@
-"""Priority-preemption SLA/queueing tests for section 3 (priority preemption) of
-docs/E2E_TEST_PLAN_ORCHESTRATION.md.
+"""Priority-preemption SLA and queueing tests.
+
+Written against section 3 of an orchestration E2E test plan that was never committed to this
+repository, so the reference is kept as provenance only -- what each test covers is listed
+below rather than left to a document nobody can open.
 
 Covers:
 - 3.1: numeric wall-clock SLA for "ASR paused by an arriving language-detection

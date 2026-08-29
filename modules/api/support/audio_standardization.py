@@ -192,18 +192,26 @@ def get_clean_wav_or_error(
     logger.info("[Prep] Normalizing audio stream (FFmpeg)...")
     start = time.time()
 
-    corrupt = _corrupt_file_error(source_path)
-    if corrupt is not None:
-        return corrupt
+    # The flags describe THIS call's raw input and nothing after it, so they are cleared on
+    # every exit -- success, corruption and conversion failure alike. Clearing only on
+    # success left them on the thread context after a failure, where the next request served
+    # by that pooled thread inherited "-f s16le -ar 16000 -ac 1" and reinterpreted an
+    # ordinary MP4 as headerless PCM.
+    try:
+        corrupt = _corrupt_file_error(source_path)
+        if corrupt is not None:
+            return corrupt
 
-    stream_index, delay_filter = _resolve_stream_alignment(source_path, language, apply_stream_alignment)
-    clean_wav, err = _run_convert_to_wav(source_path, flags or [], stream_index=stream_index, delay_filter=delay_filter)
-    if err:
-        return None, err
+        stream_index, delay_filter = _resolve_stream_alignment(source_path, language, apply_stream_alignment)
+        clean_wav, err = _run_convert_to_wav(source_path, flags or [], stream_index=stream_index, delay_filter=delay_filter)
+        if err:
+            return None, err
 
-    _warn_on_truncated_standardization(source_path, clean_wav)
-    logger.info(
-        "[Prep] Standardization completed in %s",
-        utils.format_duration(time.time() - start),
-    )
-    return clean_wav, None
+        _warn_on_truncated_standardization(source_path, clean_wav)
+        logger.info(
+            "[Prep] Standardization completed in %s",
+            utils.format_duration(time.time() - start),
+        )
+        return clean_wav, None
+    finally:
+        utils.THREAD_CONTEXT.input_flags = None

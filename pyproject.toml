@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "whisper-pro-asr"
-version = "1.2.2"
+version = "1.3.0"
 description = "Enterprise-grade Whisper Automatic Speech Recognition web service"
 authors = ["DeepMind Team"]
 package-mode = false
@@ -18,37 +18,56 @@ psutil = "7.2.2"
 tqdm = "4.70.0"
 soundfile = "0.14.0"
 ffmpeg-python = "0.2.0"
-# OpenVINO 2026.3.1 requires numpy<2.5.0.
-numpy = "2.4.6"
+# OpenVINO 2026.3.1 declares numpy<2.6.0,>=1.16.6 -- checked against its published metadata
+# on 2026-09-07. This comment previously said "<2.5.0" and held numpy a minor behind for a
+# constraint that did not exist.
+numpy = "2.5.3"
 
 [tool.poetry.group.ml]
 optional = true
 
 [tool.poetry.group.ml.dependencies]
 faster-whisper = "1.2.1"
-tokenizers = "0.22.2"
-ctranslate2 = "4.8.1"
+tokenizers = "0.23.2"
+ctranslate2 = "4.8.2"
+# HELD at 2.13.0/0.28.0 deliberately -- do not "update" this pair without re-running the
+# CUDA hardware rows. torch 2.14 resolves the CUDA 13 wheel set (nvidia-cudnn-cu13 9.24,
+# nvidia-nccl-cu13, nvidia-cusparselt-cu13), but scripts/docker/install_cuda.sh pins
+# libcublas-12-9 because libctranslate2 dlopens "libcublas.so.12" by name. The mismatch is
+# invisible to every test that mocks the engine: the suite stayed green and the image built,
+# then every torch-engine request returned HTTP 500 with
+#   CUDNN_BACKEND_TENSOR_DESCRIPTOR cudnnFinalize failed
+#   cudnn_status: CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED
+# Measured on an RTX 5090 (WSL2) 2026-09-07: WHISPERX and OPENAI-WHISPER both failed every
+# request; FASTER-WHISPER passed, because CTranslate2 binds CUDA directly and never touches
+# cuDNN. Moving to torch 2.14 requires moving the image to CUDA 13, which CTranslate2 blocks.
 torch = "2.13.0"
 torchaudio = "2.11.0"
 torchvision = "0.28.0"
-# Held at the last 0.x release (not the new 1.0.0 major) because audio-separator
-# 0.44.5's common_separator.py calls librosa.get_duration(filename=...), and
-# librosa 1.0.0 removed the `filename` kwarg (renamed to `path`). This surfaced
-# as UVR preprocessing failing with "TypeError: get_duration() got an unexpected
-# keyword argument 'filename'" under real GPU testing, which cascaded into long
-# device-fallback retry loops. audio-separator declares only librosa>=0.10 (no
-# upper bound), so it doesn't protect against this itself.
-librosa = "0.11.0"
+# Moved to 1.0.0 together with audio-separator 0.47.0 below, which is what unblocked it.
+# The hold-back existed because audio-separator 0.44.5 called
+# librosa.get_duration(filename=...) and librosa 1.0.0 renamed that kwarg to `path` --
+# surfacing as UVR failing with "TypeError: get_duration() got an unexpected keyword
+# argument 'filename'" under real GPU testing, then cascading into device-fallback retry
+# loops. 0.47.0 calls get_duration(path=...) in both call sites (verified in the published
+# wheel, 2026-09-07). audio-separator still declares only librosa>=0.10 with no upper
+# bound, so the pairing is ours to keep: do not move one of these two without the other.
+librosa = "1.0.0"
 openvino = "2026.3.1"
 openvino-genai = "2026.3.1.0"
 openvino-tokenizers = "2026.3.1.0"
-transformers = "5.15.1"
-huggingface-hub = "1.28.0"
-audio-separator = "0.44.5"
+transformers = "5.16.1"
+huggingface-hub = "1.30.0"
+audio-separator = "0.47.0"
 # audio-separator's uvr_lib_v5.spec_utils imports audioread directly but does
 # not declare it as a dependency; it previously came in transitively via
 # librosa, which dropped audioread as of librosa 1.0.0 above.
 audioread = "3.1.0"
+# Backs ASR_ENGINE=OPENAI-WHISPER. The engine was already accepted by
+# engine_registry and documented in the README, but the package was never installed,
+# so selecting it failed at load in every image. Unlike WhisperX it pins nothing, so it
+# resolves against the torch above rather than needing a segregated stack.
+openai-whisper = "20250625"
 
 # WhisperX 3.8.6 (latest published release) hard-pins torch~=2.8.0,
 # torchaudio~=2.8.0, torchvision~=0.23.0 and huggingface-hub<1.0.0, which
@@ -64,11 +83,11 @@ httpx2 = "2.12.0"
 genbadge = { version = "1.1.3", extras = ["coverage"] }
 requests-mock = "1.12.1"
 yamllint = "1.38.0"
-ruff = "0.16.4"
+ruff = "0.16.6"
 flake8 = "7.3.0"
-pylint = "4.0.7"
+pylint = "4.0.8"
 black = "26.5.1"
-isort = "8.0.1"
+isort = "9.0.1"
 radon = "^6.0.1"
 check-jsonschema = "0.38.0"
 taplo = "0.9.3"
@@ -76,12 +95,47 @@ bandit = "1.9.4"
 pip-audit = "2.10.1"
 
 
+# Fixture-generation tooling. Deliberately optional and NOT installed in Dockerfile.test:
+# piper-tts pulls in onnxruntime (~200 MB), which would inflate every CI image pull and
+# widen the pip-audit surface the lint stage scans, to install something CI never runs --
+# the committed core-tier fixtures are read, never regenerated, in CI. Developers who need
+# to regenerate or extend the audio matrix run `poetry install --with tools`.
+[tool.poetry.group.tools]
+optional = true
+
+[tool.poetry.group.tools.dependencies]
+# The ja/zh extras carry the Japanese and Chinese phonemizers (pyopenjtalk-plus, g2pW);
+# without them those two voices synthesize an empty waveform rather than failing loudly.
+piper-tts = { version = "1.8.0", extras = ["ja", "zh"] }
+# Meta MMS-TTS supplies the nine languages Piper has no voice for (am, gu, km, my, pa,
+# ta, th, tl, yo). Like Piper it is a VITS model, so this widens coverage without
+# dropping fidelity.
+#
+# transformers and torch are deliberately NOT re-declared here: they are already pinned
+# in the `ml` group, and a second declaration could only either duplicate those pins or
+# drift from them. Generating MMS fixtures therefore needs both groups:
+#     poetry install --with tools --with ml
+# uroman romanizes scripts whose MMS model was trained on romanized text (Amharic among
+# the nine); without it those models emit an empty waveform rather than failing loudly.
+uroman = "1.3.1.1"
+
+
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
-exclude = ["scripts", "node_modules"]
+# Gitignored local caches of THIRD-PARTY source: .fixture-tooling holds the TTS toolchain's
+# site-packages (~4.5GB of torch/transformers/piper), model_cache the provisioned weights,
+# test_data the generated audio matrix. They do not exist on a CI runner, so linting them
+# failed only on a developer machine that had run the fixture generator -- and what it
+# reported was upstream's code style, never this project's.
+#
+# `scripts` is deliberately NOT excluded. It is this project's own code -- the fixture
+# generator, the hardware audit, the remote validation harness -- and excluding it meant
+# those files were the only Python here that nothing linted, which is how a bare `except:`
+# and several dead imports survived in them.
+exclude = ["node_modules", ".fixture-tooling", "model_cache", "test_data"]
 # Target Python version
 target-version = "py312"
 

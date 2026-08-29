@@ -1,0 +1,86 @@
+row: X5_full_matrix
+target=nvidia engine=FASTER-WHISPER device=CUDA preprocess=CUDA separation=on suite=full
+commit: 41ec4f4  date: 2026-09-08T10:04:01Z
+=== Preflight: <user>@<host> ===
+  ssh: OK (<user>@<host>)
+  docker: usable without sudo (Docker version 29.8.0, build 88096ef)
+  disk: 163G free
+
+=== Hardware audit (vendor-agnostic) ===
+  {"nvidia":true,"nvidia_toolkit":true,"intel_gpu":false,"intel_npu":false,"amd":true,"render_gid":"","intel_gpu_top":false,"disk_free":"163G","recommended_target":"nvidia"}
+  target: nvidia (from audit)
+
+=== What actually loaded ===
+2026-09-08 10:29:54,849        Whisper Pro ASR 1.3.0 nvidia
+2026-09-08 10:29:54,849    ASR Engine                    : FASTER-WHISPER
+2026-09-08 10:29:54,849    ASR Runtime                   : CUDA (Compute: float16)
+2026-09-08 10:29:54,849    Preprocess Device             : CUDA
+2026-09-08 10:29:54,849    Resource Pool                 : cuda:0
+2026-09-08 10:29:54,850    OpenVINO devices              : CPU
+
+=== Suite: full (engine=FASTER-WHISPER, preprocess=CUDA, real speech over HTTP) ===
+  this can take ~2h for full/stress; output is trimmed to the last 80 lines
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+cachedir: /var/cache/whisper-pro-asr-tools/pytest
+rootdir: /app
+configfile: pytest.ini
+plugins: xdist-3.8.0, anyio-4.14.2, requests-mock-1.12.1, cov-7.1.0
+collected 168 items
+
+tests/real_audio/test_code_switched.py                                   [ 10%]
+tests/real_audio/test_degraded_audio.py                                  [ 16%]
+tests/real_audio/test_language_matrix.py                                 [ 88%]
+tests/real_audio/test_longform_stress.py                                 [ 92%]
+tests/real_audio/test_malformed_inputs.py                                [ 97%]
+tests/real_audio/test_request_contract_abuse.py                          [100%]
+
+=============================== warnings summary ===============================
+../usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469
+  /usr/local/lib/python3.13/site-packages/_pytest/cacheprovider.py:469: PytestCacheWarning: could not create cache path /var/cache/whisper-pro-asr-tools/pytest/v/cache/nodeids: [Errno 13] Permission denied: '/var/cache/whisper-pro-asr-tools/pytest-cache-files-6_h7zrwb'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================================== XPASSES ====================================
+_________ test_mixed_language_clip_transcribes_both_halves[mix_zh_en] __________
+----------------------------- Captured stdout call -----------------------------
+2026-09-08 10:30:22,690  HTTP Request: POST http://<host>:9000/v1/audio/transcriptions?output=json "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx2:_client.py:1085 HTTP Request: POST http://<host>:9000/v1/audio/transcriptions?output=json "HTTP/1.1 200 OK"
+_______________ test_tier_b_is_recognized_or_transcribed[yo_mms] _______________
+----------------------------- Captured stdout call -----------------------------
+2026-09-08 10:33:11,625  HTTP Request: POST http://<host>:9000/detect-language "HTTP/1.1 200 OK"
+2026-09-08 10:33:12,677  HTTP Request: POST http://<host>:9000/v1/audio/transcriptions?output=json "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx2:_client.py:1085 HTTP Request: POST http://<host>:9000/detect-language "HTTP/1.1 200 OK"
+INFO     httpx2:_client.py:1085 HTTP Request: POST http://<host>:9000/v1/audio/transcriptions?output=json "HTTP/1.1 200 OK"
+_____________________ test_segments_span_the_clip[yo_mms] ______________________
+----------------------------- Captured stdout call -----------------------------
+2026-09-08 10:34:23,801  HTTP Request: POST http://<host>:9000/v1/audio/transcriptions?output=json "HTTP/1.1 200 OK"
+------------------------------ Captured log call -------------------------------
+INFO     httpx2:_client.py:1085 HTTP Request: POST http://<host>:9000/v1/audio/transcriptions?output=json "HTTP/1.1 200 OK"
+=========================== short test summary info ============================
+SKIPPED [1] tests/real_audio/test_longform_stress.py:103: Long-form stress test; set RUN_GPU_LONG_ASR=1 to run it.
+SKIPPED [1] tests/real_audio/test_longform_stress.py:113: Long-form stress test; set RUN_GPU_LONG_ASR=1 to run it.
+SKIPPED [1] tests/real_audio/test_longform_stress.py:128: Long-form stress test; set RUN_GPU_LONG_ASR=1 to run it.
+SKIPPED [1] tests/real_audio/test_longform_stress.py:139: Long-form stress test; set RUN_GPU_LONG_ASR=1 to run it.
+SKIPPED [1] tests/real_audio/test_longform_stress.py:168: Long-form stress test; set RUN_GPU_LONG_ASR=1 to run it.
+SKIPPED [1] tests/real_audio/test_longform_stress.py:184: Long-form stress test; set RUN_GPU_LONG_ASR=1 to run it.
+XFAIL tests/real_audio/test_code_switched.py::test_mixed_language_clip_transcribes_both_halves[mix_en_es] - service transcribes only the leg matching the detected language and drops the other; verified 2026-09-01: en+es returned only the Spanish half
+XPASS tests/real_audio/test_code_switched.py::test_mixed_language_clip_transcribes_both_halves[mix_zh_en] - engine-dependent. FASTER-WHISPER transcribes both halves (XPASS on an RTX 5090 three runs running, an RTX 3080, and an Intel NUC), but WHISPERX returns only the Chinese half and drops the English one -- overlap 0.21 against a 0.40 bar, measured 2026-09-04. The entry was deleted earlier that day on faster-whisper evidence from two machines and restored when WhisperX failed it: two accelerators running the same engine is not two engines
+XPASS tests/real_audio/test_language_matrix.py::test_tier_b_is_recognized_or_transcribed[yo_mms] - MMS Yoruba renders diacritics imprecisely; language detection is correct but word overlap is partial (verified 2026-09-02)
+XPASS tests/real_audio/test_language_matrix.py::test_segments_span_the_clip[yo_mms] - MMS Yoruba renders diacritics imprecisely; language detection is correct but word overlap is partial (verified 2026-09-02)
+= 158 passed, 6 skipped, 1 xfailed, 3 xpassed, 1 warning in 271.00s (0:04:31) ==
+
+=== Measured execution (post-suite) ===
+2026-09-08 10:34:32,227  [prep-worker:154] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:00 | Audio: 00:00:06 | Speed: 15.91x)
+2026-09-08 10:34:32,958  [prep-worker:154] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:00 | Audio: 00:00:06 | Speed: 15.67x)
+2026-09-08 10:34:33,709  [prep-worker:154] [UVR] Isolation complete on NVIDIA GPU 0 [ONNX: CUDAExecutionProvider] (Duration: 00:00:00 | Audio: 00:00:06 | Speed: 15.85x)
+  NVIDIA GPU 0                 ASR=CUDA       measured=True  | UVR=CUDA       measured=True
+
+=== Done ===
+  host:   <host>
+  target: nvidia (ASR_DEVICE=CUDA, ASR_ENGINE=FASTER-WHISPER, preprocess=CUDA, separation=true)
+  A passing suite proves decoding worked. Confirm the accelerator was USED by sampling
+  it during a transcription -- see docs/REMOTE_VALIDATION.md.
+  result: passed

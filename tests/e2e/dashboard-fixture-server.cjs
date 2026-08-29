@@ -165,7 +165,7 @@ function lifecycleBasePayload(tasks, history) {
       nvidia: [],
     },
     telemetry_history: defaultTelemetryHistoryPayload(),
-    hardware_units: [{ id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "ready" }],
+    hardware_units: [{ id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "ready", asr_execution: { device: "CPU", accelerated: false, fallback: false, measured: true }, uvr_execution: { device: "CPU", accelerated: false, fallback: false, measured: true } }],
   };
 }
 
@@ -628,10 +628,10 @@ function concurrencyBurstScenario(tick) {
       ],
       history: [],
       hardware_units: [
-        { id: "NPU.0", type: "NPU", name: "Intel NPU", uvr_status: "ready", whisper_status: "active" },
-        { id: "GPU.0", type: "GPU", name: "Intel GPU", uvr_status: "ready", whisper_status: "active" },
-        { id: "CUDA.0", type: "CUDA", name: "NVIDIA GPU", uvr_status: "ready", whisper_status: "active" },
-        { id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "idle" },
+        { id: "NPU.0", type: "NPU", name: "Intel NPU", uvr_status: "ready", whisper_status: "busy", asr_execution: { device: "CPU", accelerated: false, fallback: true, measured: true }, uvr_execution: { device: "Intel NPU", accelerated: true, fallback: false, measured: true } },
+        { id: "GPU.0", type: "GPU", name: "Intel GPU", uvr_status: "ready", whisper_status: "busy", asr_execution: { device: "Intel GPU", accelerated: true, fallback: false, measured: true }, uvr_execution: { device: "Intel GPU", accelerated: true, fallback: false, measured: true } },
+        { id: "CUDA.0", type: "CUDA", name: "NVIDIA GPU", uvr_status: "ready", whisper_status: "busy", asr_execution: { device: "CUDA", accelerated: true, fallback: false, measured: true }, uvr_execution: { device: "CUDA", accelerated: true, fallback: false, measured: true } },
+        { id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "ready", asr_execution: { device: "CPU", accelerated: false, fallback: false, measured: true }, uvr_execution: { device: "CPU", accelerated: false, fallback: false, measured: true } },
       ],
     },
     {
@@ -666,10 +666,10 @@ function concurrencyBurstScenario(tick) {
       ],
       history: [],
       hardware_units: [
-        { id: "NPU.0", type: "NPU", name: "Intel NPU", uvr_status: "ready", whisper_status: "active" },
-        { id: "GPU.0", type: "GPU", name: "Intel GPU", uvr_status: "ready", whisper_status: "idle" },
-        { id: "CUDA.0", type: "CUDA", name: "NVIDIA GPU", uvr_status: "ready", whisper_status: "idle" },
-        { id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "idle" },
+        { id: "NPU.0", type: "NPU", name: "Intel NPU", uvr_status: "ready", whisper_status: "busy", asr_execution: { device: "CPU", accelerated: false, fallback: true, measured: true }, uvr_execution: { device: "Intel NPU", accelerated: true, fallback: false, measured: true } },
+        { id: "GPU.0", type: "GPU", name: "Intel GPU", uvr_status: "ready", whisper_status: "loaded", asr_execution: { device: "Intel GPU", accelerated: true, fallback: false, measured: true }, uvr_execution: { device: "Intel GPU", accelerated: true, fallback: false, measured: true } },
+        { id: "CUDA.0", type: "CUDA", name: "NVIDIA GPU", uvr_status: "ready", whisper_status: "loaded", asr_execution: { device: "CUDA", accelerated: true, fallback: false, measured: true }, uvr_execution: { device: "CUDA", accelerated: true, fallback: false, measured: true } },
+        { id: "CPU", type: "CPU", name: "Host CPU", uvr_status: "ready", whisper_status: "ready", asr_execution: { device: "CPU", accelerated: false, fallback: false, measured: true }, uvr_execution: { device: "CPU", accelerated: false, fallback: false, measured: true } },
       ],
     },
   ];

@@ -98,14 +98,17 @@ def _cleanup_temp_upload_on_error(tmp_path: Optional[str]):
         pass
 
 
+def _valid_candidate_ext(candidate: Optional[str]) -> Optional[str]:
+    if not candidate:
+        return None
+    ext = os.path.splitext(candidate.strip().strip('"').strip("'"))[1]
+    return ext if ext and len(ext) <= 6 else None
+
+
 def _extract_ext(original_filename: str, local_path: Optional[str]) -> str:
-    for candidate in (original_filename, local_path):
-        if not candidate:
-            continue
-        ext = os.path.splitext(candidate.strip().strip('"').strip("'"))[1]
-        if ext and len(ext) <= 6:
-            return ext
-    return ".tmp"
+    if getattr(utils.THREAD_CONTEXT, "input_flags", None):
+        return ".raw"
+    return _valid_candidate_ext(original_filename) or _valid_candidate_ext(local_path) or ".tmp"
 
 
 extract_ext = _extract_ext
@@ -209,6 +212,14 @@ def _resolve_local_source(local_path: Optional[str], display_name: Optional[str]
     resolved = resolve_local_path(local_path)
     if not resolved:
         return None
+    # Cleared HERE, not left to get_clean_wav_or_error's `finally`. Deferring it was tried
+    # and reverted: a mapped local path is a real container (Bazarr sends raw_pcm=true
+    # alongside a local_path routinely), and utils.get_audio_duration runs on it BEFORE any
+    # standardization, so the surviving "-f s16le -ar 16000 -ac 1" made ffprobe read an MKV
+    # as headerless PCM and return a duration derived from its file size. The flags describe
+    # the upload that is not being used, and resolving a local path is the moment that
+    # becomes true. See tests/unit/test_raw_pcm_local_path.py.
+    utils.THREAD_CONTEXT.input_flags = None
     return resolved, None, display_name
 
 

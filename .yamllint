@@ -1,13 +1,26 @@
 extends: default
 
+# The last four are gitignored local caches / scratch trees, absent on a CI runner: they
+# hold third-party YAML (torch ships ~3 large schema files) and stale copies of this repo's
+# own compose files, so linting them reported upstream's style on a developer machine only.
+# Same exclusion set as [tool.ruff] in pyproject.toml, .taplo.toml, .gitleaks.toml and
+# scripts/ci/check-inline-ignores.py.
 ignore: |
   .venv
   venv
   node_modules
+  .fixture-tooling
+  model_cache
+  test_data
+  .claude/worktrees
 
 rules:
   line-length:
-    max: 120
+    # 140, matching the repo's Python limit (ruff and flake8 are both 140). Every YAML line
+    # over 120 here is a pinned `image@sha256:` digest, which cannot be wrapped without
+    # breaking the pin -- and `yamllint -s` fails on warnings, so a lower cap could only be
+    # met by unpinning. warning, not error, is kept so genuinely long prose still surfaces.
+    max: 140
     level: warning
   truthy:
     check-keys: false

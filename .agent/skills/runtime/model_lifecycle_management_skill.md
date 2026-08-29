@@ -19,6 +19,26 @@ Prevent memory exhaustion and GPU/NPU/RAM leaks by configuring, verifying, and t
 
 ---
 
+## Model Download Integrity & Corruption Recovery
+
+Every ingestion path is protected by `modules/core/model_integrity.py`. The unchecked
+`_download_openvino_source()` fallback this section used to warn about is gone: it fetched
+~22GB of unconverted OpenAI source weights into the directory the Intel engine reads and
+reported success, leaving a tree `ov_genai.WhisperPipeline` cannot load, with no route to a
+usable IR because the runtime image ships no `optimum-cli`. `scripts/preload_model.py` now
+fails loudly there instead, which at build/provision time is the cheap outcome.
+
+- **Structural & Checksum Verification**: Models are validated before use:
+  - CTranslate2 (Faster-Whisper): requires `model.bin` or `model.safetensors` (>= 10 MB), `config.json`, `preprocessor_config.json`, and `tokenizer.json`.
+  - OpenVINO (Intel Whisper): requires `openvino_encoder_model` and `openvino_decoder_model` XML/BIN pairs (>= 50 MB), `openvino_tokenizer` and `openvino_detokenizer` XML/BIN pairs, and `generation_config.json`.
+  - UVR & Silero VAD: validated via minimum file size and SHA-256 checksums.
+- **Auto-Purge & Recovery Behavior**:
+  - **Faster-Whisper**: Directory-valued `model_id` paths are purged after validation failure but return False without attempting a reload; retry loading applies only to cached snapshot paths under `download_root` when `model_id` can be resolved for restoration.
+  - **OpenVINO (Intel Whisper)**: If the local OpenVINO directory is corrupted, initialization purges it, re-provisions the IR through `model_provisioning.ensure_openvino_whisper` (which validates and bounded-retries), and makes one reload attempt. A failed purge, re-provision or reload preserves the original initialization failure without retrying indefinitely.
+  - **UVR & Silero VAD**: Validated via SHA-256 checksums in both preload and runtime helpers with auto-purge and retry.
+
+---
+
 ## Verification & Testing Procedure
 
 ### 1. Test Aggressive Offload

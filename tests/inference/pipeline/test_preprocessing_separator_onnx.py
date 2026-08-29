@@ -1,6 +1,7 @@
 """Preprocessing pipeline tests (split from test_preprocessing.py)."""
 
 import logging
+import os
 from unittest import mock
 
 import pytest
@@ -318,12 +319,37 @@ def test_block_openvino_alongside_cuda_redirects_openvino_result_to_cuda():
     openvino_result = (["OpenVINOExecutionProvider", "CPUExecutionProvider"], [{"device_type": "GPU"}])
     with mock.patch("modules.inference.pipeline.preprocessing.provider.config") as mock_cfg:
         mock_cfg.DEVICE = "CUDA"
+        # Explicitly in-process. The block only applies when both contexts would share one
+        # interpreter, and a MagicMock config reads truthy for every attribute -- so without
+        # this the isolated branch was taken and the test silently stopped testing the block.
+        mock_cfg.ISOLATE_PREPROCESSING = False
         providers, options = preprocessing_provider._block_openvino_alongside_cuda(
             openvino_result, "0", ["CUDAExecutionProvider", "CPUExecutionProvider"]
         )
 
     assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
     assert options[0]["device_id"] == 0
+
+
+def test_block_openvino_alongside_cuda_blocks_even_when_isolation_is_requested():
+    """ASR_ISOLATE_PREPROCESSING is a request, not a guarantee that UVR left the process.
+
+    isolation_policy refuses pre-Arc Intel graphics because the worker segfaults there, so on
+    such a host the request is granted in name only and UVR still runs in this interpreter.
+    Trusting the flag would put an OpenVINO context beside the live CUDA one -- the native
+    crash the block exists to prevent.
+    """
+    from modules.inference.pipeline.preprocessing import provider as preprocessing_provider
+
+    openvino_result = (["OpenVINOExecutionProvider", "CPUExecutionProvider"], [{"device_type": "GPU"}])
+    with mock.patch("modules.inference.pipeline.preprocessing.provider.config") as mock_cfg:
+        mock_cfg.DEVICE = "CUDA"
+        mock_cfg.ISOLATE_PREPROCESSING = True
+        providers, _options = preprocessing_provider._block_openvino_alongside_cuda(
+            openvino_result, "0", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        )
+
+    assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
 def test_block_openvino_alongside_cuda_falls_back_to_cpu_when_cuda_unavailable():
@@ -334,6 +360,7 @@ def test_block_openvino_alongside_cuda_falls_back_to_cpu_when_cuda_unavailable()
     openvino_result = (["OpenVINOExecutionProvider", "CPUExecutionProvider"], [{"device_type": "GPU"}])
     with mock.patch("modules.inference.pipeline.preprocessing.provider.config") as mock_cfg:
         mock_cfg.DEVICE = "CUDA"
+        mock_cfg.ISOLATE_PREPROCESSING = False
         providers, options = preprocessing_provider._block_openvino_alongside_cuda(openvino_result, "0", ["CPUExecutionProvider"])
 
     assert providers == ["CPUExecutionProvider"]
@@ -407,3 +434,64 @@ def test_openvino_init_lock_is_distinct_across_gpu_and_npu_families():
     npu_lock = preprocessing._openvino_init_lock_for("NPU.0", "NPU")
 
     assert gpu_lock is not npu_lock
+
+
+def test_openvino_init_lock_is_distinct_across_cpu_slots():
+    """CPU slots are independent because they do not share an OpenVINO family lock."""
+    cpu_zero_lock = preprocessing._openvino_init_lock_for("CPU.0", "CPU")
+    cpu_one_lock = preprocessing._openvino_init_lock_for("CPU.1", "CPU")
+
+    assert cpu_zero_lock is not cpu_one_lock
+
+
+class TestOpenvinoIsKeptWhereCudaCannotExist:
+    """The block guards one hazard: two contexts in one interpreter.
+
+    A GPU/NPU preprocessing worker is started with CUDA_VISIBLE_DEVICES="" (and
+    HIP_VISIBLE_DEVICES=""), applied by preprocessing_worker._load before this package is
+    imported at all. Nothing in that process can initialise CUDA, so an OpenVINO session has
+    nothing to collide with -- and substituting CUDA there would throw away the acceleration
+    the worker exists to provide, on a host where it is measurably 20x faster.
+    """
+
+    OPENVINO_RESULT = (["OpenVINOExecutionProvider", "CPUExecutionProvider"], [{"device_type": "GPU"}])
+
+    def _resolve(self, env):
+        from modules.inference.pipeline.preprocessing import provider as preprocessing_provider
+
+        with (
+            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch("modules.inference.pipeline.preprocessing.provider.config") as mock_cfg,
+        ):
+            mock_cfg.DEVICE = "CUDA"
+            providers, _options = preprocessing_provider._block_openvino_alongside_cuda(
+                self.OPENVINO_RESULT, "0", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            )
+        return providers
+
+    def test_openvino_survives_inside_a_cuda_blinded_worker(self):
+        """This is the case the substitution was costing: an isolated Intel UVR worker."""
+        assert self._resolve({"CUDA_VISIBLE_DEVICES": ""})[0] == "OpenVINOExecutionProvider"
+
+    def test_a_blinded_rocm_worker_is_treated_the_same(self):
+        """ISOLATION_ENV empties HIP_VISIBLE_DEVICES for the same reason."""
+        assert self._resolve({"HIP_VISIBLE_DEVICES": ""})[0] == "OpenVINOExecutionProvider"
+
+    def test_a_visible_cuda_device_still_blocks(self):
+        """The in-process manager on a hybrid host -- where the crash is real."""
+        assert self._resolve({"CUDA_VISIBLE_DEVICES": "0"}) == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    def test_an_unset_variable_fails_closed(self):
+        """Absence is not evidence of isolation; an unknown process keeps the block."""
+        env = {k: v for k, v in os.environ.items() if k not in ("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES")}
+        from modules.inference.pipeline.preprocessing import provider as preprocessing_provider
+
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch("modules.inference.pipeline.preprocessing.provider.config") as mock_cfg,
+        ):
+            mock_cfg.DEVICE = "CUDA"
+            providers, _options = preprocessing_provider._block_openvino_alongside_cuda(
+                self.OPENVINO_RESULT, "0", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            )
+        assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]

@@ -1,0 +1,29 @@
+row: L3_isolate_preprocessing_on
+target=nvidia-intel engine=FASTER-WHISPER device=CUDA preprocess=GPU env: ASR_ISOLATE_PREPROCESSING=1
+commit: 41ec4f4  date: 2026-09-08T05:32:18Z
+ Network whisper-pro-asr_default Creating 
+ Network whisper-pro-asr_default Creating 
+ Network whisper-pro-asr_default Created 
+ Network whisper-pro-asr_default Created 
+ Container whisper-pro-asr-init-permissions-1 Creating 
+ Container whisper-pro-asr-init-permissions-1 Created 
+ Container whisper-pro-asr Creating 
+ Container whisper-pro-asr Created 
+ Container whisper-pro-asr-init-permissions-1 Starting 
+ Container whisper-pro-asr-init-permissions-1 Started 
+ Container whisper-pro-asr-init-permissions-1 Waiting 
+ Container whisper-pro-asr-init-permissions-1 Exited 
+ Container whisper-pro-asr Starting 
+ Container whisper-pro-asr Started 
+2026-09-08 05:32:21,396 Context: Intel OpenVINO -> Path: /app/libs/intel
+2026-09-08 05:32:24,443    ASR Runtime                   : CUDA (Compute: float16)
+2026-09-08 05:32:24,443    Preprocess Device             : Intel(R) UHD Graphics (iGPU)
+2026-09-08 05:32:24,443    Resource Pool                 : cuda:0, GPU.0
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 9 passed, 1 warning in 249.00s (0:04:09) ===================
+2026-09-08 05:36:05,439 [speech_known_text.wav] [UVR] Isolation complete on Intel(R) UHD Graphics (iGPU) (Duration: 00:00:09 | Audio: 00:00:08 | Speed: 0.85x)
+2026-09-08 05:36:41,063  [prep-worker:143] [UVR] Isolation complete on NVIDIA GPU 0 (Duration: 00:00:10 | Audio: 00:00:08 | Speed: 0.79x)
+  NVIDIA GPU 0                 ASR=CUDA       measured=True  | UVR=CPU        measured=True
+  Intel(R) UHD Graphics (iGP   ASR=CPU        measured=True  | UVR=CPU        measured=True

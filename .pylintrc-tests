@@ -1,0 +1,55 @@
+[MASTER]
+init-hook="import sys, os, sysconfig; [sys.path.insert(0, p) for folder in ('.venv', 'venv') if os.path.isdir(os.path.abspath(folder)) for p in {sysconfig.get_paths(vars={'base': os.path.abspath(folder)}).get(k) for k in ('purelib', 'platlib')} if p and p not in sys.path]"
+ignore=CVS
+ignore-patterns=
+persistent=yes
+load-plugins=
+jobs=0
+unsafe-load-any-extension=no
+
+[MESSAGES CONTROL]
+# Test-only relaxations. Production code is linted with the strict `.pylintrc`, which
+# disables nothing at all; this file exists so the test suite can be written the way tests
+# are written without scattering inline `# pylint: disable=` comments through it -- those
+# are banned repo-wide by scripts/ci/check-inline-ignores.py, and a config file is a
+# reviewable, one-place decision rather than 14 invisible ones.
+#
+# protected-access: reaching into a module's internals IS the unit under test. The public
+#   surface of e.g. worker_channel is a thin wrapper, and testing only through it would
+#   leave the invariants these suites exist to pin completely unverified.
+# attribute-defined-outside-init: pytest classes set state in fixtures, not __init__.
+# too-few-public-methods: a test class grouping one behaviour is a namespace, not a design
+#   smell; splitting it to satisfy a count would make the report harder to read.
+# duplicate-code: parametrized suites over similar shapes legitimately look alike, and the
+#   shared parts already live in tests/real_audio/matrix_support.py.
+# unused-argument: a test double has to mirror the real callee's signature, keyword names
+#   included, even for parameters it ignores -- production calls
+#   `iter_content(chunk_size=...)` and `Separator(output_dir=...)` by keyword, so renaming
+#   them to `_chunk_size` to satisfy the check is not a cosmetic change, it breaks the call.
+disable=protected-access,
+        attribute-defined-outside-init,
+        too-few-public-methods,
+        duplicate-code,
+        unused-argument
+
+[REPORTS]
+output-format=text
+reports=no
+evaluation=10.0 - ((float(5 * error + warning + refactor + convention) / statement) * 10)
+
+[FORMAT]
+max-line-length=140
+indent-string='    '
+
+[BASIC]
+good-names=i,j,k,ex,Run,_,fp,id,ip,e,v,Separator
+
+[DESIGN]
+max-args=10
+max-locals=20
+max-branches=20
+max-statements=140
+max-parents=7
+max-attributes=15
+max-bool-expr=5
+max-module-lines=600
