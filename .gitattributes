@@ -13,3 +13,7 @@
 *.yaml text eol=lf
 *.toml text eol=lf
 *.ps1 text eol=lf
+
+# Audio fixtures are binary; never let the text=auto heuristic touch them.
+*.wav binary
+*.flac binary

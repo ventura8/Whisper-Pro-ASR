@@ -139,7 +139,7 @@ def _exercise_vocal_separation_stage_scenario():
     def fake_check_preemption():
         hook_calls.append(1)
 
-    def mock_preprocess(_audio_path, force=False, yield_cb=None):
+    def mock_preprocess(_audio_path, force=False, yield_cb=None, stage="Vocal Separation"):
         _ = force
         events.append("vocal_start")
         vocal_started.set()

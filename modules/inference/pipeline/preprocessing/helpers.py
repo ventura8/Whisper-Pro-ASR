@@ -12,7 +12,7 @@ import time
 import types
 from pathlib import Path
 
-from modules.core import config, utils
+from modules.core import config, model_integrity, utils
 from modules.inference import scheduler
 from modules.inference.pipeline import openvino_resolver
 
@@ -403,13 +403,19 @@ def _patch_audio_separator_onnx_check():
             def safe_download_model_files(self, model_filename):
                 model_path = os.path.join(self.model_file_dir, f"{model_filename}")
                 if os.path.exists(model_path) and model_filename == "UVR-MDX-NET-Inst_HQ_3.onnx":
-                    return (
-                        model_filename,
-                        "MDX",
-                        "UVR-MDX-NET-Inst_HQ_3",
+                    if model_integrity.verify_onnx_model_file(model_path, min_bytes=10 * 1024 * 1024):
+                        return (
+                            model_filename,
+                            "MDX",
+                            "UVR-MDX-NET-Inst_HQ_3",
+                            model_path,
+                            None,
+                        )
+                    logger.warning(
+                        "[UVR] Local model file %s failed integrity check. Purging...",
                         model_path,
-                        None,
                     )
+                    model_integrity.purge_corrupted_path(model_path, description="UVR model file")
                 if orig_download:
                     return orig_download(self, model_filename)
                 raise FileNotFoundError(f"Model file {model_filename} not found at {model_path}")
@@ -417,6 +423,7 @@ def _patch_audio_separator_onnx_check():
             orig_load_hash = getattr(separator_cls, "load_model_data_using_hash", None)
 
             def safe_load_model_data_using_hash(*args, **kwargs):
+
                 return _safe_load_model_data_using_hash(orig_load_hash, *args, **kwargs)
 
             orig_separate = getattr(separator_cls, "separate", None)

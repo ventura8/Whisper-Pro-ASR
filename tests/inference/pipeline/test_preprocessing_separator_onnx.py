@@ -407,3 +407,11 @@ def test_openvino_init_lock_is_distinct_across_gpu_and_npu_families():
     npu_lock = preprocessing._openvino_init_lock_for("NPU.0", "NPU")
 
     assert gpu_lock is not npu_lock
+
+
+def test_openvino_init_lock_is_distinct_across_cpu_slots():
+    """CPU slots are independent because they do not share an OpenVINO family lock."""
+    cpu_zero_lock = preprocessing._openvino_init_lock_for("CPU.0", "CPU")
+    cpu_one_lock = preprocessing._openvino_init_lock_for("CPU.1", "CPU")
+
+    assert cpu_zero_lock is not cpu_one_lock

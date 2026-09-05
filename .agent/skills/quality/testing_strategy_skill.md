@@ -284,6 +284,68 @@ docker run --rm -v "$(pwd):/app" -w /app whisper-pro-asr-test npm run test:js --
 scripts/ci/build-and-test.sh
 ```
 
+## Real-Audio Matrix (`tests/real_audio/`)
+
+Everything else in the suite mocks the ASR engine, so multilingual regressions are
+invisible to it. `tests/real_audio/` drives a **live** service over HTTP with real neural
+speech per language, code-switched clips, degraded/malformed audio, and a 20-minute
+long-form stress clip.
+
+Rules when working in this area:
+
+- **Expectations are data.** `tests/e2e/fixtures/audio_matrix/manifest.json` carries each
+  clip's tier, expected words, acceptable detection codes, tokenizer and optional
+  `xfail_reason`. Tune a language by editing the manifest, **never** by editing a test or
+  loosening an assertion in code.
+- **Tier A** asserts transcript content *and* detected language. **Tier B** (the long tail)
+  asserts "detected correctly, or at least transcribed to something". Promote a language
+  between tiers only on evidence from real runs.
+- **Fixtures are generated, not mystery binaries.** `scripts/generate_audio_matrix.py`
+  renders every clip from the manifest with Piper. Only the ~10-language core tier is
+  committed (`core/*.flac`, ~1.3 MB); everything else is cached in the gitignored
+  `test_data/audio_matrix/`. Generation is content-addressed and idempotent -- re-running
+  it must leave `git status` clean.
+- **Determinism is pinned deliberately.** Piper has no seed and samples noise per run; the
+  manifest pins `noise_scale`/`noise_w_scale` to zero to make rendering bit-identical, and
+  voice models are verified against upstream MD5 digests. Do not "improve" prosody by
+  raising those pins without accepting that committed fixtures then churn on every rebuild.
+- **The generator lives in `scripts/`** because that path is Radon rank-A gated
+  (complexity <= 5) but coverage-exempt. Keep functions decomposed; use dispatch tables
+  rather than `if`/`elif` chains.
+- **Markers**: `real_asr`, `real_audio`, `smoke`, `gpu`, `slow` (registered in
+  `pytest.ini`). The long-form test carries `gpu` + `slow` and requires
+  `RUN_GPU_LONG_ASR=1` plus `nvidia-smi`.
+- **Run the smoke set, not the matrix, by default.** `smoke` selects a representative
+  subset (24 of 156 tests: 4 languages spanning Latin/Cyrillic/CJK, one code-switched
+  clip, five degraded and malformed cases, the request-contract checks) budgeted under 20
+  minutes. The full matrix is ~2 hours because each request runs UVR Vocal Separation, so
+  it is stress testing, not routine validation. Which entries are in the smoke set is
+  manifest data (`"smoke": true`), not a hard-coded list in a test.
+- **Known engine defects are recorded, never hidden.** `xfail_reason` plus `xfail_scope`
+  on a manifest entry relaxes only the assertion the defect actually breaks; the long-form
+  spec carries `known_defects` keyed by property. A fix is applied by deleting that data,
+  and the test flips to XPASS on its own. Lowering a threshold to make a defect disappear
+  is not an acceptable alternative.
+
+Both real-audio stages run through the Docker test image against a **live** stack, like
+every other gate in this repository -- never as host pytest:
+
+```bash
+RUN_REAL_ASR=1 PIPELINE_STAGE=real-audio scripts/ci/build-and-test.sh          # smoke, <20 min
+RUN_REAL_ASR=1 PIPELINE_STAGE=real-audio-stress scripts/ci/build-and-test.sh   # full matrix ~2h + long-form
+python3 scripts/generate_audio_matrix.py verify                                # coverage report
+```
+
+The stack itself must already be up on the override matching `BUILD_TARGET`; neither stage
+starts it. `BUILD_TARGET` lives in `.env` (written by `scripts/audit_hardware.sh --env`), so
+source it before expanding the filename -- an unset variable yields
+`docker-compose..yml`, which does not exist:
+
+```bash
+set -a; . ./.env; set +a
+docker compose -f docker-compose.yml -f "docker-compose.${BUILD_TARGET}.yml" up -d
+```
+
 ## Done Criteria
 
 - New regression tests exist and pass (backend + frontend).

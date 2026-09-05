@@ -16,6 +16,12 @@ services:
       - |
         case "$$U" in (''|*[!0-9]*) exit 1;; esac
         case "$$G" in (''|*[!0-9]*) exit 1;; esac
+        # Kernel/JIT caches are redirected here (see XDG_CACHE_HOME and friends below).
+        # Create them up front: a driver that cannot write its cache directory falls back
+        # to recompiling silently, with no error and a 50x slower first request.
+        mkdir -p /app/model_cache/kernel_cache/xdg /app/model_cache/kernel_cache/sycl \
+                 /app/model_cache/kernel_cache/neo /app/model_cache/kernel_cache/cuda \
+                 /app/model_cache/kernel_cache/triton /app/model_cache/kernel_cache/numba
         find /app/data /app/model_cache \( ! -user "$$U" -o ! -group "$$G" \) -exec chown "$$U:$$G" {} +
     restart: "no"
 
@@ -26,11 +32,35 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Hardware target. Models are downloaded at startup, not baked in.
+      #   cpu (~4.9GB) | intel (~5.2GB) | intel-xpu (~11.2GB) | nvidia (~17.5GB)
+      #   nvidia-intel (~17.9GB) | nvidia-whisperx (~18.4GB) | amd (~14.1GB)
+      #   amd-rocm-torch (~21.8GB) | full (~29.8GB locally, adds WhisperX diarization)
+      #
+      # intel, intel-xpu, nvidia-intel and full need /opt/intel/openvino, which the default
+      # RUNTIME_BASE below does NOT provide -- the base file deliberately defaults to Ubuntu
+      # for CPU compatibility. Merge the matching docker-compose.<target>.yml (each
+      # Intel-bearing override restores the pinned OpenVINO base), or pass a RUNTIME_BASE
+      # that carries it. Building one of those targets on the bare base file loses the
+      # bundled Level Zero runtime and then fails installing Ubuntu packages that do not exist.
+      target: ${BUILD_TARGET:-cpu}
+      args:
+        RUNTIME_BASE: ${RUNTIME_BASE:-ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517}
       # Persist BuildKit cache across docker compose builds (especially useful on Windows/WSL2).
+      #
+      # mode=min, not max. mode=max exports every intermediate layer of every stage, and
+      # this Dockerfile has many: on a validation host it reached 95GB and filled the root
+      # filesystem to zero bytes, after which the build failed with "no space left on
+      # device" while still leaving a plausible-looking image behind. mode=min exports only
+      # the layers of the final image, which is what a rebuild actually reuses.
+      #
+      # BUILDX_CACHE_DIR moves the cache off a small root filesystem; BUILDX_CACHE_MODE=max
+      # restores the old behaviour where the disk can afford it.
       cache_from:
-        - type=local,src=.buildx-cache
+        - type=local,src=${BUILDX_CACHE_DIR:-.buildx-cache}
       cache_to:
-        - type=local,dest=.buildx-cache,mode=max
+        - type=local,dest=${BUILDX_CACHE_DIR:-.buildx-cache},mode=${BUILDX_CACHE_MODE:-min}
+    image: whisper-pro-asr:${BUILD_TARGET:-cpu}
     container_name: whisper-pro-asr
     restart: unless-stopped
     user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
@@ -43,93 +73,18 @@ services:
       retries: 5
       start_period: 60s
 
-    # --- [HARDWARE ACCELERATION (OPTIONAL)] ---
-    # The application automatically detects and orchestrates available hardware (NVIDIA CUDA,
-    # Intel iGPU/Arc/NPU, AMD Radeon ROCm/DirectML, or CPU fallback).
+    # --- [HARDWARE ACCELERATION] ---
+    # Device passthrough lives in the per-target override files, because it differs by
+    # vendor and a CPU-only host must not be forced to have nvidia-container-toolkit:
     #
-    # This deployment targets the configured bare-metal Intel+iGPU/NVIDIA host.
-    # CPU fallback remains possible, but is reported as a hardware-validation failure.
-
-    # =========================================================================
-    # OPTION 1: NVIDIA Silicon (CUDA)
-    # Prerequisites: Install 'nvidia-container-toolkit' on the host system.
-    # =========================================================================
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
-    # =========================================================================
-    # OPTION 2: Intel Silicon (NPU / iGPU / Arc GPU)
-    # =========================================================================
-    # Linux Intel Hosts (Bare-metal) — set HOST_INTEL_RENDER_GID explicitly (no silent default):
-    #   echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD128)" >> .env
-    #   # or: echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD* | head -n 1)" >> .env
-    group_add:
-      - "${HOST_INTEL_RENDER_GID:-990}"
-    devices:
-      - /dev/dri:/dev/dri
-    #   - /dev/accel:/dev/accel # Only if the host has an Intel NPU
-    # On a hybrid NVIDIA+Intel host, `devices:` alone can drop the Intel entry
-    # from /dev/dri/by-path (which Intel's compute-runtime uses to enumerate
-    # GPUs), even though /dev/dri/renderD* itself is present and openable. Pair
-    # this with the bind mount in `volumes:` below, which mirrors the host
-    # directory exactly and fixes that.
+    #   docker compose -f docker-compose.yml -f docker-compose.cpu.yml          up -d
+    #   docker compose -f docker-compose.yml -f docker-compose.intel.yml        up -d
+    #   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml       up -d
+    #   docker compose -f docker-compose.yml -f docker-compose.amd.yml          up -d
+    #   docker compose -f docker-compose.yml -f docker-compose.nvidia-intel.yml up -d
     #
-    # Windows 11 / WSL2 Intel Hosts:
-    # devices:
-    #   - /dev/dxg:/dev/dxg     # WSL DirectX GPU bridge for Intel/NVIDIA compute
-    #   - /dev/dri:/dev/dri     # Optional: exposed DRM render nodes in WSL2
-    #   - /dev/accel:/dev/accel # Optional: exposed NPU accel nodes in WSL2
-    #
-    # Windows 11 / WSL2 Intel Hosts -- telemetry access (optional, only needed if
-    # intel_gpu_top/npu_busy_time PMU/sysfs access is blocked by container isolation;
-    # see docs/SETUP.md's "Intel telemetry container-access note"):
-    # SECURITY WARNING: pid: host and privileged: true grant host-wide process
-    # visibility and near-full host device/kernel access -- treat privileged mode as
-    # a last resort only on hosts you trust. Try the narrower cap_add (PERFMON/
-    # SYS_ADMIN) and read-only sysfs mounts below first; only add pid: host/
-    # privileged: true if telemetry still fails to enumerate with those alone.
-    # pid: host
-    # privileged: true
-    # cap_add:
-    #   - PERFMON
-    #   - SYS_ADMIN
-    # Add these mounts to this service's existing `volumes:` block below; do not
-    # uncomment a second `volumes:` key.
-    # volumes:
-    #   - /sys:/sys:ro
-    #   # The next two paths are NPU-specific and may not exist on hosts without an
-    #   # Intel NPU (e.g. iGPU/Arc-only systems) or on some WSL2 kernel configurations --
-    #   # Docker Compose has no "mount only if present" option, and bind-mounting a
-    #   # nonexistent host path can fail or create an unintended empty directory
-    #   # depending on Docker version/OS. Drop these two lines if your host doesn't
-    #   # expose them (check `ls /sys/class/accel /sys/bus/pci/drivers/intel_vpu` on
-    #   # the host first).
-    #   - /sys/class/accel:/sys/class/accel:ro
-    #   - /sys/bus/pci/drivers/intel_vpu:/sys/bus/pci/drivers/intel_vpu:ro
-
-    # =========================================================================
-    # OPTION 3: AMD Radeon Silicon (ROCm / DirectML)
-    # =========================================================================
-    # Linux AMD Hosts (Bare-metal ROCm):
-    # group_add:
-    #   - "${HOST_AMD_RENDER_GID:-990}"  # Host render group (derive via: stat -c '%g' /dev/dri/renderD*)
-    #   - "${HOST_AMD_VIDEO_GID:-44}"    # Host video group (derive via: stat -c '%g' /dev/kfd)
-    # devices:
-    #   - /dev/kfd:/dev/kfd     # AMD ROCm Kernel Fusion Driver node (Bare-metal Linux only)
-    #   - /dev/dri:/dev/dri     # AMD Direct Rendering Manager nodes
-    # security_opt:
-    #   - seccomp=unconfined   # Native Linux only (WSL2/DirectML does not use this)
-    #
-    # Windows 11 / WSL2 AMD Hosts (DirectML / WSL):
-    # For WSL2 deployments, merge the WSL override file:
-    #   docker compose -f docker-compose.yml -f docker-compose.wsl.yml up -d
-    # Note: On WSL2, /dev/dxg provides hardware detection; full GPU inference
-    # requires bare-metal Linux ROCm (/dev/kfd).
+    # Set BUILD_TARGET in .env to the matching target. WSL2 hosts also merge
+    # docker-compose.wsl.yml.
 
     environment:
       - TZ=${TZ:-UTC}
@@ -145,7 +100,12 @@ services:
       # --- [INTEL / OPENVINO RUNTIME HINTS] ---
       # Optional overrides. Leave blank for automated detection.
       - LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME:-}
-      - ONEAPI_DEVICE_SELECTOR=${ONEAPI_DEVICE_SELECTOR:-}
+      # Passed through only when the host actually sets it. Assigning an empty value here
+      # is not neutral: Intel's SYCL runtime (used by the XPU torch build in the
+      # intel-xpu image) rejects an empty ONEAPI_DEVICE_SELECTOR with an uncaught C++
+      # exception, which aborts the process -- the service crash-looped on SIGSEGV until
+      # this stopped being set to "".
+      - ONEAPI_DEVICE_SELECTOR
       - ZE_AFFINITY_MASK=${ZE_AFFINITY_MASK:-}
       - OCL_ICD_VENDORS=${OCL_ICD_VENDORS:-}
 
@@ -157,20 +117,6 @@ services:
       # Speaker diarization token (Hugging Face). Required for PyAnnote speaker segmentation.
       - DIARIZATION_HF_TOKEN=${DIARIZATION_HF_TOKEN:-}
 
-      # --- [LIBRARY PATH FIXES] ---
-      # 1. ctranslate2 (faster-whisper's backend) dlopen()s libcublas.so.12 /
-      #    libcudnn.so.9, but the main env only ships CUDA 13.x libs (matching
-      #    torch); the isolated WhisperX layer happens to bundle CUDA 12, so
-      #    point at it here instead of vendoring a second CUDA 12 install.
-      # 2. /usr/lib/x86_64-linux-gnu is prepended ahead of everything else: on
-      #    a hybrid NVIDIA+Intel host, the CUDA apt packages' own libOpenCL.so.1
-      #    otherwise wins the default search over the system's multi-vendor ICD
-      #    loader, silently hiding the Intel GPU from OpenCL/OpenVINO.
-      # Must fully restate (not reference ${LD_LIBRARY_PATH}) the Dockerfile's
-      # baked-in value -- Compose interpolates that against the host/compose
-      # environment at parse time, not the image's runtime value.
-      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/app/libs/whisperx/nvidia/cublas/lib:/app/libs/whisperx/nvidia/cudnn/lib:/usr/lib/wsl/lib:/opt/rocm/lib:/opt/intel/openvino/runtime/lib/intel64:/opt/intel/openvino/runtime/3rdparty/tbb/lib:/opt/intel/openvino/runtime/3rdparty/omp/lib
-
       # --- [ENGINE CONFIGURATION] ---
       # Hardware Target: AUTO (Resolves CUDA -> AMD -> Intel GPU -> Intel NPU -> CPU),
       # or explicit: CPU, CUDA, GPU, NPU, AMD
@@ -180,7 +126,15 @@ services:
       # Model Weight Source (Faster-Whisper ID or local path)
       - ASR_MODEL=Systran/faster-whisper-large-v3
       # ASR engine backend: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
+      # AUTO resolves to FASTER-WHISPER on every host, whatever accelerators are present.
+      # For accelerated ASR on Intel set INTEL-WHISPER; on AMD set OPENAI-WHISPER with the
+      # amd-rocm-torch image. CTranslate2 has no OpenVINO or ROCm backend, so AUTO decodes
+      # on the CPU there and the startup banner says so.
       - ASR_ENGINE=${ASR_ENGINE:-AUTO}
+      # Off by default. On a host with BOTH a CUDA/AMD GPU and an Intel GPU/NPU, "true"
+      # runs each unit's native engine in its own worker so both accelerators stay busy.
+      # Opt-in because it makes the engine depend on which unit serves a request.
+      - HYBRID_ENGINES=${HYBRID_ENGINES:-false}
       # Intel Whisper long-media stability tuning (only used by INTEL-WHISPER)
       - INTEL_ASR_CHUNK_DURATION=300
 
@@ -202,7 +156,29 @@ services:
       # Isolation Model Filename
       - VOCAL_SEPARATION_MODEL=UVR-MDX-NET-Inst_HQ_3.onnx
       # Vocal Separation Logic Toggles
-      - ENABLE_VOCAL_SEPARATION=true
+      #
+      # Off by default, and configurable rather than hardcoded -- a bare `true` here
+      # silently overrode both config.py's default and any value the operator exported.
+      #
+      # Measured on an RTX 5090, same clips, same engine, only this flag changing (two
+      # runs each, byte-identical, so the deltas are not noise):
+      #
+      #                            off        on
+      #   clean speech overlap     0.9469     0.9469     no gain at all
+      #   harder tail languages    0.7994     0.7826     loses 1.7 points
+      #   window misses /118       54         55
+      #   hallucinated quiet /25   12         10         its one real win
+      #   long-form RTF            0.063      0.110      76% slower
+      #
+      # So it costs 76% more compute to remove two hallucinated windows in twenty-five,
+      # while doing nothing for clean speech and slightly hurting harder audio. And for
+      # that one win there is a better lever: WHISPERX scores 0/25 on the same metric and
+      # is 2.2x faster than FASTER-WHISPER (see the engine comparison in
+      # docs/REMOTE_VALIDATION.md).
+      #
+      # Worth turning on for music-heavy source material, where there is genuinely
+      # non-speech content to strip -- which is not what the test corpus represents.
+      - ENABLE_VOCAL_SEPARATION=${ENABLE_VOCAL_SEPARATION:-false}
       - ENABLE_LD_PREPROCESSING=true
       # Coalesce identical concurrent /detect-language requests (same local_path).
       - ENABLE_LD_REQUEST_COALESCING=true
@@ -240,8 +216,31 @@ services:
       # Redirect all transient processing files (uploads, FFmpeg output,
       # UVR stems) to RAM-backed storage. Eliminates SSD write wear.
       - WHISPER_TEMP_DIR=/tmp/whisper
-      # Ensure numba/librosa JIT cache is writable for non-root runtime user.
-      - NUMBA_CACHE_DIR=/tmp/numba-cache
+      # --- [KERNEL / JIT CACHES] ---
+      # Every compiled-kernel cache must land inside ./model_cache, which is the one
+      # bind-mounted, persistent directory. A kernel cache left on the container
+      # filesystem is silently rebuilt on every recreate, and that is not a small cost:
+      # measured on an Intel Arc iGPU, the first transcription after a cold SYCL cache
+      # took 535s against 11s warm -- a 50x difference, entirely one-time JIT.
+      #
+      # XDG_CACHE_HOME relocates ~/.cache wholesale, which is where Intel's
+      # neo_compiler_cache (Level Zero / OpenCL) and ze_intel_npu_cache land, along with
+      # torch's own caches. The rest do not follow XDG and need naming individually.
+      - XDG_CACHE_HOME=/app/model_cache/kernel_cache/xdg
+      # SYCL only writes a persistent on-disk cache when explicitly told to; without this
+      # it recompiles per process no matter where the directory points.
+      - SYCL_CACHE_PERSISTENT=1
+      - SYCL_CACHE_DIR=/app/model_cache/kernel_cache/sycl
+      # Intel compute-runtime, for driver versions that read this instead of XDG.
+      - NEO_CACHE_DIR=/app/model_cache/kernel_cache/neo
+      - cl_cache_dir=/app/model_cache/kernel_cache/neo
+      # NVIDIA PTX JIT, for a driver newer than the CUDA the wheels were built against.
+      - CUDA_CACHE_PATH=/app/model_cache/kernel_cache/cuda
+      - TRITON_CACHE_DIR=/app/model_cache/kernel_cache/triton
+      # numba/librosa JIT. Previously /tmp/numba-cache on tmpfs for SSD write protection,
+      # but a JIT cache is written once and read forever -- keeping it on a RAM disk paid
+      # the compile cost again on every restart to avoid a few MB of writes.
+      - NUMBA_CACHE_DIR=/app/model_cache/kernel_cache/numba
       # Minimum free space (MB) in TEMP_DIR before falling back to disk.
       # Default: 2048 MB.  The service also applies a 1.5× headroom
       # multiplier on top of the estimated WAV size.  For very long
@@ -250,17 +249,15 @@ services:
       # — no ENOSPC crash will occur.
       # - WHISPER_TEMP_MIN_FREE_MB=2048
 
-      # RAM-backed temp storage for transient processing files (SSD protection).
-      # 2G is sufficient for most movies (≤4h).  Longer files automatically
-      # fall back to SSD-backed persistent storage when tmpfs runs low.
+    # RAM-backed temp storage for transient processing files (SSD protection).
+    # Explicit mode survives `docker compose restart`, which remounts tmpfs and
+    # otherwise hides the image-layer chmod from the non-root service user.
+    # 2G is sufficient for most movies (≤4h). Longer files automatically fall
+    # back to SSD-backed persistent storage when tmpfs runs low.
     tmpfs:
-      - /tmp/whisper:size=2G
-      - /tmp/numba-cache:size=128M
+      - /tmp/whisper:size=2G,mode=1777
 
     volumes:
-      # Intel OPTION 2 above: bind mount /dev/dri (fixes by-path) -- uncomment
-      # together with that block.
-      # - /dev/dri:/dev/dri
       # Persistent cache for AI models and pre-compiled hardware binaries (NPU)
       - ./model_cache:/app/model_cache
       # Persistent storage for task history, telemetry, and system logs

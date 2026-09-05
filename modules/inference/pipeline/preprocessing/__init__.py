@@ -22,6 +22,7 @@ from modules.inference import scheduler
 from modules.inference.pipeline import openvino_provider_dispatch, openvino_resolver
 
 from . import execution as preprocessing_execution
+from . import init_locks, isolation_policy
 from . import provider as preprocessing_provider
 from .helpers import apply_onnx_optimizations as _apply_onnx_optimizations
 from .helpers import existing_stem_candidates as _existing_stem_candidates_impl
@@ -31,33 +32,17 @@ from .helpers import separate_with_fallback as _separate_with_fallback_impl
 from .helpers import stem_resolution_candidates as _stem_resolution_candidates_impl
 
 logger = logging.getLogger(__name__)
-_OPENVINO_INIT_LOCKS: dict[str, threading.Lock] = {}
-_OPENVINO_INIT_LOCKS_GUARD = threading.Lock()
 
-
-def _openvino_init_lock_key(device_id: str, device_type: str) -> str:
-    """Return lock key for OpenVINO init serialization."""
-    target = (device_id or device_type or "OPENVINO").upper()
-    family = openvino_resolver.openvino_device_family(target) or target
-    if family in {"GPU", "NPU"}:
-        return family
-    return target
-
-
-def _get_or_create_openvino_init_lock(key: str) -> threading.Lock:
-    lock = _OPENVINO_INIT_LOCKS.get(key)
-    if lock is not None:
-        return lock
-    lock = threading.Lock()
-    _OPENVINO_INIT_LOCKS[key] = lock
-    return lock
-
-
-def _openvino_init_lock_for(device_id: str, device_type: str) -> threading.Lock:
-    """Return a stable lock scoped by accelerator family/slot for OpenVINO init."""
-    key = _openvino_init_lock_key(device_id, device_type)
-    with _OPENVINO_INIT_LOCKS_GUARD:
-        return _get_or_create_openvino_init_lock(key)
+#: Isolation policy lives in isolation_policy; these names are kept so existing callers and
+#: tests continue to reach it through this package.
+_MIN_ISOLATABLE_INTEL_GPU_ARCH = isolation_policy.MIN_ISOLATABLE_INTEL_GPU_ARCH
+_ISOLATION_UNSUPPORTED_DEVICES = isolation_policy.ISOLATION_UNSUPPORTED_DEVICES
+_parse_intel_gpu_arch = isolation_policy.parse_intel_gpu_arch
+_intel_gpu_arch_for = isolation_policy.intel_gpu_arch_for
+_isolation_supported = isolation_policy.isolation_supported
+#: OpenVINO session creation is serialised per accelerator family; see init_locks.
+_openvino_init_lock_for = init_locks.lock_for
+_openvino_init_lock_key = init_locks.lock_key
 
 
 class UVRAcceleratorUnavailableError(RuntimeError):
@@ -69,14 +54,25 @@ logging.getLogger("audio_separator").setLevel(logging.INFO)
 
 CACHE_DIR = Path(config.PREPROCESSING_CACHE_DIR)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
-try:
-    from audio_separator.separator import Separator
-except ImportError:
-    Separator = None
+# Deliberately NOT imported at module load. audio_separator pulls in onnxruntime, which
+# this project supplies from /app/libs/<vendor> through runtime path patching. Importing
+# here runs before that patching, fails with ModuleNotFoundError, and caches Separator=None
+# for the life of the process -- after which every request reports "audio-separator not
+# installed" although the package is present. Observed in the full image, whose preprocessing
+# worker patched the path one second after the module had already given up.
+Separator = None  # pylint: disable=invalid-name
 
 
 def _lazy_import_separator():
-    """Lazy import of audio-separator components."""
+    """Import audio-separator on first use, after ONNX path patching has run."""
+    global Separator  # noqa: PLW0603  # pylint: disable=global-statement
+    if Separator is None:
+        try:
+            from audio_separator.separator import Separator as _Separator  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+        except ImportError as exc:
+            logger.debug("[UVR] audio-separator unavailable: %s", exc)
+            return None
+        Separator = _Separator
     return Separator
 
 
@@ -244,6 +240,20 @@ def _stem_resolution_candidates(effective_sep, source_audio_path):
     return _stem_resolution_candidates_impl(effective_sep, source_audio_path, _candidate_output_dirs)
 
 
+def create_manager(assigned_unit=None):
+    """Build the preprocessor for ``assigned_unit``, in-process or behind a worker.
+
+    Callers construct through here rather than instantiating PreprocessingManager
+    directly, so isolation is a single decision rather than one per call site. Whether a
+    unit *can* be isolated is decided in isolation_policy, which documents the Intel GPU
+    generation boundary that decision turns on.
+    """
+    if getattr(config, "ISOLATE_PREPROCESSING", False) and _isolation_supported(assigned_unit):
+        isolated = importlib.import_module("modules.inference.pipeline.preprocessing.isolated")
+        return isolated.IsolatedPreprocessor(assigned_unit)
+    return PreprocessingManager(assigned_unit)
+
+
 class PreprocessingManager:
     """
     Orchestrates audio cleaning models (UVR/MDX-NET) for a specific hardware unit.
@@ -307,7 +317,10 @@ class PreprocessingManager:
     def _create_separator_for_unit(self):
         separator_class = _lazy_import_separator()
         if separator_class is None:
-            raise ImportError("audio-separator not installed.")
+            raise ImportError(
+                "audio-separator could not be imported (it needs onnxruntime, which is supplied "
+                "by runtime path patching -- check the [System] Runtime line in the log)."
+            )
         if ort is None:
             raise ImportError("onnxruntime not installed.")
         available_providers = ort.get_available_providers()
@@ -466,33 +479,38 @@ class PreprocessingManager:
             return candidate
         return str(CACHE_DIR / path_value)
 
-    def _run_preprocess_pipeline(self, audio_path, yield_cb=None):
+    def _run_preprocess_pipeline(self, audio_path, yield_cb=None, stage="Vocal Separation"):
         """Run the vocal-separation preprocessing pipeline and return resolved output path."""
         original_path = audio_path
         audio_path = utils.prepare_for_uvr(audio_path, yield_cb=yield_cb)
         if not audio_path:
             return original_path
-        scheduler.update_task_progress(5, "Vocal Separation")
+        scheduler.update_task_progress(5, stage)
         _run_optional_yield_impl(yield_cb)
         sep = self._init_separator()
         stems, effective_sep = self._run_isolation_pipeline(sep, audio_path, yield_cb=yield_cb)
         _run_optional_yield_impl(yield_cb)
         return self._resolve_isolation_output_path(stems, effective_sep, audio_path)
 
-    def preprocess_audio(self, audio_path, force=False, yield_cb=None):
-        """Perform vocal isolation on a file using the unit's separator."""
+    def preprocess_audio(self, audio_path, force=False, yield_cb=None, stage="Vocal Separation"):
+        """Perform vocal isolation on a file using the unit's separator.
+
+        ``stage`` lets a caller keep its own dashboard label. Language detection isolates
+        a short montage before the real transcription isolates the full file; stamping
+        both "Vocal Separation" made the dashboard look like it had gone backwards.
+        """
         if not config.ENABLE_VOCAL_SEPARATION and not force:
             return audio_path
 
         try:
             self._purge_stale_cache()
-            return self._run_preprocess_pipeline(audio_path, yield_cb=yield_cb)
+            return self._run_preprocess_pipeline(audio_path, yield_cb=yield_cb, stage=stage)
         except (UVRAcceleratorUnavailableError, AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
-            return self._handle_preprocess_error(audio_path, yield_cb, e)
+            return self._handle_preprocess_error(audio_path, yield_cb, e, stage=stage)
 
-    def _handle_preprocess_error(self, audio_path, yield_cb, error: Exception):
+    def _handle_preprocess_error(self, audio_path, yield_cb, error: Exception, stage="Vocal Separation"):
         if isinstance(error, UVRAcceleratorUnavailableError) or self._should_cpu_fallback(error):
-            return self._run_cpu_fallback(audio_path, yield_cb, error)
+            return self._run_cpu_fallback(audio_path, yield_cb, error, stage=stage)
         logger.error("[UVR] Processing failed on %s: %s", self._device_id, error)
         return audio_path
 
@@ -503,7 +521,7 @@ class PreprocessingManager:
             return openvino_resolver.is_openvino_session_fallback_error(error)
         return True
 
-    def _run_cpu_fallback(self, audio_path, yield_cb, error: Exception):
+    def _run_cpu_fallback(self, audio_path, yield_cb, error: Exception, stage="Vocal Separation"):
         logger.warning("[UVR] Falling back to CPU preprocessing after %s failed: %s", self._device_id, error)
         original_device_id = self._device_id
         original_device_type = self._device_type
@@ -511,7 +529,7 @@ class PreprocessingManager:
         self._device_id = "CPU"
         self._device_type = "CPU"
         try:
-            return self._run_preprocess_pipeline(audio_path, yield_cb=yield_cb)
+            return self._run_preprocess_pipeline(audio_path, yield_cb=yield_cb, stage=stage)
         except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as cpu_error:
             logger.error("[UVR] CPU fallback preprocessing failed: %s", cpu_error)
             return audio_path

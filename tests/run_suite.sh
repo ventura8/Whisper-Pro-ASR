@@ -30,9 +30,9 @@ fi
 # gated but never duplicated, so "all" and any single stage share the same path.
 STAGE="${PIPELINE_STAGE:-all}"
 case "$STAGE" in
-all | lint | python-tests | js-unit-tests | e2e-fixture | e2e-real) ;;
+all | lint | python-tests | js-unit-tests | e2e-fixture | e2e-real | real-audio | real-audio-stress) ;;
 *)
-	echo "Error: unknown PIPELINE_STAGE '$STAGE'. Expected one of: all, lint, python-tests, js-unit-tests, e2e-fixture, e2e-real."
+	echo "Error: unknown PIPELINE_STAGE '$STAGE'. Expected one of: all, lint, python-tests, js-unit-tests, e2e-fixture, e2e-real, real-audio, real-audio-stress."
 	exit 1
 	;;
 esac
@@ -322,7 +322,11 @@ if stage_active python-tests; then
 	echo ""
 	echo "--- Running Pytest (parallel bulk, -n auto) ---"
 	set +e
-	python3 -m pytest --verbosity=0 -ra "${IGNORE_ARGS[@]}" -n auto --dist=loadscope \
+	# "not gpu and not slow": GPU-marked tests need real silicon and are excluded from the
+	# CI stage the same way the multi-minute ones are. They carried their own skip guards,
+	# so this changes nothing today -- which is the point: a guard that is deleted or that
+	# mis-detects should not be the only thing keeping a GPU test out of a CPU-only runner.
+	python3 -m pytest --verbosity=0 -ra -m "not gpu and not slow" "${IGNORE_ARGS[@]}" -n auto --dist=loadscope \
 		--cov=. --cov-report= --junitxml=pytest-bulk.xml | tee coverage_output_bulk.txt
 	BULK_EXIT=${PIPESTATUS[0]}
 	set -e
@@ -330,7 +334,7 @@ if stage_active python-tests; then
 	echo ""
 	echo "--- Running Pytest (serial, timing-sensitive concurrency tests) ---"
 	set +e
-	python3 -m pytest --verbosity=0 -ra "${SERIAL_TEST_PATHS[@]}" \
+	python3 -m pytest --verbosity=0 -ra -m "not gpu and not slow" "${SERIAL_TEST_PATHS[@]}" \
 		--cov=. --cov-append --cov-report= --junitxml=pytest-serial.xml | tee coverage_output_serial.txt
 	SERIAL_EXIT=${PIPESTATUS[0]}
 	set -e
@@ -416,6 +420,42 @@ if stage_active e2e-real; then
 	else
 		echo "--- Skipping Real-Backend E2E Tests (SKIP_REAL_E2E=1) ---"
 	fi
+fi
+
+# Both real-audio stages are opt-in and never part of "all": they need a LIVE service with
+# a provisioned model cache, which neither CI nor a bare `run_suite.sh` invocation has.
+#
+#   real-audio         representative subset, budgeted under ~20 minutes -- the one a
+#                      pipeline or a pre-merge check should run.
+#   real-audio-stress  the whole matrix (~2 hours, dominated by UVR preprocessing) plus,
+#                      when RUN_GPU_LONG_ASR=1 and an NVIDIA host is present, the
+#                      20-minute long-form clip. Deliberately separate so nobody pays two
+#                      hours to learn something the smoke set would have caught.
+run_real_audio() {
+	# --no-cov keeps these from writing a partial .coverage that a later combine would read.
+	set +e
+	python3 -m pytest tests/real_audio "$@" -ra --no-cov
+	local exit_code=$?
+	set -e
+	if [ "$exit_code" -ne 0 ]; then
+		echo "Error: real-audio stage failed (exit=$exit_code)"
+		exit "$exit_code"
+	fi
+}
+
+if [ "$STAGE" = "real-audio" ]; then
+	echo ""
+	echo "--- Running Real-Audio Smoke Set (live service, target <20min) ---"
+	run_real_audio -m "real_audio and smoke"
+fi
+
+if [ "$STAGE" = "real-audio-stress" ]; then
+	echo ""
+	echo "--- Running Full Real-Audio Matrix (live service, ~2h) ---"
+	run_real_audio -m "real_audio and not slow"
+	echo ""
+	echo "--- Running Long-Form Stress (skipped unless RUN_GPU_LONG_ASR=1 on an NVIDIA host) ---"
+	run_real_audio -m "real_audio and slow"
 fi
 
 echo ""

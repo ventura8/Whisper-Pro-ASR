@@ -14,7 +14,7 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-from modules.core import config, utils
+from modules.core import config, model_integrity, model_provisioning, utils
 from modules.inference.pipeline import vad
 
 logger = logging.getLogger(__name__)
@@ -100,6 +100,11 @@ def _closest_midpoint(candidates: List[float], target_end: float) -> float:
     return min(candidates, key=lambda x: abs(x - target_end))
 
 
+def _init_intel_pipeline(model_path: str, device: str):
+    ov_genai = importlib.import_module("openvino_genai")
+    return ov_genai.WhisperPipeline(model_path, device)
+
+
 class IntelWhisperEngine:
     """
     ASR Engine using OpenVINO GenAI for Intel hardware acceleration.
@@ -113,13 +118,100 @@ class IntelWhisperEngine:
         logger.info("[Intel] Initializing OpenVINO GenAI pipeline on %s...", device)
         try:
             self._load_pipeline(model_path, device)
-        except (RuntimeError, ValueError, ImportError) as e:
+        except (RuntimeError, ValueError, ImportError, OSError) as e:
             self._log_init_error(model_path, e)
-            raise
+            if not self._maybe_retry_pipeline(model_path, device):
+                raise
+        self._verify_device_executes(model_path)
+
+    def _verify_device_executes(self, model_path: str) -> None:
+        """Prove the device can actually run inference, not merely build a pipeline.
+
+        The NPU builds a WhisperPipeline happily and then fails on every generate() with
+        `L0 pfnAppendGraphExecute ... ZE_RESULT_ERROR_UNKNOWN`, because the exported IR is
+        dynamic-shaped ('[?,?,1280]') and the NPU plugin needs static upper bounds. Without
+        this check the service starts healthy, reports 'ASR Runtime: OpenVINO (NPU)', and
+        returns HTTP 500 for every request -- a broken service that looks configured.
+
+        Scoped to the NPU deliberately: the GPU path is exercised constantly and does not
+        need a warmup tax on every start.
+        """
+        if not getattr(config, "VERIFY_RUNTIME", True):
+            return
+        if not self.device.upper().startswith("NPU"):
+            return
+
+        try:
+            self.pipeline.generate(np.zeros(16000, dtype=np.float32))
+            logger.info("[Intel] NPU verified: a warmup inference completed.")
+            return
+        except (RuntimeError, ValueError) as e:
+            detail = str(e).replace("\n", " ")[:200]
+
+        logger.error(
+            "[Intel] The NPU built the pipeline but cannot execute it: %s. This model's "
+            "OpenVINO IR is dynamic-shaped and the NPU plugin requires static upper bounds.",
+            detail,
+        )
+        if not self._fallback_to_cpu(model_path):
+            raise RuntimeError(
+                "Intel NPU cannot execute this model (dynamic input shapes) and the CPU "
+                "fallback could not be loaded either. Re-run with ASR_DEVICE=GPU."
+            )
+
+    def _fallback_to_cpu(self, model_path: str) -> bool:
+        """Move ASR to the CPU rather than serve 500s, and say so loudly.
+
+        CPU, not the iGPU, and deliberately so. This engine is serving an NPU unit on a
+        machine whose GPU unit is already running ASR; sending this one to the GPU too
+        would put both units on one device and serialise them. The NPU keeps doing what it
+        is good for -- UVR preprocessing -- while ASR for this unit runs on the CPU, so the
+        two units genuinely proceed in parallel.
+
+        A silent fallback is the failure mode this project keeps getting bitten by, so this
+        logs at ERROR and rewrites self.device, and the status then reports what really ran.
+        """
+        try:
+            self._load_pipeline(model_path, "CPU")
+        except (RuntimeError, ValueError, ImportError, OSError) as e:
+            logger.error("[Intel] Fallback to CPU also failed: %s", e)
+            return False
+        self.device = "CPU"
+        logger.error(
+            "[Intel] ASR FALLING BACK to the CPU for this NPU unit; the NPU cannot execute "
+            "this model. The NPU remains available for UVR preprocessing."
+        )
+        return True
+
+    def _maybe_retry_pipeline(self, model_path: str, device: str) -> bool:
+        if not self._restore_corrupted_model(model_path):
+            return False
+        try:
+            self._load_pipeline(model_path, device)
+            return True
+        except (RuntimeError, ValueError, ImportError, OSError) as retry_error:
+            logger.error("[Intel] Retry after corrupted-model purge failed: %s", retry_error)
+        return False
+
+    @staticmethod
+    def _restore_corrupted_model(model_path: str) -> bool:
+        """Purge a corrupted OpenVINO directory and fetch the IR again. False if it cannot.
+
+        Purging deletes the directory, so a retry that skipped the re-provision could only
+        fail with "path does not exist" -- a bounded retry guaranteed to spend an attempt and
+        bury the real initialization error under a less informative one.
+        """
+        if not os.path.isdir(model_path) or model_integrity.verify_openvino_model_dir(model_path):
+            return False
+        if not model_integrity.purge_corrupted_path(model_path, description=f"OpenVINO model ({model_path})"):
+            return False
+        if model_provisioning.ensure_openvino_whisper(model_path):
+            return True
+        logger.error("[Intel] Could not re-provision the OpenVINO IR after purging %s.", model_path)
+        return False
 
     def _load_pipeline(self, model_path: str, device: str):
-        ov_genai = importlib.import_module("openvino_genai")
-        self.pipeline = ov_genai.WhisperPipeline(model_path, device)
+        self.pipeline = _init_intel_pipeline(model_path, device)
         logger.info("[Intel] OpenVINO GenAI pipeline loaded successfully.")
 
     def _log_init_error(self, model_path: str, e: Exception):
@@ -301,12 +393,60 @@ class IntelWhisperEngine:
             return
         logger.warning("[Intel] Language '%s' not found in model map. Using auto-detection.", language)
 
+    def _resolve_num_beams(self, requested: int) -> int:
+        """Clamp beam search to greedy on Intel GPU/NPU devices.
+
+        OpenVINO GenAI's WhisperPipeline cannot run beam search on a non-CPU device:
+        the beam scorer reads logits through ov::Tensor::data(), which is unimplemented
+        for the remote tensors a GPU/NPU pipeline produces. It surfaces as
+        "iremote_tensor.hpp:32: Not Implemented" (or, with timestamps enabled, as a beam
+        vs. logits batch-size mismatch). Greedy decoding is the only working mode, and
+        it supports timestamps. Verified on openvino-genai 2026.3.1 / Intel UHD Graphics.
+        """
+        if requested <= 1 or self.device.upper().startswith("CPU"):
+            return requested
+        logger.warning(
+            "[Intel] Beam search (beam_size=%d) is unsupported by OpenVINO GenAI on %s; falling back to greedy decoding.",
+            requested,
+            self.device,
+        )
+        return 1
+
     def _apply_generation_quality_params(self, gen_config: Any, **kwargs):
-        gen_config.num_beams = kwargs.get("beam_size", config.DEFAULT_BEAM_SIZE)
+        gen_config.num_beams = self._resolve_num_beams(kwargs.get("beam_size", config.DEFAULT_BEAM_SIZE))
         gen_config.max_new_tokens = kwargs.get("max_new_tokens", 448)
         gen_config.temperature = kwargs.get("temperature", 0.0)
         gen_config.length_penalty = 1.0
         gen_config.return_timestamps = True
+        # Break runaway decoding. Without this the long-form clip produced 15 consecutive
+        # repeats of 'el lujo de la luna' -- a phrase absent from the ground truth -- all
+        # inside one chunk, 357s to 373s, the same five words back to back.
+        #
+        # repetition_penalty, NOT no_repeat_ngram_size. WhisperGenerationConfig exposes
+        # no_repeat_ngram_size and accepts the assignment (it reads back as 3, from a
+        # default of 2**64-1), but OpenVINO GenAI's WhisperPipeline does not act on it:
+        # setting it left the loop at exactly 15 repeats, unchanged. Its presence on the
+        # config object makes it look supported, so this comment is the only warning.
+        # repetition_penalty is honoured -- the same run dropped to 10 repeats of a real
+        # fixture sentence, within the 12 the timeline itself contains.
+        #
+        # Greedy decoding only. OpenVINO GenAI validates the two against each other and
+        # rejects the combination outright:
+        #
+        #     'repetition_penalty' is not currently supported by beam search and should be
+        #     1.0f, but got 1.15
+        #
+        # which is a hard RuntimeError on every request, not a warning. It never showed on
+        # an Intel GPU or NPU because _resolve_num_beams already clamps those to greedy;
+        # the CPU path keeps beam search, so it surfaced only there -- including the
+        # NPU-cannot-execute fallback, which rewrites self.device to CPU and thereby
+        # re-enables beam search on a config built for greedy. Verified on the Intel NUC.
+        #
+        # Beam search is the better accuracy trade where it is available, so it wins here
+        # and the loop guard applies to the greedy paths, which is where the runaway
+        # decoding was actually recorded.
+        if gen_config.num_beams <= 1:
+            gen_config.repetition_penalty = kwargs.get("repetition_penalty", 1.15)
 
     def _apply_initial_prompt(self, gen_config: Any, initial_prompt: Optional[str]):
         if not initial_prompt:

@@ -1,12 +1,22 @@
 """Tests to increase coverage for modules/inference/intel_engine.py."""
 
 import importlib
+import os
+import shutil
 import types
 from unittest import mock
 
 import numpy as np
+import pytest
 
+from modules.core import model_integrity
 from modules.inference.engines import intel_engine
+
+
+def _sparse_file(path, size: int) -> None:
+    """Create ``path`` reporting ``size`` bytes without allocating them."""
+    path.touch()
+    os.truncate(path, size)
 
 
 def test_find_split_points_no_speech():
@@ -98,3 +108,103 @@ def test_engine_init_with_mock_pipeline(monkeypatch):
     assert engine.pipeline == mock_pipeline_instance
     assert engine.pipeline.device == "NPU"
     getattr(engine, "unload")()
+
+
+def test_intel_engine_init_corrupt_model_dir_purged(tmp_path):
+    """Test corrupted Intel model directory is detected and purged after initial load fails."""
+    corrupt_dir = tmp_path / "corrupt_ov"
+    corrupt_dir.mkdir()
+    (corrupt_dir / "openvino_encoder_model.xml").write_text("<xml/>")
+    # Missing .bin files
+
+    mock_genai = mock.MagicMock()
+    mock_genai.WhisperPipeline.side_effect = RuntimeError("Invalid model format")
+
+    # ensure_openvino_whisper is mocked out for two reasons: it is the step under test here,
+    # and left real it would attempt a multi-gigabyte download from the network in a unit test.
+    with mock.patch("importlib.import_module", return_value=mock_genai):
+        with mock.patch.object(intel_engine.model_provisioning, "ensure_openvino_whisper", return_value=True) as provision:
+            with pytest.raises(RuntimeError, match="Invalid model format"):
+                intel_engine.IntelWhisperEngine(model_path=str(corrupt_dir), device="NPU")
+
+    # Initial load failed, corruption was verified, the directory was purged, the IR was
+    # re-fetched, and the one bounded retry then failed too -- so the original error stands.
+    assert not corrupt_dir.exists()
+    provision.assert_called_once()
+    assert mock_genai.WhisperPipeline.call_count == 2
+
+
+def test_intel_engine_does_not_retry_a_load_it_cannot_reprovision_for(tmp_path):
+    """Purging deletes the weights, so a retry without re-provisioning cannot succeed.
+
+    Retrying anyway spends a load attempt to reach a guaranteed "path does not exist",
+    burying the real initialization error under a second, less informative one.
+    """
+    corrupt_dir = tmp_path / "corrupt_ov_no_reprovision"
+    corrupt_dir.mkdir()
+    (corrupt_dir / "openvino_encoder_model.xml").write_text("<xml/>")
+
+    mock_genai = mock.MagicMock()
+    mock_genai.WhisperPipeline.side_effect = RuntimeError("Invalid model format")
+
+    with mock.patch("importlib.import_module", return_value=mock_genai):
+        with mock.patch.object(intel_engine.model_provisioning, "ensure_openvino_whisper", return_value=False):
+            with pytest.raises(RuntimeError, match="Invalid model format"):
+                intel_engine.IntelWhisperEngine(model_path=str(corrupt_dir), device="NPU")
+
+    assert not corrupt_dir.exists()
+    assert mock_genai.WhisperPipeline.call_count == 1, "no second load attempt when there are no weights to load"
+
+
+def test_intel_engine_init_successful_retry_after_recovery(tmp_path):
+    """Test Intel engine succeeds on single bounded retry if model becomes valid."""
+    model_dir = tmp_path / "ov_model_retry"
+    model_dir.mkdir()
+
+    (model_dir / "openvino_encoder_model.xml").write_text("<xml/>")
+    # Initially missing bin files so invalid
+
+    mock_genai = mock.MagicMock()
+    call_count = 0
+    mock_pipeline = mock.MagicMock()
+
+    def fake_pipeline(_path, _device):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("Corrupted on first load")
+        return mock_pipeline
+
+    mock_genai.WhisperPipeline.side_effect = fake_pipeline
+
+    with (
+        mock.patch("importlib.import_module", return_value=mock_genai),
+        mock.patch.object(intel_engine.model_integrity, "purge_corrupted_path") as mock_purge,
+    ):
+
+        def fake_purge(target_path, description=""):
+            assert target_path == str(model_dir)
+            assert description
+            # Simulate purge and background restore/redownload with valid files.
+            shutil.rmtree(model_dir)
+            model_dir.mkdir()
+            # The .bin files are created sparse and sized from the verifier's own
+            # threshold: writing 51MB twice cost real time and disk, and a hardcoded size
+            # would silently stop clearing the bar if the constant ever rose.
+            (model_dir / "openvino_encoder_model.xml").write_text("<xml/>")
+            _sparse_file(model_dir / "openvino_encoder_model.bin", model_integrity.MIN_OPENVINO_BIN_BYTES + 1)
+            (model_dir / "openvino_decoder_model.xml").write_text("<xml/>")
+            _sparse_file(model_dir / "openvino_decoder_model.bin", model_integrity.MIN_OPENVINO_BIN_BYTES + 1)
+            (model_dir / "openvino_tokenizer.xml").write_text("<xml/>")
+            (model_dir / "openvino_tokenizer.bin").write_bytes(b"x" * 10)
+            (model_dir / "openvino_detokenizer.xml").write_text("<xml/>")
+            (model_dir / "openvino_detokenizer.bin").write_bytes(b"x" * 10)
+            (model_dir / "generation_config.json").write_text('{"max_length": 448}')
+            return True
+
+        mock_purge.side_effect = fake_purge
+
+        engine = intel_engine.IntelWhisperEngine(model_path=str(model_dir), device="NPU")
+        assert engine.pipeline is mock_pipeline
+        assert call_count == 2
+        mock_purge.assert_called_once()

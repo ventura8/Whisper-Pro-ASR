@@ -358,3 +358,43 @@ def test_ensure_wsl_library_path_prepends():
     ):
         ensure_wsl()
         assert bootstrap.os.environ.get("LD_LIBRARY_PATH") == "/usr/lib/wsl/lib:/other/lib"
+
+
+def test_explicit_cuda_falls_back_to_cpu_when_nvidia_libs_absent():
+    """A vendor-specific image without /app/libs/nvidia must not strand ASR_DEVICE=CUDA.
+
+    The image build uninstalls the global onnxruntime, so returning a nonexistent path
+    here would leave sys.path with no ONNX Runtime at all.
+    """
+    resolve_target_library = getattr(bootstrap, "_resolve_target_library")
+    with mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path == "/app/libs/cpu"):
+        target, reason = resolve_target_library("cuda", "auto", True, False, False)
+
+    assert target == "/app/libs/cpu"
+    assert reason == "CPU Runtime"
+
+
+def test_explicit_intel_falls_back_to_cpu_when_intel_libs_absent():
+    """Explicit intel/gpu/npu on an NVIDIA-only image must degrade to the CPU runtime."""
+    resolve_target_library = getattr(bootstrap, "_resolve_target_library")
+    with mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path == "/app/libs/cpu"):
+        target, reason = resolve_target_library("gpu", "auto", False, True, False)
+
+    assert target == "/app/libs/cpu"
+    assert reason == "CPU Runtime"
+
+
+def test_activate_target_library_falls_back_to_cpu_for_invalid_target():
+    """_activate_target_library must substitute the CPU runtime rather than returning bare."""
+    activate = getattr(bootstrap, "_activate_target_library")
+    boot_logger = mock.MagicMock()
+    with (
+        mock.patch.object(bootstrap.os.path, "exists", side_effect=lambda path: path == "/app/libs/cpu"),
+        mock.patch.object(bootstrap.importlib, "invalidate_caches"),
+        mock.patch.object(bootstrap, "_log_onnxruntime_load") as mock_log,
+    ):
+        activate(boot_logger, "/app/libs/nvidia", "NVIDIA CUDA")
+
+    boot_logger.warning.assert_called_once()
+    mock_log.assert_called_once()
+    assert mock_log.call_args[0][1] == "/app/libs/cpu"

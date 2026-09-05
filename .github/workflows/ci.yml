@@ -103,6 +103,57 @@ jobs:
           cache-from: type=gha,scope=whisper-pro-asr-test
           cache-to: type=gha,mode=max,scope=whisper-pro-asr-test
 
+  build-targets:
+    name: Validate ${{ matrix.target }} Target
+    runs-on: ubuntu-latest
+    needs: build-image
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [cpu, intel, intel-xpu, nvidia, nvidia-whisperx, full, nvidia-intel, amd, amd-rocm-torch]
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/local/share/boost || true
+          docker system prune -af --volumes || true
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Resolve Base Image For Target
+        id: base
+        env:
+          OPENVINO_BASE: >-
+            openvino/ubuntu24_runtime:2026.3.1@sha256:fdfa0f1c42f69b4cbf010999482a32279ac04a07b2fb53f449e67246dcb5f1df
+          UBUNTU_BASE: >-
+            ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+        run: |
+          # Only Intel-bearing targets need the OpenVINO runtime base.
+          case "${{ matrix.target }}" in
+            intel|intel-xpu|nvidia-intel|full) echo "image=$OPENVINO_BASE" >> "$GITHUB_OUTPUT" ;;
+            *)                       echo "image=$UBUNTU_BASE"   >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Build ${{ matrix.target }} Target (Validation)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          load: false
+          build-args: |
+            RUNTIME_BASE=${{ steps.base.outputs.image }}
+          cache-from: type=gha,scope=whisper-pro-asr-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=whisper-pro-asr-${{ matrix.target }}
+
   lint-and-security:
     name: Lint & Security
     needs: build-image
@@ -325,6 +376,166 @@ jobs:
             -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
             whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh"
 
+  release-description-validation:
+    name: Validate Release Metadata
+    needs:
+      - build-image
+      - lint-and-security
+      - python-tests
+      - js-unit-tests
+      - e2e-fixture
+      - e2e-real
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release_name: ${{ steps.release.outputs.release_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify GitHub Release Description Exists
+        id: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if ! echo "$TAG_NAME" | grep -qE '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "Error: tag '$TAG_NAME' does not match the expected 'vMAJOR.MINOR.PATCH' format."
+            exit 1
+          fi
+          notes_path="docs/releases/${TAG_NAME}_github_description.md"
+          if [ ! -f "$notes_path" ]; then
+            echo "Error: GitHub release description '$notes_path' is missing. Add it before tagging a release."
+            exit 1
+          fi
+          release_name=$(sed -n 's/^#[[:space:]]\{1,\}//p' "$notes_path" | head -n 1)
+          if [ -z "$release_name" ]; then
+            echo "Error: '$notes_path' has no H1 heading to use as the GitHub Release title."
+            exit 1
+          fi
+          echo "release_name=$release_name" >> "$GITHUB_OUTPUT"
+
+          expected_version="${TAG_NAME#v}"
+          pyproject_version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['tool']['poetry']['version'])")
+          package_version=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+          config_version=$(grep -m1 '^VERSION = ' modules/core/config.py | sed -E 's/^VERSION = "([^"]+)"$/\1/')
+          version_sources=(
+            "pyproject.toml:$pyproject_version"
+            "package.json:$package_version"
+            "modules/core/config.py:$config_version"
+          )
+          for source_pair in "${version_sources[@]}"; do
+            source_label="${source_pair%%:*}"
+            source_value="${source_pair#*:}"
+            if [ -z "$source_value" ] || [ "$source_value" != "$expected_version" ]; then
+              echo "Error: tag '$expected_version' vs $source_label '${source_value:-<not found>}'."
+              exit 1
+            fi
+          done
+
+  publish-images:
+    name: Push ${{ matrix.target }} Image
+    needs:
+      - build-image
+      - build-targets
+      - lint-and-security
+      - python-tests
+      - js-unit-tests
+      - e2e-fixture
+      - e2e-real
+      - release-description-validation
+    if: >
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [cpu, intel, intel-xpu, nvidia, nvidia-whisperx, full, nvidia-intel, amd, amd-rocm-torch]
+    permissions:
+      contents: read
+    env:
+      # Moving per-target tags (e.g. ":nvidia") only advance on main or a release tag.
+      PUBLISH_MOVING_TAG: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/local/share/boost || true
+          docker system prune -af --volumes || true
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # `full` claims the unsuffixed tags (latest / {{version}}), so a bare
+      # `docker pull ventura8/whisper-pro-asr` resolves to an image that runs on whatever
+      # hardware the host turns out to have: every vendor's ONNX Runtime (CPU, NVIDIA,
+      # Intel, AMD) plus WhisperX for diarization.
+      #
+      # This reverses an earlier decision that gave the tag to `nvidia-whisperx`, on the
+      # grounds that a `latest` puller on an NVIDIA box never uses the Intel and ROCm
+      # stacks. That cost is real -- `full` is ~21.1GB against ~18.4GB -- and it is
+      # accepted deliberately: `latest` should work on an unknown host rather than be the
+      # smallest image for the most likely one. Anyone who knows their hardware, or who
+      # cares about the 2.7GB, picks a specific target from the README's image table;
+      # `nvidia-whisperx` is still built and published under its own tag.
+      - name: Resolve Docker Metadata & Tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        with:
+          images: ventura8/whisper-pro-asr
+          tags: |
+            type=ref,event=branch,suffix=-${{ matrix.target }}
+            type=semver,pattern={{version}}-${{ matrix.target }}
+            type=semver,pattern={{major}}.{{minor}}-${{ matrix.target }}
+            type=raw,value=${{ matrix.target }},enable=${{ env.PUBLISH_MOVING_TAG }}
+            type=semver,pattern={{version}},enable=${{ matrix.target == 'full' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.target == 'full' }}
+            type=sha,format=long,enable=${{ matrix.target == 'full' }}
+            type=raw,value=latest,enable=${{ matrix.target == 'full' && github.ref == 'refs/heads/main' }}
+
+      - name: Resolve Base Image For Target
+        id: base
+        env:
+          OPENVINO_BASE: >-
+            openvino/ubuntu24_runtime:2026.3.1@sha256:fdfa0f1c42f69b4cbf010999482a32279ac04a07b2fb53f449e67246dcb5f1df
+          UBUNTU_BASE: >-
+            ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+        run: |
+          # Only Intel-bearing targets need the OpenVINO runtime base.
+          case "${{ matrix.target }}" in
+            intel|intel-xpu|nvidia-intel|full) echo "image=$OPENVINO_BASE" >> "$GITHUB_OUTPUT" ;;
+            *)                       echo "image=$UBUNTU_BASE"   >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Finalize & Push ${{ matrix.target }} Image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: true
+          build-args: |
+            RUNTIME_BASE=${{ steps.base.outputs.image }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=whisper-pro-asr-${{ matrix.target }}
+          labels: |
+            org.opencontainers.image.source=${{ github.event.repository.html_url }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
   publish:
     name: Publish & Release
     needs:
@@ -334,6 +545,13 @@ jobs:
       - js-unit-tests
       - e2e-fixture
       - e2e-real
+      - release-description-validation
+      # The GitHub Release and the Docker Hub description must not go out ahead of the
+      # images they describe: a release announcing tags that are still being pushed sends
+      # every early puller to a manifest that does not exist yet. On refs where
+      # publish-images is skipped by its own `if`, this dependency is satisfied as skipped
+      # rather than blocking, so branch builds are unaffected.
+      - publish-images
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -376,69 +594,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
-      - name: Resolve Docker Metadata & Tags
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
-        with:
-          images: ventura8/whisper-pro-asr
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=long
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Verify GitHub Release Description Exists
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          if ! echo "$TAG_NAME" | grep -qE '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "Error: tag '$TAG_NAME' does not match the expected 'vMAJOR.MINOR.PATCH' format."
-            exit 1
-          fi
-          # Curated GitHub Release body (same pattern as asus-zenbook-linux-tools).
-          notes_path="docs/releases/${TAG_NAME}_github_description.md"
-          if [ ! -f "$notes_path" ]; then
-            echo "Error: GitHub release description '$notes_path' is missing. Add it before tagging a release."
-            exit 1
-          fi
-
-          # Prefer the description H1 as the GitHub Release title; fail if missing.
-          release_name=$(sed -n 's/^#[[:space:]]\{1,\}//p' "$notes_path" | head -n 1)
-          if [ -z "$release_name" ]; then
-            echo "Error: '$notes_path' has no H1 heading to use as the GitHub Release title."
-            exit 1
-          fi
-          echo "RELEASE_NAME=$release_name" >> "$GITHUB_ENV"
-
-          # Guard against tagging a version the shipped code doesn't actually match
-          # (e.g. tag v1.2.2 pushed while config.py/pyproject.toml/package.json still say 1.2.1).
-          # package.json/pyproject.toml are parsed structurally (not via grep/sed line
-          # matching) so a line that merely looks similar elsewhere in the file can't
-          # produce a false match.
-          expected_version="${TAG_NAME#v}"
-          pyproject_version=$(python3 -c "
-          import tomllib
-          print(tomllib.load(open('pyproject.toml', 'rb'))['tool']['poetry']['version'])
-          ")
-          package_version=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
-          config_version=$(grep -m1 '^VERSION = ' modules/core/config.py | sed -E 's/^VERSION = "([^"]+)"$/\1/')
-
-          version_sources=(
-            "pyproject.toml:$pyproject_version"
-            "package.json:$package_version"
-            "modules/core/config.py:$config_version"
-          )
-          for source_pair in "${version_sources[@]}"; do
-            source_label="${source_pair%%:*}"
-            source_value="${source_pair#*:}"
-            if [ -z "$source_value" ] || [ "$source_value" != "$expected_version" ]; then
-              echo "Error: tag '$expected_version' vs $source_label '${source_value:-<not found>}'."
-              exit 1
-            fi
-          done
-
       - name: Authenticate to DockerHub
         if: >
           github.ref == 'refs/heads/main' ||
@@ -449,25 +604,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Finalize & Push Production Image
-        if: >
-          github.ref == 'refs/heads/main' ||
-          startsWith(github.ref, 'refs/heads/release/') ||
-          startsWith(github.ref, 'refs/tags/v')
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=whisper-pro-asr-test
-          labels: |
-            org.opencontainers.image.source=${{ github.event.repository.html_url }}
-            org.opencontainers.image.revision=${{ github.sha }}
-
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_NAME: ${{ needs.release-description-validation.outputs.release_name }}
           # Use the curated docs/releases/vX.Y.Z_github_description.md body -- do not
           # substitute auto-generated notes.
           RELEASE_NOTES_PATH: docs/releases/${{ github.ref_name }}_github_description.md

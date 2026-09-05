@@ -1,0 +1,46 @@
+# Machines the validation matrix should drive, one configuration per line:
+#
+#   machine | user@host | target | engine | preprocess | suite | transport (optional)
+#
+# machine     a short label; configurations sharing it run sequentially, and different
+#             labels run in parallel. Two labels must therefore never name the same
+#             physical box -- see the dual-boot note at the bottom.
+# user@host   SSH destination, or `local` to use this machine
+# target      build target (cpu | intel | intel-xpu | nvidia | nvidia-whisperx | full |
+#             nvidia-intel | amd | amd-rocm-torch)
+# engine      ASR_ENGINE for the run
+# preprocess  ASR_PREPROCESS_DEVICE (AUTO | CPU | GPU | NPU | CUDA) -- UVR runs here, and
+#             it is independent of the ASR device
+# suite       accuracy | smoke | full | stress | longform
+# transport   `linux` (default), `wsl`, or `wsl:<distro>`. Windows SSH lands in cmd.exe,
+#             so a Windows host must be driven through its WSL2 distro.
+#
+# Copy this file to .validation-matrix.conf (gitignored) and fill in your own hosts, or
+# point VALIDATION_MATRIX_PLAN at it. Depth per configuration follows the tiering in
+# docs/REMOTE_VALIDATION.md: one full matrix per machine on its primary engine, the smoke
+# set for every other combination, and the long-form clip wherever there is an NVIDIA GPU.
+#
+# Which engine can use which device is a hard constraint, not a preference:
+#   FASTER-WHISPER  CTranslate2  -> CUDA or CPU only; no OpenVINO or ROCm backend exists
+#   INTEL-WHISPER   OpenVINO     -> Intel GPU (the NPU cannot execute Whisper's dynamic IR)
+#   OPENAI-WHISPER  torch        -> CUDA, Intel XPU (intel-xpu image), or ROCm
+#   WHISPERX        torch        -> CUDA
+# A combination outside that table would silently run on the CPU and report a clean pass.
+
+# nuc|user@10.0.0.5|intel|INTEL-WHISPER|NPU|full
+# nuc|user@10.0.0.5|intel|INTEL-WHISPER|GPU|smoke
+# gpubox|user@10.0.0.6|nvidia|FASTER-WHISPER|AUTO|stress
+# gpubox|user@10.0.0.6|nvidia|WHISPERX|AUTO|smoke
+
+# A Windows host is driven through WSL2. Only NVIDIA reaches a Linux container there --
+# Intel GPU/NPU are not exposed at all, and AMD appears via /dev/dxg but falls back to the
+# CPU -- so `nvidia` is the only target that can support an accelerator claim.
+# gpubox|user@10.0.0.6|nvidia|FASTER-WHISPER|AUTO|smoke|wsl:Ubuntu
+
+# Dual-boot hosts: retain one physical-machine label across Linux and Windows rows. The
+# matrix serializes all rows with that label, preventing both operating systems from
+# attempting a concurrent GPU run. Select the booted operating system's rows by keeping
+# only those rows in the active plan:
+#
+# gpubox|user@10.0.0.6|nvidia|FASTER-WHISPER|AUTO|smoke|linux
+# gpubox|user@10.0.0.6|nvidia|FASTER-WHISPER|AUTO|smoke|wsl:Ubuntu

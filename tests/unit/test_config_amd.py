@@ -1,5 +1,10 @@
 """Tests for AMD configuration support in modules/config.py"""
 
+# pylint: disable=protected-access
+# The unit under test is the module's internals. Reaching them by name is the point
+# of these tests, not an accident: the public surface is a thin wrapper and testing
+# only through it would leave the rules below unpinned.
+
 import importlib
 import os
 from pathlib import Path
@@ -39,10 +44,15 @@ class TestConfigAmd:
                 mock.patch("ctranslate2.get_cuda_device_count", return_value=0),
                 mock.patch("openvino.Core", side_effect=RuntimeError("no intel")),
                 mock.patch("modules.core.config_helpers._has_amd_hardware", return_value=True),
+                mock.patch("modules.core.config_helpers._has_rocm_runtime", return_value=True),
                 mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=1),
             ):
                 importlib.reload(config_module)
-                assert config_module.DEVICE == "AMD"
+                # The card is detected, joins the pool, and drives preprocessing -- UVR is
+                # ONNX Runtime and has a ROCm provider. ASR is a different question: the
+                # default engine is CTranslate2, which has no ROCm backend at all, so the
+                # ASR device claim is CPU rather than a card it cannot address.
+                assert config_module.DEVICE == "CPU"
                 assert config_module.PREPROCESS_DEVICE == "AMD"
                 assert any(u["type"] == "AMD" for u in config_module.HARDWARE_UNITS)
         finally:
@@ -57,12 +67,19 @@ class TestConfigAmd:
                 mock.patch("ctranslate2.get_cuda_device_count", return_value=1),
                 mock.patch("openvino.Core", side_effect=RuntimeError("no intel")),
                 mock.patch("modules.core.config_helpers._has_amd_hardware", return_value=True),
+                mock.patch("modules.core.config_helpers._has_rocm_runtime", return_value=True),
                 mock.patch("modules.core.config_helpers._count_amd_drm_devices", return_value=1),
             ):
                 importlib.reload(config_module)
-                assert config_module.DEVICE == "AMD"
-                assert any(u["type"] == "CUDA" for u in config_module.HARDWARE_UNITS)
-                assert any(u["type"] == "AMD" for u in config_module.HARDWARE_UNITS)
+                # Detection is what this test is about: the explicit AMD request wins the
+                # device slot even though CUDA was found first.
+                assert config_module._DETECTED_DEVICE == "AMD"
+                assert any(u["type"] == "CUDA" for u in config_module.DETECTED_HARDWARE_UNITS)
+                assert any(u["type"] == "AMD" for u in config_module.DETECTED_HARDWARE_UNITS)
+                # DEVICE itself moves afterwards, because the default engine is CTranslate2
+                # and it has no ROCm backend -- an AMD unit handed to it would decode on the
+                # CPU while the banner named the card.
+                assert config_module.DEVICE == "CUDA"
         finally:
             self._reset_config_module()
 
@@ -75,6 +92,7 @@ class TestConfigAmd:
                 mock.patch("ctranslate2.get_cuda_device_count", return_value=0),
                 mock.patch("openvino.Core", side_effect=RuntimeError("no intel")),
                 mock.patch("modules.core.config_helpers._has_amd_hardware", return_value=True),
+                mock.patch("modules.core.config_helpers._has_rocm_runtime", return_value=True),
             ):
                 importlib.reload(config_module)
                 assert not any(u["type"] == "AMD" for u in config_module.HARDWARE_UNITS)
@@ -89,6 +107,7 @@ class TestConfigAmd:
                 mock.patch.dict(os.environ, env, clear=True),
                 mock.patch("ctranslate2.get_cuda_device_count", return_value=0),
                 mock.patch("modules.core.config_helpers._has_amd_hardware", return_value=True),
+                mock.patch("modules.core.config_helpers._has_rocm_runtime", return_value=True),
                 mock.patch(
                     "modules.core.config_helpers.os.path.exists",
                     side_effect=lambda p: p in ["/dev/dxg", "/app/libs/cpu"],

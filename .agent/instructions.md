@@ -27,6 +27,7 @@ Every time you work on this project, you MUST update all relevant markdown files
   - Standard ASR class: `/asr`, `/v1/audio/transcriptions`, `/v1/audio/translations`
   - Priority language-ID class: `/detect-language`, `/detectlang`
 - For dashboard/frontend changes, keep frontend quality-gate docs and commands synchronized, including Playwright browser prerequisites and npm audit enforcement.
+- For multilingual or language-detection changes, extend the real-audio matrix (`tests/real_audio/`) rather than relying on mocked engine tests. Its expectations live as data in `tests/e2e/fixtures/audio_matrix/manifest.json`; tune a language by editing that manifest, never by weakening an assertion in a test. Run the smoke set (`-m "real_audio and smoke"`, under 20 minutes) for routine validation; the full matrix and the 20-minute long-form clip are opt-in stress runs. See `.agent/skills/quality/testing_strategy_skill.md`.
 - **No Inline Suppressions or Disables (Hard Rule)**: Do not use inline lint suppressions, excludes, ignores, or disables anywhere in code or tests (such as linter disable comments, type-ignore annotations, or warning bypasses). All code and tests must be written cleanly to pass quality gates without inline suppressions.
 
 ## Agent Asset Maintenance

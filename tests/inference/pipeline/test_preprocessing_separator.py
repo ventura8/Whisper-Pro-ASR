@@ -189,3 +189,50 @@ class TestSeparatorInit:
         ):
             with pytest.raises(ImportError):
                 prep_manager._init_separator()
+
+
+def test_uvr_chunking_exact_segment_count_for_44min_video():
+    """Verify that a 44-minute (2640s) video with 600s UVR chunk duration yields exactly 5 segments."""
+
+    class _Sep:
+        chunk_duration = 600
+
+    sep = _Sep()
+    sep._separate_file = mock.MagicMock(return_value=["vocal.wav"])
+    sep._orig_separate_file = sep._separate_file
+
+    def _separate(path):
+        result = None
+        for _ in range(5):
+            preprocessing.utils.THREAD_CONTEXT.uvr_in_chunk_processing = True
+            try:
+                result = sep._separate_file(path)
+            finally:
+                preprocessing.utils.THREAD_CONTEXT.uvr_in_chunk_processing = False
+        return result
+
+    sep.separate = _separate
+
+    try:
+        with (
+            mock.patch("modules.inference.pipeline.preprocessing.helpers.utils.get_audio_duration", return_value=2640.0),
+            mock.patch("modules.inference.scheduler.update_task_metadata"),
+            mock.patch("modules.inference.scheduler.update_task_progress") as mock_prog,
+        ):
+            preprocessing._separate_with_fallback(sep, mock.MagicMock(), "video_44m.wav")
+
+        assert sep._chunk_paths_len == 5
+        assert preprocessing_helpers.utils.THREAD_CONTEXT.uvr_chunk_paths_len == 5
+        # Progress string should reflect 5 segments, not 25
+        assert mock_prog.call_count >= 1
+        prog_args, _ = mock_prog.call_args_list[0]
+        assert "1/5 segments" in prog_args[1]
+        assert "00:44:00" in prog_args[1]
+    finally:
+        # THREAD_CONTEXT is process-wide shared state; clear both UVR keys even on assertion
+        # failure. Guarded: if _separate_with_fallback raised before setting them, an
+        # unconditional `del` raises AttributeError from the finally block and replaces the
+        # separator's actual failure with a cleanup error that explains nothing.
+        for key in ("uvr_in_chunk_processing", "uvr_chunk_paths_len"):
+            if hasattr(preprocessing_helpers.utils.THREAD_CONTEXT, key):
+                delattr(preprocessing_helpers.utils.THREAD_CONTEXT, key)

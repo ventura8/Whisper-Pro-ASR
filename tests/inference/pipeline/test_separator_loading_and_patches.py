@@ -61,29 +61,58 @@ class TestAudioSeparatorPatches:
     def test_safe_download_model_files_existing_and_delegation(self, tmp_path):
         fake_cls = type("FakeSeparator", (), {})
         model_file = tmp_path / "UVR-MDX-NET-Inst_HQ_3.onnx"
-        model_file.write_text("model_bytes")
+        model_file.write_bytes(b"mock_onnx_bytes")
 
-        with mock.patch("importlib.import_module") as mock_import:
+        fake_cls.is_patched = False
+        fake_cls.download_model_files = None
+        with (
+            mock.patch("importlib.import_module") as mock_import,
+            mock.patch.object(preprocessing_helpers.model_integrity, "verify_onnx_model_file", return_value=True),
+        ):
             mock_import.return_value = mock.MagicMock(Separator=fake_cls)
             preprocessing_helpers._patch_audio_separator_onnx_check()
 
-        instance = fake_cls()
-        instance.model_file_dir = str(tmp_path)
+            instance = fake_cls()
+            instance.model_file_dir = str(tmp_path)
 
-        # Test existing file branch
-        res = instance.download_model_files("UVR-MDX-NET-Inst_HQ_3.onnx")
-        assert res[0] == "UVR-MDX-NET-Inst_HQ_3.onnx"
-        assert res[3] == str(model_file)
+            # Test existing valid file branch
+            res = instance.download_model_files("UVR-MDX-NET-Inst_HQ_3.onnx")
+            assert res[0] == "UVR-MDX-NET-Inst_HQ_3.onnx"
+            assert res[3] == str(model_file)
+
+        # Test corrupt/invalid checksum file branch (purges and delegates to original download)
+        fake_cls.is_patched = False
+        fake_cls.download_model_files = None
+        with (
+            mock.patch("importlib.import_module") as mock_import,
+            mock.patch.object(preprocessing_helpers.model_integrity, "verify_onnx_model_file", return_value=False),
+        ):
+            mock_import.return_value = mock.MagicMock(Separator=fake_cls)
+            preprocessing_helpers._patch_audio_separator_onnx_check()
+
+            instance2 = fake_cls()
+            instance2.model_file_dir = str(tmp_path)
+            with pytest.raises(FileNotFoundError, match=r"Model file UVR-MDX-NET-Inst_HQ_3\.onnx not found"):
+                instance2.download_model_files("UVR-MDX-NET-Inst_HQ_3.onnx")
+            assert not model_file.exists()
 
         # Test absent file branch with no original download
-        with pytest.raises(FileNotFoundError, match="Model file absent.onnx not found"):
-            instance.download_model_files("absent.onnx")
+        fake_cls.is_patched = False
+        fake_cls.download_model_files = None
+        with mock.patch("importlib.import_module") as mock_import:
+            mock_import.return_value = mock.MagicMock(Separator=fake_cls)
+            preprocessing_helpers._patch_audio_separator_onnx_check()
+            instance3 = fake_cls()
+            instance3.model_file_dir = str(tmp_path)
+            with pytest.raises(FileNotFoundError, match=r"Model file absent\.onnx not found"):
+                instance3.download_model_files("absent.onnx")
 
     def test_safe_separate_validation(self):
         fake_cls = type("FakeSeparator", (), {})
         fake_cls.separate = mock.MagicMock(return_value=["vocals.wav"])
         with mock.patch("importlib.import_module") as mock_import:
             mock_import.return_value = mock.MagicMock(Separator=fake_cls)
+
             preprocessing_helpers._patch_audio_separator_onnx_check()
 
         instance = fake_cls()

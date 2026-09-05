@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Optional
 
-from modules.core import config, utils
+from modules.core import config, model_provisioning, utils
 from modules.inference import scheduler
 from modules.inference.pipeline import preprocessing
 from modules.inference.scheduler import state_helpers as scheduler_state_helpers
@@ -186,11 +186,11 @@ def _has_priority_tasks_in_registry():
         return any(t.get("is_priority", False) for t in scheduler.STATE.task_registry.values())
 
 
-def _mark_task_queued_once(queued_added):
+def _mark_task_queued_once(queued_added, stage="Waiting for Hardware"):
     """Mark current task queued exactly once and return updated state."""
     if not queued_added:
         scheduler.update_task_metadata(status="queued")
-        scheduler.update_task_progress(None, "Waiting for Hardware")
+        scheduler.update_task_progress(None, stage)
         scheduler.increment_queued_session()
         return True
     return queued_added
@@ -235,6 +235,9 @@ def _acquire_unit_for_task(is_priority):
 
 
 def _loop_step_acquire(task_id, is_priority, queued_added) -> tuple[Optional[dict], bool, bool]:
+    if model_provisioning.should_gate_tasks():
+        return None, False, _wait_for_model_download(queued_added)
+
     if _is_task_waiting_for_earlier_fifo(task_id, is_priority):
         return None, False, _wait_in_scheduler_queue(queued_added)
 
@@ -262,6 +265,23 @@ def _finalize_queued_status(queued_added: bool):
     if queued_added:
         scheduler.decrement_queued_session()
         scheduler.STATE.cond.notify_all()
+
+
+def _wait_for_model_download(queued_added: bool) -> bool:
+    """Hold the task in the queue while startup provisioning downloads the models.
+
+    Waiting here rather than inside init_unit keeps the task out of MODEL_POOL and the
+    hardware pool, so it neither holds a unit nor reports "active" while it waits.
+    """
+    percent = model_provisioning.get_progress().get("percent", 0)
+    stage = f"Downloading Model ({percent}%)"
+    res = _mark_task_queued_once(queued_added, stage)
+    # Refresh every iteration so the dashboard tracks download progress. Stage-only
+    # updates pass progress=None because task progress is monotonic.
+    scheduler.update_task_progress(None, stage)
+    scheduler.STATE.cond.notify_all()
+    scheduler.STATE.cond.wait(timeout=0.5)
+    return res
 
 
 def _wait_in_scheduler_queue(queued_added: bool) -> bool:
@@ -331,11 +351,13 @@ def _initialize_unit_model_and_preprocessor(unit: dict):
         init_unit(unit)
 
     if unit["id"] not in preprocessor_pool:
-        preprocessor_pool[unit["id"]] = preprocessing.PreprocessingManager(unit)
+        preprocessor_pool[unit["id"]] = preprocessing.create_manager(unit)
 
     model = model_pool.get(unit["id"])
     if model is None:
-        raise RuntimeError(f"Engine pool for {unit['id']} is empty after initialization.")
+        # Prefer the real load failure; the empty pool is only its symptom.
+        reason = getattr(model_manager, "LAST_INIT_ERROR", {}).get(unit["id"])
+        raise RuntimeError(reason or f"Engine pool for {unit['id']} is empty after initialization.")
 
     scheduler.update_task_metadata(
         unit_id=unit["id"],
@@ -368,17 +390,13 @@ def _get_current_task_info():
     """Retrieve current task metadata from registry (unit_id, status, priority flag)."""
     task_id = getattr(utils.THREAD_CONTEXT, "task_id", None)
     thread_id = threading.get_ident()
-    unit_id = None
-    old_status = "active"
-    is_priority = False
-    task = None
+    unit_id, old_status, is_priority, task = None, "active", False, None
 
     with scheduler.STATE.task_registry_lock:
         if task_id and task_id in scheduler.STATE.task_registry:
             task = scheduler.STATE.task_registry[task_id]
         elif thread_id in scheduler.STATE.task_registry:
             task = scheduler.STATE.task_registry[thread_id]
-
         if task:
             unit_id = task.get("unit_id")
             old_status = task.get("status", "active")

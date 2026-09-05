@@ -1,0 +1,22 @@
+---
+# NVIDIA CUDA target with WhisperX speaker diarization. Requires nvidia-container-toolkit
+# on the host. Same accelerator support as the nvidia target, plus WhisperX -- which runs
+# on CUDA here because it reuses the image's torch instead of the CPU build its lock pins.
+# Prefer this over `full` when you need diarization but not the Intel and ROCm stacks.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.nvidia-whisperx.yml up -d
+# Set BUILD_TARGET=nvidia-whisperx in .env.
+services:
+  whisper-pro-asr:
+    build:
+      args:
+        RUNTIME_BASE: ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}

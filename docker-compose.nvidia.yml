@@ -1,0 +1,19 @@
+---
+# NVIDIA CUDA target. Requires nvidia-container-toolkit on the host.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+# Set BUILD_TARGET=nvidia in .env.
+services:
+  whisper-pro-asr:
+    build:
+      args:
+        RUNTIME_BASE: ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}

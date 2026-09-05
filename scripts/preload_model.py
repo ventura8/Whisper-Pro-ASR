@@ -7,22 +7,21 @@ import subprocess
 import sys
 
 import torch
-from audio_separator.separator import Separator
-from faster_whisper import download_model
+from modules.core import config, model_integrity, model_provisioning
 
 # Set up logging to stdout
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 # Configuration
-WHISPER_ID = "Systran/faster-whisper-large-v3"
+WHISPER_ID = model_provisioning.WHISPER_ID
 OV_SOURCE_ID = "openai/whisper-large-v3"
-UVR_MODEL = "UVR-MDX-NET-Inst_HQ_3.onnx"
-UVR_MODEL_SHA256 = "317554b07fe1ea5279a77f2b1520a41ea4b93432560c4ffd08792c30fddf9adc"
+UVR_MODEL = model_provisioning.UVR_MODEL
+UVR_MODEL_SHA256 = model_provisioning.UVR_MODEL_SHA256
 SILERO_VAD_MODEL_SHA256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
 
 # The official OpenVINO pre-converted model for GenAI 2025.4
-OV_MODEL_ID = "OpenVINO/whisper-large-v3-fp16-ov"
+OV_MODEL_ID = model_provisioning.OV_MODEL_ID
 
 SYSTEM_DIR = "/app/system_models"
 WHISPER_DIR = os.path.join(SYSTEM_DIR, "whisper")
@@ -78,68 +77,62 @@ def _run_subprocess_command(command):
     return process.returncode == 0
 
 
-def _download_openvino_source():
-    logger.info("Downloading official OpenAI Whisper weights for Intel conversion: %s", OV_SOURCE_ID)
+def _download_openvino_genai():
+    """Download the official pre-converted OpenVINO IR (fp16).
+
+    optimum-cli is not installed in the runtime image, so the source-weight
+    conversion path never runs. This fetches the ready-made IR instead, which
+    is both usable by the Intel engine and ~22GB smaller than the raw weights.
+    """
+    logger.info("Downloading pre-converted OpenVINO Whisper model: %s", OV_MODEL_ID)
     try:
         from huggingface_hub import snapshot_download
 
+        # No local_dir_use_symlinks: huggingface_hub 1.x removed the parameter and takes
+        # no **kwargs, so passing it raises TypeError before anything is fetched.
         snapshot_download(
-            repo_id=OV_SOURCE_ID,
+            repo_id=OV_MODEL_ID,
             local_dir=OV_WHISPER_DIR,
-            local_dir_use_symlinks=False,
             max_workers=4,
         )
-        logger.info("Whisper (OpenVINO) source weights ready in %s", OV_WHISPER_DIR)
+        if not verify_ov_model(OV_WHISPER_DIR):
+            logger.error("Downloaded OpenVINO model in %s failed validation.", OV_WHISPER_DIR)
+            return False
+        logger.info("Whisper (OpenVINO) IR ready in %s", OV_WHISPER_DIR)
         _cache_directory(OV_WHISPER_DIR, "whisper-openvino")
+        return True
     except Exception as exc:
-        logger.error("Failed to download OpenVINO Whisper model: %s", exc)
-
-
-def _ov_has_required_files(directory):
-    files = set(os.listdir(directory))
-    critical_patterns = {
-        "openvino_encoder_model.xml",
-        "openvino_encoder_model.bin",
-        "openvino_decoder_model.xml",
-        "openvino_decoder_model.bin",
-    }
-    missing = sorted(critical_patterns.difference(files))
-    if missing:
-        logger.warning("Model directory %s is missing critical files: %s", directory, missing)
+        logger.error("Failed to download pre-converted OpenVINO Whisper model: %s", exc)
         return False
-    return True
 
 
-def _ov_bins_are_large_enough(directory):
-    for filename in ("openvino_encoder_model.bin", "openvino_decoder_model.bin"):
-        file_path = os.path.join(directory, filename)
-        if not os.path.exists(file_path):
-            return False
-        size_bytes = os.path.getsize(file_path)
-        if size_bytes < 50 * 1024 * 1024:
-            logger.error("File %s is too small (%d bytes). Corrupted or empty.", filename, size_bytes)
-            return False
-    return True
+# The raw-source fallback was removed deliberately. It downloaded ~22GB of unconverted
+# OpenAI weights into the directory the Intel engine reads, logged "source weights ready",
+# and returned success -- leaving a directory that ov_genai.WhisperPipeline cannot load.
+# Conversion needs optimum-cli, which is not installed in the runtime image, so there was
+# never a path from those weights to a usable IR. Failing here is the honest outcome:
+# preload runs at build/provision time, where a clear error is cheap and a silently broken
+# Intel engine is not.
 
 
 def _download_ct2_whisper():
-    logger.info("Downloading Whisper Model (CT2): %s to %s...", WHISPER_ID, WHISPER_DIR)
-    try:
-        download_model(WHISPER_ID, output_dir=WHISPER_DIR)
-        logger.info("Whisper (CT2) downloaded successfully.")
+    success = model_provisioning.ensure_ct2_whisper(WHISPER_DIR, WHISPER_ID)
+    if success:
         _cache_directory(WHISPER_DIR, "whisper")
-        return True
-    except Exception as exc:
-        logger.error("Failed to download Whisper model: %s", exc)
-        return False
+    return success
 
 
 def _ensure_ct2_whisper():
-    if os.path.exists(os.path.join(WHISPER_DIR, "model.bin")):
-        logger.info("Faster-Whisper model already exists in %s. Skipping.", WHISPER_DIR)
+    if model_integrity.verify_ct2_model_dir(WHISPER_DIR):
+        logger.info("Faster-Whisper model already exists and is valid in %s. Skipping.", WHISPER_DIR)
         return
 
-    if _restore_directory_from_cache("whisper", WHISPER_DIR, "Whisper (CT2)"):
+    if _restore_directory_from_cache(
+        "whisper",
+        WHISPER_DIR,
+        "Whisper (CT2)",
+        validator=model_integrity.verify_ct2_model_dir,
+    ):
         return
 
     if not _download_ct2_whisper():
@@ -176,36 +169,6 @@ def _export_openvino_whisper():
     return False
 
 
-def _download_uvr_direct(target_file):
-    import tempfile
-
-    import requests
-
-    direct_url = f"https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/{UVR_MODEL}"
-    logger.info("Attempting direct UVR model download from %s...", direct_url)
-    with requests.get(direct_url, stream=True, timeout=120) as resp:
-        resp.raise_for_status()
-
-        target_dir = os.path.dirname(os.path.abspath(target_file))
-        os.makedirs(target_dir, exist_ok=True)
-        temp_fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix="uvr_dl_")
-        sha256 = hashlib.sha256()
-        try:
-            with os.fdopen(temp_fd, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=65536):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    sha256.update(chunk)
-            digest = sha256.hexdigest()
-            if digest != UVR_MODEL_SHA256:
-                raise RuntimeError(f"UVR model checksum mismatch: expected {UVR_MODEL_SHA256}, got {digest}")
-            os.replace(temp_path, target_file)
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-
-
 def _download_silero_vad_direct(target_file):
     import tempfile
 
@@ -240,58 +203,77 @@ def _download_silero_vad_direct(target_file):
 
 def _ensure_uvr_model():
     target_file = os.path.join(UVR_DIR, UVR_MODEL)
-    if os.path.exists(target_file):
-        logger.info("UVR model already exists in %s. Skipping.", UVR_DIR)
+
+    def _validate_uvr(p):
+        return model_integrity.verify_onnx_model_file(p, min_bytes=10 * 1024 * 1024, expected_sha256=UVR_MODEL_SHA256)
+
+    if _validate_uvr(target_file):
+        logger.info("UVR model already exists and is valid in %s. Skipping.", UVR_DIR)
         return
 
-    if _restore_directory_from_cache("uvr", UVR_DIR, "UVR Model"):
+    if _restore_directory_from_cache(
+        "uvr",
+        UVR_DIR,
+        "UVR Model",
+        validator=lambda d: _validate_uvr(os.path.join(d, UVR_MODEL)),
+    ):
         return
 
-    os.makedirs(UVR_DIR, exist_ok=True)
-    logger.info("Downloading UVR Model: %s to %s...", UVR_MODEL, UVR_DIR)
-    try:
-        sep = Separator(model_file_dir=UVR_DIR, output_dir="/tmp")
-        sep.load_model(UVR_MODEL)
-        logger.info("UVR Model downloaded successfully.")
-        _cache_directory(UVR_DIR, "uvr")
-    except Exception as exc:
-        logger.warning("Separator load_model failed (%s), attempting direct download...", exc)
-        try:
-            _download_uvr_direct(target_file)
-            logger.info("Direct UVR Model download succeeded.")
-            _cache_directory(UVR_DIR, "uvr")
-        except Exception as direct_exc:
-            logger.error("Failed to download UVR model: %s", direct_exc)
-            sys.exit(1)
+    # The separator-then-direct-download fallback, the checksum validation and the bounded
+    # retry all live in model_provisioning.ensure_uvr_model, which the runtime path already
+    # uses. This module reimplemented the same three things, so a change to the download
+    # policy had to be made twice and the preloader silently kept the older behaviour when
+    # it was not. Only the preloader-specific step -- seeding the build cache -- stays here.
+    if not model_provisioning.ensure_uvr_model(UVR_DIR, CACHE_DIR or config.PERSISTENT_TEMP_DIR):
+        sys.exit(1)
+
+    _cache_directory(UVR_DIR, "uvr")
 
 
 def _ensure_vad_model():
     target_file = os.path.join(VAD_DIR, "silero_vad.onnx")
-    if os.path.exists(target_file):
-        logger.info("VAD model already exists in %s. Skipping.", VAD_DIR)
+
+    def _validate_vad(p):
+        return model_integrity.verify_onnx_model_file(p, min_bytes=500 * 1024, expected_sha256=SILERO_VAD_MODEL_SHA256)
+
+    if _validate_vad(target_file):
+        logger.info("VAD model already exists and is valid in %s. Skipping.", VAD_DIR)
         return
 
-    if _restore_directory_from_cache("vad", VAD_DIR, "VAD Model"):
+    if _restore_directory_from_cache(
+        "vad",
+        VAD_DIR,
+        "VAD Model",
+        validator=lambda d: _validate_vad(os.path.join(d, "silero_vad.onnx")),
+    ):
         return
 
-    logger.info("Downloading Silero VAD ONNX model to %s (sha256-verified)...", VAD_DIR)
-    try:
+    def _do_vad_download():
         _download_silero_vad_direct(target_file)
-        logger.info("Silero VAD ONNX downloaded successfully: %s", target_file)
-        _cache_directory(VAD_DIR, "vad")
-    except Exception as exc:
-        logger.warning("Silero VAD ONNX download skipped (%s). Runtime will fallback or download when needed.", exc)
+
+    success = model_integrity.download_with_integrity_retry(
+        download_fn=_do_vad_download,
+        validator_fn=_validate_vad,
+        target_path=target_file,
+        max_retries=2,
+        description="Silero VAD ONNX model",
+    )
+    if not success:
+        sys.exit(1)
+    _cache_directory(VAD_DIR, "vad")
 
 
 def verify_ov_model(directory):
     """Verify that the directory contains a valid OpenVINO GenAI Whisper model."""
-    if not os.path.exists(directory):
-        return False
+    return model_integrity.verify_openvino_model_dir(directory)
 
-    if not _ov_has_required_files(directory):
-        return False
 
-    return _ov_bins_are_large_enough(directory)
+def _openvino_model_already_available():
+    """Return True when the OpenVINO IR is present, or restorable from the build cache."""
+    if verify_ov_model(OV_WHISPER_DIR):
+        logger.info("OpenVINO Whisper model already exists and is valid. Skipping.")
+        return True
+    return _restore_directory_from_cache("whisper-openvino", OV_WHISPER_DIR, "Whisper (OpenVINO)", validator=verify_ov_model)
 
 
 def preload_whisper():
@@ -306,17 +288,22 @@ def preload_whisper():
         logger.info("Intel Whisper preloading is disabled via flag. Skipping.")
         return
 
-    if verify_ov_model(OV_WHISPER_DIR):
-        logger.info("OpenVINO Whisper model already exists and is valid. Skipping.")
-        return
-
-    if _restore_directory_from_cache("whisper-openvino", OV_WHISPER_DIR, "Whisper (OpenVINO)", validator=verify_ov_model):
+    if _openvino_model_already_available():
         return
 
     if _export_openvino_whisper():
         return
 
-    _download_openvino_source()
+    if _download_openvino_genai():
+        return
+
+    logger.error(
+        "Could not obtain a usable OpenVINO IR for the Intel engine: neither the optimum "
+        "export nor the pre-converted download (%s) produced one.",
+        OV_MODEL_ID,
+    )
+    logger.error("Re-run with --skip-intel-whisper to provision the other models without it.")
+    sys.exit(1)
 
 
 def preload_uvr():

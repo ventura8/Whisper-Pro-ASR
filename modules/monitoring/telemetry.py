@@ -9,7 +9,7 @@ import time
 from collections import deque
 from typing import Any
 
-from modules.core import config, logging_setup, utils
+from modules.core import config, logging_setup, model_provisioning, utils
 from modules.inference import scheduler
 from modules.inference.runtime import model_manager
 from modules.monitoring import history_manager, metrics_discovery
@@ -100,10 +100,30 @@ def _normalize_stage_value(stage: Any, status: Any) -> str:
     return _default_stage_for_status(status)
 
 
+#: Substrings of the stage strings that mean the ASR engine is still holding its hardware
+#: unit. "detect" and the diarization stages belong here as much as transcription does:
+#: language detection runs the Whisper model, and diarization runs inside the same claimed
+#: unit before the task releases it. Omitting them made /status report the engine as
+#: "loaded" (idle) for the whole of a diarizing request, so the dashboard showed an idle
+#: engine while the model lock was held and later requests queued behind it.
+#: Matched as substrings, so "Detection" and "Language Detection" both hit "detect", and
+#: "Diarizing Speakers" / "Loading Diarization Model" both hit "diariz".
+_WHISPER_ACTIVE_STAGE_TOKENS = (
+    "transcrib",
+    "inference",
+    "translat",
+    "detect",
+    "diariz",
+    "assigning speakers",
+    "aligning",
+    "alignment",
+)
+
+
 def _is_whisper_active_stage(stage_text: Any) -> bool:
     """Return True when a stage indicates Whisper is still doing ASR work."""
     normalized = str(stage_text or "").lower()
-    return any(token in normalized for token in ("transcrib", "inference", "translat"))
+    return any(token in normalized for token in _WHISPER_ACTIVE_STAGE_TOKENS)
 
 
 def start_telemetry_loop() -> threading.Event:
@@ -154,6 +174,8 @@ def get_service_stats() -> dict[str, Any]:
 
     return {
         "version": config.VERSION,
+        "edition": config.IMAGE_EDITION,
+        "version_display": config.VERSION_DISPLAY,
         "uptime_sec": time.time() - SERVICE_START_TIME,
         "scheduler": {"active": actual_active, "queued": actual_queued},
         "active_sessions": actual_active,
@@ -354,8 +376,14 @@ def _resolve_engine_statuses(tasks: list[dict[str, Any]]) -> tuple[str, str]:
     return _resolve_whisper_status(tasks), _resolve_uvr_status(tasks)
 
 
+def _has_active_whisper_task(tasks: list[dict[str, Any]]) -> bool:
+    return any(t.get("status") == "active" and _is_whisper_active_stage(t.get("stage")) for t in tasks)
+
+
 def _resolve_whisper_status(tasks: list[dict[str, Any]]) -> str:
-    if any(t.get("status") == "active" and _is_whisper_active_stage(t.get("stage")) for t in tasks):
+    if model_provisioning.should_gate_tasks():
+        return "downloading"
+    if _has_active_whisper_task(tasks):
         return "busy"
     return "loaded" if model_manager.is_engine_actually_loaded() else "ready"
 

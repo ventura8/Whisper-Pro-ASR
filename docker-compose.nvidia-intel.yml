@@ -1,0 +1,28 @@
+---
+# Hybrid NVIDIA + Intel target.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.nvidia-intel.yml up -d
+# Set BUILD_TARGET=nvidia-intel in .env, plus:
+#   echo "HOST_INTEL_RENDER_GID=$(stat -c '%g' /dev/dri/renderD128)" >> .env
+services:
+  whisper-pro-asr:
+    build:
+      args:
+        RUNTIME_BASE: openvino/ubuntu24_runtime:2026.3.1@sha256:fdfa0f1c42f69b4cbf010999482a32279ac04a07b2fb53f449e67246dcb5f1df
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    group_add:
+      - "${HOST_INTEL_RENDER_GID:-990}"
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      # See docker-compose.intel.yml: required so Intel's compute-runtime can enumerate
+      # GPUs via /dev/dri/by-path on a hybrid host.
+      - /dev/dri:/dev/dri
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}

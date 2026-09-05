@@ -4,7 +4,7 @@ const { loadScriptInContext, evalInContext } = require("./helpers");
 
 function buildStatusData(overrides = {}) {
   return {
-    version: "1.2.2",
+    version: "1.3.0",
     system: {
       app_cpu_percent: 5,
       cpu_percent: 20,
@@ -94,7 +94,7 @@ describe("runtime.js", () => {
   describe("_renderTopStats / _renderQueueCounters / _renderAnalyticsGrid", () => {
     it("renders top stats from status data", () => {
       context._renderTopStats(buildStatusData());
-      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.2.2");
+      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.3.0");
       expect(dom.window.document.getElementById("app-cpu-val").innerText).toBe("5%");
       expect(dom.window.document.getElementById("sys-cpu-val").innerText).toBe("20%");
       expect(dom.window.document.getElementById("app-mem-val").innerText).toBe("1.20 GB");
@@ -282,7 +282,7 @@ describe("runtime.js", () => {
     it("fetches status and renders top stats/queue/hardware on success", async () => {
       await context.updateStats();
       expect(fetchMock).toHaveBeenCalledWith("/status", { headers: expect.any(Object) });
-      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.2.2");
+      expect(dom.window.document.getElementById("app-version").innerText).toBe("Version 1.3.0");
       expect(evalInContext(context, "lastStatusData")).toBeTruthy();
     });
 

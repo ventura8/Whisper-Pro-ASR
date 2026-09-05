@@ -47,8 +47,22 @@ def _detect_explicit_amd_first(
         state["prep_device"] = "AMD"
 
 
+def is_worker_context() -> bool:
+    """Whether this interpreter is an isolated worker rather than the API process."""
+    return bool(os.environ.get("WHISPER_WORKER_CONTEXT"))
+
+
 def detect_hardware(max_cuda: int, max_gpu: int, max_npu: int, max_amd: int, hardware_units: list[dict[str, str]]) -> tuple[str, str, str]:
     """Detect acceleration hardware and returns (detected_device, detected_prep_device, detected_compute)."""
+    if is_worker_context():
+        # A worker is told which unit to use by the parent, so probing again is pure
+        # cost -- and not free: ctranslate2.get_cuda_device_count() maps the NVIDIA
+        # driver libraries into the process even when CUDA_VISIBLE_DEVICES hides every
+        # device, which is why an Intel-only UVR worker still showed up in nvidia-smi.
+        # Skipping the probe keeps a worker's address space to the one vendor it serves.
+        hardware_units.append({"type": "CPU", "id": "CPU", "name": "Host CPU"})
+        return "CPU", "CPU", "int8"
+
     state = {"device": "CPU", "prep_device": "CPU", "compute": "int8"}
     is_explicit_dev = _is_explicit_amd_target(os.environ.get("ASR_DEVICE", ""))
     is_explicit_prep = _is_explicit_amd_target(os.environ.get("ASR_PREPROCESS_DEVICE", ""))
@@ -150,8 +164,13 @@ def _has_amd_linux_hardware() -> bool:
     return os.path.exists("/dev/dri") and _is_amd_drm_present()
 
 
+def _has_rocm_runtime() -> bool:
+    """Return True if this image ships a ROCm runtime that can drive an AMD GPU."""
+    return os.path.isdir("/opt/rocm") or bool(os.environ.get("ROCM_PATH"))
+
+
 def _has_amd_hardware() -> bool:
-    """Return True if an AMD GPU card is available on Linux (/dev/kfd or DRM) or WSL2 (/dev/dxg) or DirectML on win32."""
+    """Return True if an AMD GPU card is present (presence only; see _has_rocm_runtime)."""
     if os.path.exists("/dev/kfd") or _has_amd_wsl_hardware():
         return True
     return _has_amd_win32_hardware() or _has_amd_linux_hardware()
@@ -183,6 +202,17 @@ def _count_schedulable_amd_units() -> int:
 
 
 def _append_amd_units(max_amd: int, hardware_units: list[dict[str, str]]) -> None:
+    # A card being present is not the same as this image being able to drive it. Only the
+    # AMD images ship ROCm; elsewhere an AMD GPU is still visible through /dev/kfd and DRM,
+    # joins the scheduler pool, and then runs on the CPU while every log line reads
+    # "AMD GPU 0". Measured on a Ryzen host with an RTX 5090 and the nvidia image: 15 of 55
+    # tasks were dispatched to an AMD unit in an image containing no ROCm at all -- 27% of a
+    # CUDA validation silently running on the CPU.
+    # DirectML on win32 drives AMD without ROCm, so the requirement applies only where
+    # ROCm is the driver -- everywhere else the check would disable a working path.
+    if sys.platform != "win32" and not _has_rocm_runtime():
+        logger.info("AMD GPU present but this image ships no ROCm runtime; not adding it to the pool.")
+        return
     units_to_use = min(_count_schedulable_amd_units(), max_amd)
     for i in range(units_to_use):
         hardware_units.append({"type": "AMD", "id": f"amd:{i}", "name": f"AMD GPU {i}"})
@@ -267,8 +297,25 @@ def _append_intel_node_fallbacks(
 def _update_npu_state(state: dict[str, str], is_explicit_prep: bool) -> None:
     if state["device"] == "CPU":
         state["device"] = "NPU"
-    if not (is_explicit_prep and state.get("prep_device") == "AMD"):
-        state["prep_device"] = "NPU"
+    _claim_npu_prep_slot(state, is_explicit_prep)
+
+
+def _claim_npu_prep_slot(state: dict[str, str], is_explicit_prep: bool) -> None:
+    """Give the NPU the preprocessing slot, ahead of an iGPU that is also present.
+
+    This is deliberate, not an accident of enumeration order. UVR runs on the NPU
+    (verified: the MDX-NET ONNX session initialises and returns correct output there), and
+    putting it on the NPU leaves the iGPU free for ASR, which is the entire point of a
+    machine that has both. Running both on the iGPU serialises them for no gain.
+
+    A previous edit made the NPU yield this slot to the GPU, on the theory that UVR on the
+    NPU was behind seven failing accuracy tests. It was not -- those failures were the ASR
+    pipeline, which the NPU genuinely cannot execute (see modules/core/device_probe.py).
+    The change silently disabled the NPU's one working use.
+    """
+    if is_explicit_prep and state.get("prep_device") == "AMD":
+        return
+    state["prep_device"] = "NPU"
 
 
 def _append_npu_node_fallback(
@@ -373,6 +420,49 @@ def _append_intel_units(
     return gpu_detect_count, npu_detect_count
 
 
+#: Vendor names that rule out Intel silicon when no PCI vendor id is available.
+_NON_INTEL_DEVICE_MARKERS = ("nvidia", "geforce", "quadro", "tesla", "amd", "radeon", "rx ")
+
+
+def _is_intel_ov_device(core: Any, dev: str) -> bool:
+    """Whether an OpenVINO device is actually Intel silicon.
+
+    OpenVINO enumerates any GPU its installed plugins can see, not only Intel ones. On a
+    host whose image also carries NVIDIA's OpenCL ICD it reports the NVIDIA card as plain
+    "GPU":
+
+        devices: ['CPU', 'GPU']
+          GPU: NVIDIA GeForce RTX 5090 (dGPU)
+             arch: GPU: vendor=0x10de arch=v12.0.0
+
+    Registering that as an Intel unit is not harmless. With per-unit engines it is handed
+    INTEL-WHISPER, which then cannot load ("ASR engine INTEL-WHISPER failed to load on
+    NVIDIA GeForce RTX 5090 (dGPU)"), and every request routed to it returns 500 -- 31
+    failures across the real-audio suite on the `full` image.
+
+    DEVICE_ARCHITECTURE carries the PCI vendor id, which is the authoritative answer.
+    The device name is only a fallback for plugins that do not expose the property.
+    """
+    try:
+        architecture = str(core.get_property(dev, "DEVICE_ARCHITECTURE"))
+        if "vendor=" in architecture:
+            return "vendor=0x8086" in architecture
+    except (RuntimeError, TypeError, ValueError, OSError, AttributeError) as e:
+        # The property is optional: a plugin that does not implement it raises RuntimeError,
+        # and a mocked or partially-initialised Core raises AttributeError or TypeError.
+        # Any of those simply means "no vendor id available", which the name fallback below
+        # is there to handle.
+        logger.debug("Could not read DEVICE_ARCHITECTURE for %s: %s", dev, e)
+
+    # No vendor id available. Fall back to the reported name, and only reject devices that
+    # name another vendor outright -- an unreadable device is assumed Intel, which is the
+    # behaviour that predates this check and is right for every plugin that does not
+    # expose the property. The bug this guards against had the property and reported
+    # vendor=0x10de, so the authoritative path above is the one that matters.
+    name = str(_get_ov_device_name(core, dev)).lower()
+    return not any(vendor in name for vendor in _NON_INTEL_DEVICE_MARKERS)
+
+
 def _append_intel_gpu(
     core: Any,
     dev: str,
@@ -383,6 +473,9 @@ def _append_intel_gpu(
     state: dict[str, str],
 ) -> int:
     if gpu_detect_count >= max_gpu:
+        return gpu_detect_count
+    if not _is_intel_ov_device(core, dev):
+        _log_non_intel_device(core, dev)
         return gpu_detect_count
     hardware_units.append({"type": "GPU", "id": dev, "name": _get_ov_device_name(core, dev)})
     if state["device"] == "CPU":
@@ -404,12 +497,25 @@ def _append_intel_npu(
 ) -> int:
     if npu_detect_count >= max_npu:
         return npu_detect_count
+    if not _is_intel_ov_device(core, dev):
+        _log_non_intel_device(core, dev)
+        return npu_detect_count
     hardware_units.append({"type": "NPU", "id": dev, "name": _get_ov_device_name(core, dev)})
     if state["device"] == "CPU":
         state["device"] = "NPU"
-    if not (is_explicit_prep and state.get("prep_device") == "AMD"):
-        state["prep_device"] = "NPU"
+    _claim_npu_prep_slot(state, is_explicit_prep)
     return npu_detect_count + 1
+
+
+def _log_non_intel_device(core: Any, dev: str) -> None:
+    """Say that an enumerated OpenVINO device was rejected for not being Intel silicon.
+
+    Shared by the GPU and NPU arms, which had the same message and each read the device
+    name a second time to build it -- a plugin property call per rejection, duplicated.
+    """
+    logger.info(
+        "OpenVINO reports %s (%s), which is not Intel silicon; not adding it as an Intel unit.", dev, _get_ov_device_name(core, dev)
+    )
 
 
 def _get_ov_device_name(core: Any, dev: str) -> str:

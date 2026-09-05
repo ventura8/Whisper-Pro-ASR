@@ -123,6 +123,66 @@ def test_get_service_stats_structure(clean_telemetry: None):
     assert all({"whisper_status", "uvr_status"}.issubset(unit) for unit in stats["hardware_units"])
 
 
+@pytest.mark.parametrize(
+    ("tasks", "provisioning", "loaded", "expected"),
+    [
+        ([], True, False, "downloading"),
+        ([{"status": "active", "stage": "Transcribing"}], False, True, "busy"),
+        ([{"status": "active", "stage": "Inference"}], False, True, "busy"),
+        ([{"status": "active", "stage": "Translation"}], False, True, "busy"),
+        ([{"status": "completed", "stage": "Transcribing"}], False, True, "loaded"),
+        ([{"status": "active", "stage": "Vocal Separation"}], False, True, "loaded"),
+        ([], False, False, "ready"),
+    ],
+    ids=["provisioning", "transcription", "inference", "translation", "inactive", "uvr", "unloaded"],
+)
+def test_resolve_whisper_status_distinguishes_work_from_uvr(
+    tasks: list[dict[str, Any]], provisioning: bool, loaded: bool, expected: str
+) -> None:
+    """Only active ASR stages make Whisper busy; provisioning and load state stay visible."""
+    with mock.patch("modules.core.model_provisioning.should_gate_tasks", return_value=provisioning):
+        with mock.patch("modules.inference.runtime.model_manager.is_engine_actually_loaded", return_value=loaded):
+            assert telemetry._resolve_whisper_status(tasks) == expected
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "Transcribing",
+        "Inference",
+        "Translation",
+        "Language Detection",
+        "Detection",
+        "Loading Alignment Model",
+        "Aligning Transcription",
+        "Loading Diarization Model",
+        "Diarizing Speakers",
+        "Assigning Speakers",
+    ],
+)
+def test_every_stage_that_holds_the_model_lock_reports_busy(stage: str) -> None:
+    """Whisper is busy for the whole time its task holds a hardware unit.
+
+    Language detection runs the Whisper model, and the diarization and alignment stages run
+    inside the same claimed unit before the task releases it. Reporting "loaded" (idle)
+    through those stages showed an idle engine on the dashboard while the model lock was
+    held and later requests queued behind it -- the display contradicted the queue.
+    """
+    tasks = [{"status": "active", "stage": stage}]
+    with mock.patch("modules.core.model_provisioning.should_gate_tasks", return_value=False):
+        with mock.patch("modules.inference.runtime.model_manager.is_engine_actually_loaded", return_value=True):
+            assert telemetry._resolve_whisper_status(tasks) == "busy", f"{stage!r} holds the unit"
+
+
+@pytest.mark.parametrize("stage", ["Vocal Separation", "Vocal Isolation", "Standardizing Audio", "Analyzing Media", "Montage"])
+def test_stages_that_are_not_whisper_work_do_not_report_busy(stage: str) -> None:
+    """UVR and media prep occupy the unit but not the ASR engine; the two are reported apart."""
+    tasks = [{"status": "active", "stage": stage}]
+    with mock.patch("modules.core.model_provisioning.should_gate_tasks", return_value=False):
+        with mock.patch("modules.inference.runtime.model_manager.is_engine_actually_loaded", return_value=True):
+            assert telemetry._resolve_whisper_status(tasks) == "loaded"
+
+
 def test_get_service_stats_tasks_sorted_by_start_time(clean_telemetry: None):
     """Tasks returned by telemetry should be ordered per task_status_display_specification_skill.
 

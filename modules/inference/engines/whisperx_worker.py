@@ -47,6 +47,8 @@ from collections.abc import Callable
 from multiprocessing.connection import Connection
 from typing import Any, Optional
 
+from modules.inference.engines import worker_runtime
+
 
 def _get_whisperx():
     """Import whisperx lazily, from the isolated sys.path set up by worker_main.
@@ -74,15 +76,7 @@ def worker_main(conn: Connection) -> None:
     objects: dict[str, object] = {}
     handlers = _build_handlers(objects)
 
-    while True:
-        try:
-            request = conn.recv()
-        except (EOFError, OSError):
-            return
-
-        if request is None:
-            return
-
+    for request in worker_runtime.iter_requests(conn):
         _send_response(conn, _dispatch(handlers, request))
 
 
@@ -134,7 +128,23 @@ def _build_handlers(objects: dict[str, object]) -> dict[str, Callable[..., Any]]
         "assign_word_speakers": lambda **kw: _assign_word_speakers(objects, **kw),
         "release": lambda **kw: _release(objects, **kw),
         "ping": lambda **kw: "pong",
+        "capabilities": lambda **kw: _capabilities(),
     }
+
+
+def _capabilities() -> dict[str, Any]:
+    """Report what this worker's stack can actually do.
+
+    The image supplies the torch build (the bundled CPU copy is removed at build time so
+    WhisperX reuses the CUDA one), so whether GPU is usable is a property of the worker,
+    not something the parent can infer. Asking avoids the hard AssertionError that a
+    CPU-only torch raises at model load when handed device="cuda".
+    """
+    try:
+        torch = importlib.import_module("torch")
+        return {"cuda": bool(torch.cuda.is_available()), "torch": torch.__version__}
+    except (ImportError, AttributeError, RuntimeError) as exc:
+        return {"cuda": False, "torch": None, "error": str(exc)}
 
 
 #: Monotonic counter for handle generation. len(objects) is not safe here: it can repeat

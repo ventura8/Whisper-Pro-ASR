@@ -1,0 +1,2657 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "sample_rate": 16000,
+    "pins": {
+      "length_scale": 1.0,
+      "noise_scale": 0.0,
+      "noise_w_scale": 0.0,
+      "sentence_silence": 0.4
+    },
+    "min_word_overlap": 0.6
+  },
+  "clips": [
+    {
+      "id": "en_core",
+      "language": "en",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "en_US-lessac-medium",
+      "voice_md5": "2fc642b535197b6305c7c8f92dc8b24f",
+      "text": "The quick brown fox jumps over the lazy dog. This recording verifies English speech recognition on this machine.",
+      "expect_words": [
+        "quick",
+        "brown",
+        "jumps",
+        "over",
+        "lazy",
+        "this",
+        "recording",
+        "verifies",
+        "english",
+        "speech",
+        "recognition",
+        "this",
+        "machine"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "en"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "es_core",
+      "language": "es",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "es_ES-davefx-medium",
+      "voice_md5": "dc515cd4ecc5f6f72fe14a941188fc9c",
+      "text": "El veloz zorro marrón salta sobre el perro perezoso. Esta grabación verifica el reconocimiento de voz en español.",
+      "expect_words": [
+        "veloz",
+        "zorro",
+        "marrón",
+        "salta",
+        "sobre",
+        "perro",
+        "perezoso",
+        "esta",
+        "grabación",
+        "verifica",
+        "reconocimiento",
+        "español"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "es"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "fr_core",
+      "language": "fr",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "fr_FR-siwis-medium",
+      "voice_md5": "20e876e8c839e9b11a26085858f2300c",
+      "text": "Le vif renard brun saute par-dessus le chien paresseux. Cet enregistrement vérifie la reconnaissance vocale en français.",
+      "expect_words": [
+        "renard",
+        "brun",
+        "saute",
+        "dessus",
+        "chien",
+        "paresseux",
+        "enregistrement",
+        "vérifie",
+        "reconnaissance",
+        "vocale",
+        "français"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "fr"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "de_core",
+      "language": "de",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "de_DE-thorsten-medium",
+      "voice_md5": "a129b00fb3078df43c96bab6c94535c0",
+      "text": "Der schnelle braune Fuchs springt über den faulen Hund. Diese Aufnahme prüft die deutsche Spracherkennung.",
+      "expect_words": [
+        "schnelle",
+        "braune",
+        "fuchs",
+        "springt",
+        "über",
+        "faulen",
+        "hund",
+        "diese",
+        "aufnahme",
+        "prüft",
+        "deutsche",
+        "spracherkennung"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "de"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "it_core",
+      "language": "it",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "it_IT-paola-medium",
+      "voice_md5": "3a44e73b12ca5d0c21a72e388b5847c8",
+      "text": "La rapida volpe marrone salta sopra il cane pigro. Questa registrazione verifica il riconoscimento vocale italiano.",
+      "expect_words": [
+        "rapida",
+        "volpe",
+        "marrone",
+        "salta",
+        "sopra",
+        "cane",
+        "pigro",
+        "questa",
+        "registrazione",
+        "verifica",
+        "riconoscimento",
+        "vocale",
+        "italiano"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "it"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "pt_core",
+      "language": "pt",
+      "tier": "A",
+      "continent": "south_america",
+      "voice": "pt_BR-cadu-medium",
+      "voice_md5": "6f3a6e23694c9088e3696a15191af2cc",
+      "text": "A rápida raposa marrom salta sobre o cão preguiçoso. Esta gravação verifica o reconhecimento de fala em português.",
+      "expect_words": [
+        "rápida",
+        "raposa",
+        "marrom",
+        "salta",
+        "sobre",
+        "preguiçoso",
+        "esta",
+        "gravação",
+        "verifica",
+        "reconhecimento",
+        "fala",
+        "português"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "pt"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "nl_core",
+      "language": "nl",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "nl_BE-nathalie-medium",
+      "voice_md5": "ab0c38b5f66764b59ad9e3e98b1c2172",
+      "text": "De snelle bruine vos springt over de luie hond. Deze opname controleert de Nederlandse spraakherkenning.",
+      "expect_words": [
+        "snelle",
+        "bruine",
+        "springt",
+        "over",
+        "luie",
+        "hond",
+        "deze",
+        "opname",
+        "controleert",
+        "nederlandse",
+        "spraakherkenning"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "nl"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "pl_core",
+      "language": "pl",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "pl_PL-darkman-medium",
+      "voice_md5": "27bf2d71e934b112657544fd0b100a7a",
+      "text": "Szybki brązowy lis przeskakuje nad leniwym psem. To nagranie sprawdza polskie rozpoznawanie mowy.",
+      "expect_words": [
+        "szybki",
+        "brązowy",
+        "przeskakuje",
+        "leniwym",
+        "psem",
+        "nagranie",
+        "sprawdza",
+        "polskie",
+        "rozpoznawanie",
+        "mowy"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "pl"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ru_core",
+      "language": "ru",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "ru_RU-denis-medium",
+      "voice_md5": "76c2f14e521fef3ed574f97ad492728e",
+      "text": "Быстрая коричневая лиса прыгает через ленивую собаку. Эта запись проверяет распознавание русской речи.",
+      "expect_words": [
+        "быстрая",
+        "коричневая",
+        "лиса",
+        "прыгает",
+        "через",
+        "ленивую",
+        "собаку",
+        "запись",
+        "проверяет",
+        "распознавание",
+        "русской",
+        "речи"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "ru"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "uk_core",
+      "language": "uk",
+      "tier": "A",
+      "continent": "europe",
+      "voice": "uk_UA-ukrainian_tts-medium",
+      "voice_md5": "3366c3d4f31cb77966fb14d042956b4f",
+      "text": "Швидка руда лисиця стрибає через лінивого пса. Цей запис перевіряє розпізнавання української мови.",
+      "expect_words": [
+        "швидка",
+        "руда",
+        "лисиця",
+        "стрибає",
+        "через",
+        "лінивого",
+        "запис",
+        "перевіряє",
+        "розпізнавання",
+        "української",
+        "мови"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.6,
+      "expect_detect": [
+        "uk"
+      ],
+      "committed": true,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ar_tail",
+      "language": "ar",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "ar_JO-kareem-medium",
+      "voice_md5": "c0697df8a7fb180079cc5ac523f91a8e",
+      "text": "الثعلب البني السريع يقفز فوق الكلب الكسول. هذا التسجيل يتحقق من التعرف على الكلام العربي.",
+      "expect_words": [
+        "الثعلب",
+        "البني",
+        "السريع",
+        "يقفز",
+        "الكلب",
+        "الكسول",
+        "التسجيل",
+        "يتحقق",
+        "التعرف",
+        "الكلام",
+        "العربي"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ar"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "bg_tail",
+      "language": "bg",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "bg_BG-dimitar-medium",
+      "voice_md5": "fc1ce62a4f04f089e22b8c3a13bde28a",
+      "text": "Бързата кафява лисица прескача мързеливото куче. Този запис проверява разпознаването на българска реч.",
+      "expect_words": [
+        "бързата",
+        "кафява",
+        "лисица",
+        "прескача",
+        "мързеливото",
+        "куче",
+        "този",
+        "запис",
+        "проверява",
+        "разпознаването",
+        "българска"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "bg"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "bn_tail",
+      "language": "bn",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "bn_BD-google-medium",
+      "voice_md5": "2a365b2d91bb9cb7ed62c57d9ee0ec48",
+      "text": "দ্রুত বাদামী শিয়ালটি অলস কুকুরের উপর দিয়ে লাফ দেয়। এই রেকর্ডিং বাংলা কথা শনাক্তকরণ যাচাই করে।",
+      "expect_words": [
+        "দ",
+        "র",
+        "ত",
+        "ব",
+        "দ",
+        "ম",
+        "শ",
+        "য",
+        "লট",
+        "অলস",
+        "ক",
+        "ক",
+        "র",
+        "র",
+        "উপর",
+        "দ",
+        "য",
+        "ল",
+        "ফ",
+        "দ",
+        "য",
+        "এই",
+        "র",
+        "কর",
+        "ড",
+        "ব",
+        "ল",
+        "কথ",
+        "শন",
+        "ক",
+        "তকরণ",
+        "য",
+        "চ",
+        "ই",
+        "কর"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "bn"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ca_tail",
+      "language": "ca",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "ca_ES-upc_ona-medium",
+      "voice_md5": "58ff3b049b6b721a4c353a551ec5ef3a",
+      "text": "La ràpida guineu marró salta sobre el gos mandrós. Aquest enregistrament verifica el reconeixement de veu en català.",
+      "expect_words": [
+        "ràpida",
+        "guineu",
+        "marró",
+        "salta",
+        "sobre",
+        "mandrós",
+        "aquest",
+        "enregistrament",
+        "verifica",
+        "reconeixement",
+        "català"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ca"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "cs_tail",
+      "language": "cs",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "cs_CZ-jirka-medium",
+      "voice_md5": "da2deb0a3f93226a3f9b6e40d43c46ca",
+      "text": "Rychlá hnědá liška skáče přes líného psa. Tato nahrávka ověřuje české rozpoznávání řeči.",
+      "expect_words": [
+        "rychlá",
+        "hnědá",
+        "liška",
+        "skáče",
+        "přes",
+        "líného",
+        "tato",
+        "nahrávka",
+        "ověřuje",
+        "české",
+        "rozpoznávání",
+        "řeči"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "cs"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "cy_tail",
+      "language": "cy",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "cy_GB-gwryw_gogleddol-medium",
+      "voice_md5": "76ca79c170b0048b190758c3609e9ab9",
+      "text": "Mae'r llwynog brown cyflym yn neidio dros y ci diog. Mae'r recordiad hwn yn gwirio adnabod lleferydd Cymraeg.",
+      "expect_words": [
+        "llwynog",
+        "brown",
+        "cyflym",
+        "neidio",
+        "dros",
+        "diog",
+        "recordiad",
+        "gwirio",
+        "adnabod",
+        "lleferydd",
+        "cymraeg"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "cy"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "da_tail",
+      "language": "da",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "da_DK-talesyntese-medium",
+      "voice_md5": "9c05494a3e0c1136337581e01222395d",
+      "text": "Den hurtige brune ræv springer over den dovne hund. Denne optagelse verificerer dansk talegenkendelse.",
+      "expect_words": [
+        "hurtige",
+        "brune",
+        "springer",
+        "over",
+        "dovne",
+        "hund",
+        "denne",
+        "optagelse",
+        "verificerer",
+        "dansk",
+        "talegenkendelse"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "da"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "el_tail",
+      "language": "el",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "el_GR-joy-medium",
+      "voice_md5": "080895960699531c30e70415a75a604d",
+      "text": "Η γρήγορη καφέ αλεπού πηδάει πάνω από το τεμπέλικο σκυλί. Αυτή η ηχογράφηση ελέγχει την αναγνώριση ελληνικής ομιλίας.",
+      "expect_words": [
+        "γρήγορη",
+        "καφέ",
+        "αλεπού",
+        "πηδάει",
+        "πάνω",
+        "τεμπέλικο",
+        "σκυλί",
+        "αυτή",
+        "ηχογράφηση",
+        "ελέγχει",
+        "αναγνώριση",
+        "ελληνικής",
+        "ομιλίας"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "el"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "et_tail",
+      "language": "et",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "et_EE-news-medium",
+      "voice_md5": "6fba6ec8d985e84435ce680ee9d3b0bc",
+      "text": "Kiire pruun rebane hüppab üle laisa koera. See salvestus kontrollib eesti kõnetuvastust.",
+      "expect_words": [
+        "kiire",
+        "pruun",
+        "rebane",
+        "hüppab",
+        "laisa",
+        "koera",
+        "salvestus",
+        "kontrollib",
+        "eesti",
+        "kõnetuvastust"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "et"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "eu_tail",
+      "language": "eu",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "eu_ES-antton-medium",
+      "voice_md5": "4d924421c8f4f3967e79de798209e593",
+      "text": "Azeri marroi bizkorra alfer dagoen txakurraren gainetik salto egiten du. Grabaketa honek euskarazko hizketa ezagutzea egiaztatzen du.",
+      "expect_words": [
+        "azeri",
+        "marroi",
+        "bizkorra",
+        "alfer",
+        "dagoen",
+        "txakurraren",
+        "gainetik",
+        "salto",
+        "egiten",
+        "grabaketa",
+        "honek",
+        "euskarazko",
+        "hizketa",
+        "ezagutzea",
+        "egiaztatzen"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "eu"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "fa_tail",
+      "language": "fa",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "fa_IR-amir-medium",
+      "voice_md5": "7c0598c9726427869e1e86447b333539",
+      "text": "روباه قهوه‌ای سریع از روی سگ تنبل می‌پرد. این ضبط تشخیص گفتار فارسی را بررسی می‌کند.",
+      "expect_words": [
+        "روباه",
+        "قهوه",
+        "سریع",
+        "تنبل",
+        "تشخیص",
+        "گفتار",
+        "فارسی",
+        "بررسی"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "fa"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "fi_tail",
+      "language": "fi",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "fi_FI-harri-medium",
+      "voice_md5": "8e96b9e765f8db3e910943520aa0f475",
+      "text": "Nopea ruskea kettu hyppää laiskan koiran yli. Tämä tallenne varmistaa suomen puheentunnistuksen.",
+      "expect_words": [
+        "nopea",
+        "ruskea",
+        "kettu",
+        "hyppää",
+        "laiskan",
+        "koiran",
+        "tämä",
+        "tallenne",
+        "varmistaa",
+        "suomen",
+        "puheentunnistuksen"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "fi"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "he_tail",
+      "language": "he",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "he_IL-saspeech-medium",
+      "voice_md5": "ffa7fbbbbeab5fa8fb7eb00bf9a0e2a5",
+      "text": "השועל החום המהיר קופץ מעל הכלב העצלן. הקלטה זו בודקת זיהוי דיבור בעברית.",
+      "expect_words": [
+        "השועל",
+        "החום",
+        "המהיר",
+        "קופץ",
+        "הכלב",
+        "העצלן",
+        "הקלטה",
+        "בודקת",
+        "זיהוי",
+        "דיבור",
+        "בעברית"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "he"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "hi_tail",
+      "language": "hi",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "hi_IN-pratham-medium",
+      "voice_md5": "f1e5a629a9e533a7155910530109eb86",
+      "text": "तेज़ भूरी लोमड़ी आलसी कुत्ते के ऊपर से कूदती है। यह रिकॉर्डिंग हिंदी वाक् पहचान की जाँच करती है।",
+      "expect_words": [
+        "त",
+        "ज",
+        "भ",
+        "र",
+        "ल",
+        "मड",
+        "आलस",
+        "क",
+        "त",
+        "त",
+        "क",
+        "ऊपर",
+        "स",
+        "क",
+        "दत",
+        "ह",
+        "यह",
+        "र",
+        "क",
+        "र",
+        "ड",
+        "ग",
+        "ह",
+        "द",
+        "व",
+        "क",
+        "पहच",
+        "न",
+        "क",
+        "ज",
+        "च",
+        "करत",
+        "ह"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "hi"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "hu_tail",
+      "language": "hu",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "hu_HU-anna-medium",
+      "voice_md5": "3796f9fa28bd8d390d17828e2e2e952d",
+      "text": "A gyors barna róka átugrik a lusta kutyán. Ez a felvétel a magyar beszédfelismerést ellenőrzi.",
+      "expect_words": [
+        "gyors",
+        "barna",
+        "róka",
+        "átugrik",
+        "lusta",
+        "kutyán",
+        "felvétel",
+        "magyar",
+        "beszédfelismerést",
+        "ellenőrzi"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "hu"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "hy_tail",
+      "language": "hy",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "hy_AM-gor-medium",
+      "voice_md5": "fd726714c656f1cad828bcf102059aa1",
+      "text": "Արագ դարչնագույն աղվեսը ցատկում է ծույլ շան վրայով։ Այս ձայնագրությունը ստուգում է հայերեն խոսքի ճանաչումը։",
+      "expect_words": [
+        "արագ",
+        "դարչնագույն",
+        "աղվեսը",
+        "ցատկում",
+        "ծույլ",
+        "վրայով",
+        "ձայնագրությունը",
+        "ստուգում",
+        "հայերեն",
+        "խոսքի",
+        "ճանաչումը"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "hy"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "id_tail",
+      "language": "id",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "id_ID-news_tts-medium",
+      "voice_md5": "17de01db7ac654655436b6e509893c72",
+      "text": "Rubah cokelat yang cepat melompati anjing yang malas. Rekaman ini memverifikasi pengenalan ucapan bahasa Indonesia.",
+      "expect_words": [
+        "rubah",
+        "cokelat",
+        "yang",
+        "cepat",
+        "melompati",
+        "anjing",
+        "yang",
+        "malas",
+        "rekaman",
+        "memverifikasi",
+        "pengenalan",
+        "ucapan",
+        "bahasa",
+        "indonesia"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "id"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "is_tail",
+      "language": "is",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "is_IS-bui-medium",
+      "voice_md5": "08332bb41a67b52a3361bd1e8e36fb10",
+      "text": "Skjóti brúni refurinn stekkur yfir lata hundinn. Þessi upptaka staðfestir íslenska talgreiningu.",
+      "expect_words": [
+        "skjóti",
+        "brúni",
+        "refurinn",
+        "stekkur",
+        "yfir",
+        "lata",
+        "hundinn",
+        "þessi",
+        "upptaka",
+        "staðfestir",
+        "íslenska",
+        "talgreiningu"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "is"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ja_tail",
+      "language": "ja",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "ja_JA-hi_fi_captain-medium",
+      "voice_md5": "f9daab8970d06d7e9fc895a879854542",
+      "text": "素早い茶色の狐が怠け者の犬を飛び越えます。この録音は日本語の音声認識を検証します。",
+      "expect_words": [
+        "素早い茶色の狐が怠け者の犬を飛び越えます",
+        "この録音は日本語の音声認識を検証します"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ja"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ka_tail",
+      "language": "ka",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "ka_GE-natia-medium",
+      "voice_md5": "83bd40f8d176a83d3d8d605fada2a5e7",
+      "text": "სწრაფი ყავისფერი მელა ხტება ზარმაცი ძაღლის თავზე. ეს ჩანაწერი ამოწმებს ქართული მეტყველების ამოცნობას.",
+      "expect_words": [
+        "სწრაფი",
+        "ყავისფერი",
+        "მელა",
+        "ხტება",
+        "ზარმაცი",
+        "ძაღლის",
+        "თავზე",
+        "ეს",
+        "ჩანაწერი",
+        "ამოწმებს",
+        "ქართული",
+        "მეტყველების",
+        "ამოცნობას"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ka"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "kk_tail",
+      "language": "kk",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "kk_KZ-issai-high",
+      "voice_md5": "d5a97c25feb0949c187ae5f8e72753e3",
+      "text": "Жылдам қоңыр түлкі жалқау иттің үстінен секіреді. Бұл жазба қазақ сөзін тануды тексереді.",
+      "expect_words": [
+        "жылдам",
+        "қоңыр",
+        "түлкі",
+        "жалқау",
+        "иттің",
+        "үстінен",
+        "секіреді",
+        "жазба",
+        "қазақ",
+        "сөзін",
+        "тануды",
+        "тексереді"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "kk"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ko_tail",
+      "language": "ko",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "ko_KR-kss-medium",
+      "voice_md5": "bebbd298dffe5ee7b88f2ce41bb4e3a9",
+      "text": "빠른 갈색 여우가 게으른 개를 뛰어넘습니다. 이 녹음은 한국어 음성 인식을 확인합니다.",
+      "expect_words": [
+        "빠른",
+        "갈색",
+        "여우가",
+        "게으른",
+        "개를",
+        "뛰어넘습니다",
+        "이",
+        "녹음은",
+        "한국어",
+        "음성",
+        "인식을",
+        "확인합니다"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ko"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "lb_tail",
+      "language": "lb",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "lb_LU-marylux-medium",
+      "voice_md5": "966856e665a46cee45cb0cd2c475f8d5",
+      "text": "De séiere brongen Fuuss spréngt iwwer de faule Hond. Dës Opnam iwwerpréift d'Lëtzebuergesch Spracherkennung.",
+      "expect_words": [
+        "séiere",
+        "brongen",
+        "fuuss",
+        "spréngt",
+        "iwwer",
+        "faule",
+        "hond",
+        "opnam",
+        "iwwerpréift",
+        "lëtzebuergesch",
+        "spracherkennung"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "lb"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "lv_tail",
+      "language": "lv",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "lv_LV-aivars-medium",
+      "voice_md5": "5b48c6f958aea5b7e9ff34f6a10882dd",
+      "text": "Ātrā brūnā lapsa pārlec pāri slinkajam sunim. Šis ieraksts pārbauda latviešu runas atpazīšanu.",
+      "expect_words": [
+        "ātrā",
+        "brūnā",
+        "lapsa",
+        "pārlec",
+        "pāri",
+        "slinkajam",
+        "sunim",
+        "ieraksts",
+        "pārbauda",
+        "latviešu",
+        "runas",
+        "atpazīšanu"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "lv"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ml_tail",
+      "language": "ml",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "ml_IN-arjun-medium",
+      "voice_md5": "4f20109c108aa80f46df85ab9cda5daa",
+      "text": "വേഗമുള്ള തവിട്ടുനിറമുള്ള കുറുക്കൻ മടിയനായ നായയുടെ മുകളിലൂടെ ചാടുന്നു. ഈ റെക്കോർഡിംഗ് മലയാളം സംസാര തിരിച്ചറിയൽ പരിശോധിക്കുന്നു.",
+      "expect_words": [
+        "വ",
+        "ഗമ",
+        "ള",
+        "ള",
+        "തവ",
+        "ട",
+        "ട",
+        "ന",
+        "റമ",
+        "ള",
+        "ള",
+        "ക",
+        "റ",
+        "ക",
+        "കൻ",
+        "മട",
+        "യന",
+        "യ",
+        "ന",
+        "യയ",
+        "ട",
+        "മ",
+        "കള",
+        "ല",
+        "ട",
+        "ച",
+        "ട",
+        "ന",
+        "ന",
+        "ഈ",
+        "റ",
+        "ക",
+        "ക",
+        "ർഡ",
+        "ഗ",
+        "മലയ",
+        "ള",
+        "സ",
+        "സ",
+        "ര",
+        "ത",
+        "ര",
+        "ച",
+        "ചറ",
+        "യൽ",
+        "പര",
+        "ശ",
+        "ധ",
+        "ക",
+        "ക",
+        "ന",
+        "ന"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ml"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "mr_tail",
+      "language": "mr",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "mr_IN-google-medium",
+      "voice_md5": "331957abd31bff58aaa10934cd3ac58f",
+      "text": "चपळ तपकिरी कोल्हा आळशी कुत्र्यावरून उडी मारतो. ही ध्वनिमुद्रिका मराठी भाषण ओळख तपासते.",
+      "expect_words": [
+        "चपळ",
+        "तपक",
+        "र",
+        "क",
+        "ल",
+        "ह",
+        "आळश",
+        "क",
+        "त",
+        "र",
+        "य",
+        "वर",
+        "न",
+        "उड",
+        "म",
+        "रत",
+        "ह",
+        "ध",
+        "वन",
+        "म",
+        "द",
+        "र",
+        "क",
+        "मर",
+        "ठ",
+        "भ",
+        "षण",
+        "ओळख",
+        "तप",
+        "सत"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "mr"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ne_tail",
+      "language": "ne",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "ne_NP-chitwan-medium",
+      "voice_md5": "74cdb5b32816c366af74b55ed7494e25",
+      "text": "छिटो खैरो स्याल अल्छी कुकुरमाथि उफ्रन्छ। यो रेकर्डिङले नेपाली बोली पहिचान जाँच गर्छ।",
+      "expect_words": [
+        "छ",
+        "ट",
+        "ख",
+        "र",
+        "स",
+        "य",
+        "ल",
+        "अल",
+        "छ",
+        "क",
+        "क",
+        "रम",
+        "थ",
+        "उफ",
+        "रन",
+        "छ",
+        "य",
+        "र",
+        "कर",
+        "ड",
+        "ङल",
+        "न",
+        "प",
+        "ल",
+        "ब",
+        "ल",
+        "पह",
+        "च",
+        "न",
+        "ज",
+        "च",
+        "गर",
+        "छ"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ne"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "no_tail",
+      "language": "no",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "no_NO-talesyntese-medium",
+      "voice_md5": "9fc876e7edc6593086b4f2f34889f44b",
+      "text": "Den raske brune reven hopper over den late hunden. Dette opptaket verifiserer norsk talegjenkjenning.",
+      "expect_words": [
+        "raske",
+        "brune",
+        "reven",
+        "hopper",
+        "over",
+        "late",
+        "hunden",
+        "dette",
+        "opptaket",
+        "verifiserer",
+        "norsk",
+        "talegjenkjenning"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "no"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ro_tail",
+      "language": "ro",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "ro_RO-mihai-medium",
+      "voice_md5": "45f4253916c93d3d05ad3fe1b07ea4f3",
+      "text": "Vulpea maro rapidă sare peste câinele leneș. Această înregistrare verifică recunoașterea vorbirii în limba română.",
+      "expect_words": [
+        "vulpea",
+        "maro",
+        "rapidă",
+        "sare",
+        "peste",
+        "câinele",
+        "leneș",
+        "această",
+        "înregistrare",
+        "verifică",
+        "recunoașterea",
+        "vorbirii",
+        "limba",
+        "română"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ro"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "sk_tail",
+      "language": "sk",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "sk_SK-lili-medium",
+      "voice_md5": "836e078518042448bda8416a8ea52984",
+      "text": "Rýchla hnedá líška skáče cez lenivého psa. Táto nahrávka overuje slovenské rozpoznávanie reči.",
+      "expect_words": [
+        "rýchla",
+        "hnedá",
+        "líška",
+        "skáče",
+        "lenivého",
+        "táto",
+        "nahrávka",
+        "overuje",
+        "slovenské",
+        "rozpoznávanie",
+        "reči"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "sk"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "sl_tail",
+      "language": "sl",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "sl_SI-artur-medium",
+      "voice_md5": "ca0aac61139e446bebf98561e8cf9407",
+      "text": "Hitra rjava lisica skoči čez lenega psa. Ta posnetek preverja slovensko razpoznavanje govora.",
+      "expect_words": [
+        "hitra",
+        "rjava",
+        "lisica",
+        "skoči",
+        "lenega",
+        "posnetek",
+        "preverja",
+        "slovensko",
+        "razpoznavanje",
+        "govora"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "sl"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "sq_tail",
+      "language": "sq",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "sq_AL-edon-medium",
+      "voice_md5": "01888cba8f112271d2cdb6c9de17aae7",
+      "text": "Dhelpra e shpejtë kafe kërcen mbi qenin dembel. Ky regjistrim verifikon njohjen e të folurit shqip.",
+      "expect_words": [
+        "dhelpra",
+        "shpejtë",
+        "kafe",
+        "kërcen",
+        "qenin",
+        "dembel",
+        "regjistrim",
+        "verifikon",
+        "njohjen",
+        "folurit",
+        "shqip"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "sq"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "sr_tail",
+      "language": "sr",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "sr_RS-serbski_institut-medium",
+      "voice_md5": "02c6e27ac7b4dfa84272df89edca9feb",
+      "text": "Брза смеђа лисица прескаче лењог пса. Овај снимак проверава препознавање српског говора.",
+      "expect_words": [
+        "брза",
+        "смеђа",
+        "лисица",
+        "прескаче",
+        "лењог",
+        "овај",
+        "снимак",
+        "проверава",
+        "препознавање",
+        "српског",
+        "говора"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "sr"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "sv_tail",
+      "language": "sv",
+      "tier": "B",
+      "continent": "europe",
+      "voice": "sv_SE-nst-medium",
+      "voice_md5": "20266cf58e93ca2140444b77398aea04",
+      "text": "Den snabba bruna räven hoppar över den lata hunden. Denna inspelning verifierar svensk taligenkänning.",
+      "expect_words": [
+        "snabba",
+        "bruna",
+        "räven",
+        "hoppar",
+        "över",
+        "lata",
+        "hunden",
+        "denna",
+        "inspelning",
+        "verifierar",
+        "svensk",
+        "taligenkänning"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "sv"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "sw_tail",
+      "language": "sw",
+      "tier": "B",
+      "continent": "africa",
+      "voice": "sw_CD-lanfrica-medium",
+      "voice_md5": "7b28078f0e76cb201dc8b512ea4bf4d6",
+      "text": "Mbweha wa kahawia mwepesi anaruka juu ya mbwa mvivu. Rekodi hii inathibitisha utambuzi wa hotuba ya Kiswahili.",
+      "expect_words": [
+        "mbweha",
+        "kahawia",
+        "mwepesi",
+        "anaruka",
+        "mbwa",
+        "mvivu",
+        "rekodi",
+        "inathibitisha",
+        "utambuzi",
+        "hotuba",
+        "kiswahili"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "sw"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "te_tail",
+      "language": "te",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "te_IN-maya-medium",
+      "voice_md5": "604fa4083118495c0fff55826ffccefe",
+      "text": "వేగవంతమైన గోధుమ రంగు నక్క సోమరి కుక్క మీదుగా దూకుతుంది. ఈ రికార్డింగ్ తెలుగు ప్రసంగ గుర్తింపును ధృవీకరిస్తుంది.",
+      "expect_words": [
+        "వ",
+        "గవ",
+        "తమ",
+        "న",
+        "గ",
+        "ధ",
+        "మ",
+        "ర",
+        "గ",
+        "నక",
+        "క",
+        "స",
+        "మర",
+        "క",
+        "క",
+        "క",
+        "మ",
+        "ద",
+        "గ",
+        "ద",
+        "క",
+        "త",
+        "ద",
+        "ఈ",
+        "ర",
+        "క",
+        "ర",
+        "డ",
+        "గ",
+        "త",
+        "ల",
+        "గ",
+        "ప",
+        "రస",
+        "గ",
+        "గ",
+        "ర",
+        "త",
+        "ప",
+        "న",
+        "ధ",
+        "వ",
+        "కర",
+        "స",
+        "త",
+        "ద"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "te"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "tr_tail",
+      "language": "tr",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "tr_TR-dfki-medium",
+      "voice_md5": "f51287b350a042dd8d67b2b215145e5a",
+      "text": "Hızlı kahverengi tilki tembel köpeğin üzerinden atlar. Bu kayıt Türkçe konuşma tanımayı doğrular.",
+      "expect_words": [
+        "hızlı",
+        "kahverengi",
+        "tilki",
+        "tembel",
+        "köpeğin",
+        "üzerinden",
+        "atlar",
+        "kayıt",
+        "türkçe",
+        "konuşma",
+        "tanımayı",
+        "doğrular"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "tr"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ur_tail",
+      "language": "ur",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "ur_PK-aegis_female-medium",
+      "voice_md5": "81f9f9772025785f548e1aa0de3361b7",
+      "text": "تیز بھوری لومڑی سست کتے کے اوپر سے کودتی ہے۔ یہ ریکارڈنگ اردو تقریر کی شناخت کی تصدیق کرتی ہے۔",
+      "expect_words": [
+        "بھوری",
+        "لومڑی",
+        "اوپر",
+        "کودتی",
+        "ریکارڈنگ",
+        "اردو",
+        "تقریر",
+        "شناخت",
+        "تصدیق",
+        "کرتی"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ur"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "vi_tail",
+      "language": "vi",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "vi_VN-vais1000-medium",
+      "voice_md5": "5e42428c4f6131f75557cf156c9c1526",
+      "text": "Con cáo nâu nhanh nhẹn nhảy qua con chó lười biếng. Bản ghi này xác minh nhận dạng giọng nói tiếng Việt.",
+      "expect_words": [
+        "nhanh",
+        "nhẹn",
+        "nhảy",
+        "lười",
+        "biếng",
+        "minh",
+        "nhận",
+        "dạng",
+        "giọng",
+        "tiếng",
+        "việt"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "vi"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "zh_tail",
+      "language": "zh",
+      "tier": "B",
+      "continent": "asia",
+      "voice": "zh_CN-huayan-medium",
+      "voice_md5": "40cdb7930ff91b81574d5f0489e076ea",
+      "text": "敏捷的棕色狐狸跳过了懒惰的狗。这段录音用于验证中文语音识别。",
+      "expect_words": [
+        "敏捷的棕色狐狸跳过了懒惰的狗",
+        "这段录音用于验证中文语音识别"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "zh"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "af_gap",
+      "language": "af",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "af"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "am_gap",
+      "language": "am",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "am"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "unsupported_reason": "MMS voice exists but needs uroman romanization, which yields unintelligible speech"
+    },
+    {
+      "id": "bs_gap",
+      "language": "bs",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "bs"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "gl_gap",
+      "language": "gl",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "gl"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "gu_mms",
+      "language": "gu",
+      "tier": "B",
+      "continent": "",
+      "voice": "guj",
+      "text": "ઝડપી કથ્થઈ શિયાળ આળસુ કૂતરા ઉપર કૂદે છે. આ રેકોર્ડિંગ ગુજરાતી વાણી ઓળખની ચકાસણી કરે છે.",
+      "expect_words": [
+        "ઝડપી",
+        "કથ્થઈ",
+        "શિયાળ",
+        "આળસુ",
+        "કૂતરા",
+        "ઉપર",
+        "કૂદે",
+        "રેકોર્ડિંગ",
+        "ગુજરાતી",
+        "વાણી"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "gu"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "engine": "mms"
+    },
+    {
+      "id": "hr_gap",
+      "language": "hr",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "hr"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "km_gap",
+      "language": "km",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "km"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "unsupported_reason": "MMS voice exists but synthesis drives the decoder into a repetition loop"
+    },
+    {
+      "id": "lt_gap",
+      "language": "lt",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "lt"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "mi_gap",
+      "language": "mi",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "mi"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "mk_gap",
+      "language": "mk",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "mk"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "mt_gap",
+      "language": "mt",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "mt"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "my_gap",
+      "language": "my",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "my"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "unsupported_reason": "MMS voice exists but the rendered speech is detected as Chinese, not Burmese"
+    },
+    {
+      "id": "pa_mms",
+      "language": "pa",
+      "tier": "B",
+      "continent": "",
+      "voice": "pan",
+      "text": "ਤੇਜ਼ ਭੂਰਾ ਲੂੰਬੜ ਆਲਸੀ ਕੁੱਤੇ ਉੱਤੇ ਛਾਲ ਮਾਰਦਾ ਹੈ। ਇਹ ਰਿਕਾਰਡਿੰਗ ਪੰਜਾਬੀ ਬੋਲੀ ਪਛਾਣ ਦੀ ਜਾਂਚ ਕਰਦੀ ਹੈ।",
+      "expect_words": [
+        "ਤੇਜ਼",
+        "ਭੂਰਾ",
+        "ਲੂੰਬੜ",
+        "ਆਲਸੀ",
+        "ਕੁੱਤੇ",
+        "ਉੱਤੇ",
+        "ਛਾਲ",
+        "ਮਾਰਦਾ",
+        "ਰਿਕਾਰਡਿੰਗ",
+        "ਪੰਜਾਬੀ"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "pa"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "engine": "mms"
+    },
+    {
+      "id": "si_gap",
+      "language": "si",
+      "tier": "B",
+      "continent": "",
+      "voice": null,
+      "unsupported_reason": "no Piper voice",
+      "text": "",
+      "expect_words": [],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "si"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "ta_mms",
+      "language": "ta",
+      "tier": "B",
+      "continent": "",
+      "voice": "tam",
+      "text": "விரைவான பழுப்பு நரி சோம்பேறி நாயின் மேல் பாய்கிறது. இந்தப் பதிவு தமிழ் பேச்சு அறிதலைச் சரிபார்க்கிறது.",
+      "expect_words": [
+        "விரைவான",
+        "பழுப்பு",
+        "நரி",
+        "சோம்பேறி",
+        "நாயின்",
+        "மேல்",
+        "பாய்கிறது",
+        "இந்தப்",
+        "பதிவு",
+        "தமிழ்"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "ta"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "engine": "mms"
+    },
+    {
+      "id": "th_mms",
+      "language": "th",
+      "tier": "B",
+      "continent": "",
+      "voice": "tha",
+      "text": "สุนัขจิ้งจอกสีน้ำตาลกระโดดข้ามสุนัขขี้เกียจ การบันทึกนี้ตรวจสอบการรู้จำเสียงพูดภาษาไทย",
+      "expect_words": [
+        "สุนัขจิ้งจอกสีน้ำตาลกระโดดข้ามสุนัขขี้เกียจ การบันทึกนี้ตรวจสอบการรู้จำเสียงพูดภาษาไทย"
+      ],
+      "tokenizer": "chars",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "th"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "engine": "mms"
+    },
+    {
+      "id": "tl_mms",
+      "language": "tl",
+      "tier": "B",
+      "continent": "",
+      "voice": "tgl",
+      "text": "Ang mabilis na kayumangging soro ay lumundag sa tamad na aso. Sinusuri ng recording na ito ang pagkilala ng salitang Tagalog.",
+      "expect_words": [
+        "Ang",
+        "mabilis",
+        "kayumangging",
+        "soro",
+        "lumundag",
+        "tamad",
+        "aso",
+        "Sinusuri",
+        "recording",
+        "ito"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "tl"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": null,
+      "smoke": false,
+      "engine": "mms"
+    },
+    {
+      "id": "yo_mms",
+      "language": "yo",
+      "tier": "B",
+      "continent": "",
+      "voice": "yor",
+      "text": "Kọ̀lọ̀kọ̀lọ̀ aláwọ̀ búráùnù yára fò sórí ajá ọ̀lẹ. Ìgbàsílẹ̀ yìí ń ṣàyẹ̀wò ìdámọ̀ ọ̀rọ̀ sísọ Yorùbá.",
+      "expect_words": [
+        "Kọ̀lọ̀kọ̀lọ̀",
+        "aláwọ̀",
+        "búráùnù",
+        "yára",
+        "sórí",
+        "ajá",
+        "ọ̀lẹ",
+        "Ìgbàsílẹ̀",
+        "yìí",
+        "ṣàyẹ̀wò"
+      ],
+      "tokenizer": "words",
+      "min_word_overlap": 0.5,
+      "expect_detect": [
+        "yo"
+      ],
+      "committed": false,
+      "gain": 1.0,
+      "xfail_reason": "MMS Yoruba renders diacritics imprecisely; language detection is correct but word overlap is partial (verified 2026-09-02)",
+      "smoke": false,
+      "engine": "mms"
+    }
+  ],
+  "combined": [
+    {
+      "id": "mix_en_es",
+      "tier": "B",
+      "legs": [
+        {
+          "language": "en",
+          "text": "The meeting starts at nine in the morning.",
+          "voice": "en_US-lessac-medium",
+          "voice_md5": "2fc642b535197b6305c7c8f92dc8b24f"
+        },
+        {
+          "language": "es",
+          "text": "La reunión comienza a las nueve de la mañana.",
+          "voice": "es_ES-davefx-medium",
+          "voice_md5": "dc515cd4ecc5f6f72fe14a941188fc9c"
+        }
+      ],
+      "expect_detect_any": [
+        "en",
+        "es"
+      ],
+      "expect_words": [
+        "meeting",
+        "starts",
+        "nine",
+        "morning",
+        "reunión",
+        "comienza",
+        "nueve",
+        "mañana"
+      ],
+      "min_word_overlap": 0.4,
+      "committed": false,
+      "xfail_reason": "service transcribes only the leg matching the detected language and drops the other; verified 2026-09-01: en+es returned only the Spanish half",
+      "tokenizer": "words",
+      "xfail_scope": "content",
+      "smoke": false
+    },
+    {
+      "id": "mix_en_fr",
+      "tier": "B",
+      "legs": [
+        {
+          "language": "en",
+          "text": "Please send the report before Friday.",
+          "voice": "en_US-lessac-medium",
+          "voice_md5": "2fc642b535197b6305c7c8f92dc8b24f"
+        },
+        {
+          "language": "fr",
+          "text": "Veuillez envoyer le rapport avant vendredi.",
+          "voice": "fr_FR-siwis-medium",
+          "voice_md5": "20e876e8c839e9b11a26085858f2300c"
+        }
+      ],
+      "expect_detect_any": [
+        "en",
+        "fr"
+      ],
+      "expect_words": [
+        "please",
+        "send",
+        "report",
+        "before",
+        "friday",
+        "veuillez",
+        "envoyer",
+        "rapport",
+        "avant",
+        "vendredi"
+      ],
+      "min_word_overlap": 0.4,
+      "committed": false,
+      "xfail_reason": null,
+      "tokenizer": "words",
+      "smoke": true
+    },
+    {
+      "id": "mix_de_en",
+      "tier": "B",
+      "legs": [
+        {
+          "language": "de",
+          "text": "Der Bericht ist fast fertig.",
+          "voice": "de_DE-thorsten-medium",
+          "voice_md5": "a129b00fb3078df43c96bab6c94535c0"
+        },
+        {
+          "language": "en",
+          "text": "I will finish the summary tonight.",
+          "voice": "en_US-lessac-medium",
+          "voice_md5": "2fc642b535197b6305c7c8f92dc8b24f"
+        }
+      ],
+      "expect_detect_any": [
+        "de",
+        "en"
+      ],
+      "expect_words": [
+        "bericht",
+        "fast",
+        "fertig",
+        "will",
+        "finish",
+        "summary",
+        "tonight"
+      ],
+      "min_word_overlap": 0.4,
+      "committed": false,
+      "xfail_reason": null,
+      "tokenizer": "words",
+      "smoke": false
+    },
+    {
+      "id": "mix_hi_en",
+      "tier": "B",
+      "legs": [
+        {
+          "language": "hi",
+          "text": "यह रिकॉर्डिंग दो भाषाओं में है।",
+          "voice": "hi_IN-pratham-medium",
+          "voice_md5": "f1e5a629a9e533a7155910530109eb86"
+        },
+        {
+          "language": "en",
+          "text": "This recording contains two languages.",
+          "voice": "en_US-lessac-medium",
+          "voice_md5": "2fc642b535197b6305c7c8f92dc8b24f"
+        }
+      ],
+      "expect_detect_any": [
+        "hi",
+        "en"
+      ],
+      "expect_words": [
+        "this",
+        "recording",
+        "contains",
+        "languages"
+      ],
+      "min_word_overlap": 0.4,
+      "committed": false,
+      "tokenizer": "chars",
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "mix_zh_en",
+      "tier": "B",
+      "legs": [
+        {
+          "language": "zh",
+          "text": "这段录音包含两种语言。",
+          "voice": "zh_CN-huayan-medium",
+          "voice_md5": "40cdb7930ff91b81574d5f0489e076ea"
+        },
+        {
+          "language": "en",
+          "text": "The second half of this file is English.",
+          "voice": "en_US-lessac-medium",
+          "voice_md5": "2fc642b535197b6305c7c8f92dc8b24f"
+        }
+      ],
+      "expect_detect_any": [
+        "zh",
+        "en"
+      ],
+      "expect_words": [
+        "这段录音包含两种语言",
+        "second",
+        "half",
+        "this",
+        "file",
+        "english"
+      ],
+      "min_word_overlap": 0.4,
+      "committed": false,
+      "xfail_reason": "engine-dependent. FASTER-WHISPER transcribes both halves (XPASS on an RTX 5090 three runs running, an RTX 3080, and an Intel NUC), but WHISPERX returns only the Chinese half and drops the English one -- overlap 0.21 against a 0.40 bar, measured 2026-09-04. The entry was deleted earlier that day on faster-whisper evidence from two machines and restored when WhisperX failed it: two accelerators running the same engine is not two engines",
+      "tokenizer": "chars",
+      "xfail_scope": "content",
+      "smoke": false
+    },
+    {
+      "id": "mix_ar_fr",
+      "tier": "B",
+      "legs": [
+        {
+          "language": "ar",
+          "text": "هذا التسجيل يحتوي على لغتين.",
+          "voice": "ar_JO-kareem-medium",
+          "voice_md5": "c0697df8a7fb180079cc5ac523f91a8e"
+        },
+        {
+          "language": "fr",
+          "text": "La seconde partie est en français.",
+          "voice": "fr_FR-siwis-medium",
+          "voice_md5": "20e876e8c839e9b11a26085858f2300c"
+        }
+      ],
+      "expect_detect_any": [
+        "ar",
+        "fr"
+      ],
+      "expect_words": [
+        "التسجيل",
+        "يحتوي",
+        "لغتين",
+        "seconde",
+        "partie",
+        "français"
+      ],
+      "min_word_overlap": 0.4,
+      "committed": false,
+      "xfail_reason": null,
+      "tokenizer": "words",
+      "smoke": false
+    }
+  ],
+  "adversarial": [
+    {
+      "id": "silence_only",
+      "builder": "silence",
+      "params": {
+        "seconds": 10
+      },
+      "expect": {
+        "status_in": [
+          200,
+          400,
+          415,
+          422,
+          500
+        ],
+        "text_policy": "empty_or_absent",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "noise_only",
+      "builder": "noise",
+      "params": {
+        "seconds": 10
+      },
+      "expect": {
+        "status_in": [
+          200,
+          400,
+          415,
+          422,
+          500
+        ],
+        "text_policy": "any",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "tones_only",
+      "builder": "tones",
+      "params": {
+        "seconds": 10
+      },
+      "expect": {
+        "status_in": [
+          200,
+          400,
+          415,
+          422,
+          500
+        ],
+        "text_policy": "any",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "clipped_speech",
+      "builder": "clipped",
+      "params": {
+        "source": "en_core",
+        "gain": 12.0
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "very_quiet_speech",
+      "builder": "quiet",
+      "params": {
+        "source": "en_core",
+        "gain": 0.005
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "any",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "telephone_band",
+      "builder": "telephone",
+      "params": {
+        "source": "en_core",
+        "rate": 8000
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "stereo_speech",
+      "builder": "stereo",
+      "params": {
+        "source": "en_core"
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "rate_44100",
+      "builder": "resampled",
+      "params": {
+        "source": "en_core",
+        "rate": 44100
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "rate_48000",
+      "builder": "resampled",
+      "params": {
+        "source": "en_core",
+        "rate": 48000
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "rate_8000",
+      "builder": "resampled",
+      "params": {
+        "source": "en_core",
+        "rate": 8000
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "speech_after_30s_silence",
+      "builder": "speech_after_silence",
+      "params": {
+        "source": "en_core",
+        "lead_seconds": 30
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "sub_second_clip",
+      "builder": "tiny",
+      "params": {
+        "seconds": 0.05
+      },
+      "expect": {
+        "status_in": [
+          200,
+          400,
+          415,
+          422,
+          500
+        ],
+        "text_policy": "empty_or_absent",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    },
+    {
+      "id": "truncated_wav_header",
+      "builder": "truncated_header",
+      "params": {
+        "source": "en_core"
+      },
+      "expect": {
+        "status_in": [
+          400,
+          415,
+          422,
+          500
+        ],
+        "text_policy": "any",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "zero_byte_upload",
+      "builder": "zero_byte",
+      "params": {},
+      "expect": {
+        "status_in": [
+          400,
+          415,
+          422,
+          500
+        ],
+        "text_policy": "any",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": true
+    },
+    {
+      "id": "mp3_named_wav",
+      "builder": "mp3_named_wav",
+      "params": {
+        "source": "en_core"
+      },
+      "expect": {
+        "status_in": [
+          200
+        ],
+        "text_policy": "non_empty",
+        "must_not_hang": true
+      },
+      "committed": false,
+      "xfail_reason": null,
+      "smoke": false
+    }
+  ],
+  "longform": {
+    "id": "longform_stress",
+    "target_seconds": 1200,
+    "languages": [
+      "en",
+      "es",
+      "fr",
+      "de",
+      "it",
+      "pt",
+      "nl",
+      "pl",
+      "ru",
+      "uk"
+    ],
+    "min_language_coverage": 0.6,
+    "min_window_overlap": 0.4,
+    "max_quiet_window_chars": 40,
+    "known_defects": {
+            "windows": "the decoder emits one language per 30-second window, so audio that changes language faster than that gets the dominant language's words over everything else. multilingual=True (per-window re-detection) was enabled 2026-09-04 and improved it materially: 78 -> 55 of 118 windows below the 0.4 overlap threshold on an RTX 5090, and 56/118 on the NUC with the same engine on CPU -- two environments, same result. The improvement is structural, not noise: before, the detected language was the only clean one (es 12/12, everything else failing wholesale); after, misses spread thin (ru 11->2, fr 8->3, pt 4->2) and no language is privileged. Still 5x the 11 allowed, because 30s granularity cannot follow a switch every 7.6s. Closing it needs decoding at utterance granularity; a coarse language map was measured as too imprecise to drive that (31% precision on real film, 12-24% false trigger on monolingual film), so the remaining path is not obvious",
+            "quiet": "silence, music and noise are filled with invented speech -- 10 of 25 quiet windows on an RTX 5090 with FASTER-WHISPER, measured 2026-09-04. WHISPERX does NOT have this defect (it XPASSES the test): its VAD chunking never hands silence to the decoder, so this is a property of how audio reaches the decoder rather than a limit of Whisper itself. Raising the transcription VAD threshold was tried and REJECTED: 0.6 removed one hallucinated window and cost seven real ones (window misses 55 -> 62, confirmed on a clean repeat run). The reason it underperforms here is that UVR has already stripped most non-vocal content before VAD sees it, so the threshold has little hallucination left to catch and plenty of quiet speech left to discard -- an engine-only sweep without UVR overstates its value. VAD_THRESHOLD is plumbed and configurable now for anyone re-testing on other audio. The remaining text is the same pangram that drove the long-form loop, so it is the decoder running away into silence"
+    }
+  }
+}

@@ -38,7 +38,7 @@ Whisper Pro uses a **Hardware Resource Pool** to balance I/O-bound tasks, CPU-bo
 | `model_lock_ctx` | Semaphore-backed claim + non-locking "_direct" sub-stage entry points | Per-Task | Allows nested sub-tasks (UVR → ASR → Diarization) to share the same hardware claim without re-acquiring the lock. |
 | `STATE.priority_lock` | `threading.Lock` | Global | Protects priority counters and pre-emption signals. |
 | `_POOL_LOCK` | `threading.Lock` | Global | Serializes model loading and unloading operations to prevent race conditions during engine state transitions. |
-| `_OPENVINO_INIT_LOCKS[family]` | `threading.Lock` | Accelerator-family | Serializes first-time OpenVINO UVR initialization per family (`GPU`, `NPU`) while allowing GPU and NPU first-load paths to proceed independently. |
+| `_OPENVINO_INIT_LOCKS[family]` | `threading.Lock` | Accelerator-family or CPU slot | Serializes first-time OpenVINO UVR initialization per accelerator family (`GPU`, `NPU`) while allowing GPU and NPU first-load paths to proceed independently; CPU slots retain independent locks. The isolated-worker test suite also verifies terminal result, formatted error, cancellation, and heartbeat stream contracts deterministically. |
 
 ### Indefinite Wait Policy
 
