@@ -157,6 +157,29 @@ services:
       # exposed -- so setting them on a `docker compose up` line did nothing at all and
       # the container silently kept the defaults. Isolation decides whether UVR and the
       # ASR engine run out-of-process, which changes which ONNX Runtime is loadable.
+      # Decode by VAD speech region so a decode window cannot span a language change.
+      # Declared here because a knob compose does not forward is a knob nobody can turn:
+      # an A/B of it silently compared the default against itself.
+      - ASR_SEGMENT_FIRST=${ASR_SEGMENT_FIRST:-true}
+      # Report a language per segment rather than only per file. The per-region detection
+      # behind it always runs with ASR_SEGMENT_FIRST -- it is what groups regions into runs
+      # of one language -- so this switch changes only what the response reports, not the
+      # cost.
+      - ASR_SEGMENT_LANGUAGES=${ASR_SEGMENT_LANGUAGES:-true}
+      # Force transcription: one subtitle in the file's language for a film that switches --
+      # its own language transcribed, every other language translated into English (the one
+      # target Whisper has). Off by default; a request can set force_transcription= either way.
+      - ASR_FORCE_TRANSCRIPTION=${ASR_FORCE_TRANSCRIPTION:-false}
+      # The tuning behind the two switches, forwarded for the same reason the switches are:
+      # a value in .env or on the `docker compose up` line must reach the container. The
+      # defaults repeat modules/core/config_segmentation.py's, and a unit test holds the two
+      # together. What each one does is in the README's configuration table.
+      - SEGMENT_SPLIT_MIN_SILENCE_MS=${SEGMENT_SPLIT_MIN_SILENCE_MS:-250}
+      - SEGMENT_SPLIT_PAD_MS=${SEGMENT_SPLIT_PAD_MS:-200}
+      - SEGMENT_FIRST_MIN_REGIONS=${SEGMENT_FIRST_MIN_REGIONS:-2}
+      - SEGMENT_RUN_MIN_SWITCH_SEC=${SEGMENT_RUN_MIN_SWITCH_SEC:-3.0}
+      - SEGMENT_RUN_MIN_SWITCH_SHARE=${SEGMENT_RUN_MIN_SWITCH_SHARE:-0.2}
+      - SEGMENT_CLIP_MERGE_GAP_SEC=${SEGMENT_CLIP_MERGE_GAP_SEC:-0.3}
       - ASR_ISOLATE_ENGINES=${ASR_ISOLATE_ENGINES:-1}
       - ASR_ISOLATE_PREPROCESSING=${ASR_ISOLATE_PREPROCESSING:-${ASR_ISOLATE_ENGINES:-1}}
       # Isolation Model Filename

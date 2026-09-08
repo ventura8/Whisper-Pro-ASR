@@ -23,18 +23,76 @@ def consume_transcription_segments(
     preemption_check,
 ):
     """Consume segment generator and optionally run diarization."""
-    raw_segments = []
-    live_srt_blocks = []
-    max_prog = 80 if diarize else 95
-
-    for segment in segments:
-        preemption_check()
-        seg_dict = _process_single_segment(segment, raw_segments, live_srt_blocks, info=info, task=task, max_prog=max_prog)
-        raw_segments.append(seg_dict)
-
+    raw_segments = consume_segments(segments, info, task, diarize=diarize, preemption_check=preemption_check)
     if not diarize:
         return raw_segments
+    return diarize_segments(
+        raw_segments,
+        info=info,
+        processed_path=processed_path,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        hf_token=hf_token,
+        unit_id=unit_id,
+    )
 
+
+def consume_segments(segments, info, task, *, diarize, preemption_check, progress_window=None) -> list:
+    """Consume the segment generator into dicts, reporting live text and progress as it goes.
+
+    ``diarize`` only sets the progress ceiling here -- 80 when diarization is still to run
+    over the result, 95 otherwise. ``progress_window`` is ``(index, count)`` when this call
+    is one of several decoding the same file -- one per language run group -- so the
+    reported progress climbs through this call's share of the bar instead of falling back
+    to zero at every call. Absent, the call owns the whole bar, as a single decode always did.
+
+    ``preemption_check`` runs before every segment, *inside* the stream. That is only safe
+    when it cannot block: a check that pauses here keeps the worker channel open while the
+    priority task that asked for the pause waits for that same channel -- the deadlock
+    measured on the NUC. A decode that may be paused uses :func:`consume_until_pause`.
+    """
+    raw_segments, _ = _consume(segments, info, task, diarize=diarize, before_each=preemption_check, progress_window=progress_window)
+    return raw_segments
+
+
+def consume_until_pause(segments, info, task, *, diarize, pause_pending, progress_window=None) -> tuple[list, bool]:
+    """Consume segments until the stream ends or a pause is requested; ``(segments, paused)``.
+
+    ``pause_pending`` is a non-blocking question -- has a priority task asked for this
+    unit? -- so the caller can close the stream, release the worker channel, wait, and
+    decode the rest afterwards (resumable_decode). Nothing waits while the stream is open.
+    """
+    return _consume(segments, info, task, diarize=diarize, stop_when=pause_pending, progress_window=progress_window)
+
+
+def _consume(segments, info, task, *, diarize, before_each=None, stop_when=None, progress_window=None) -> tuple[list, bool]:
+    raw_segments: list = []
+    live_srt_blocks: list = []
+    max_prog, window = _progress_bounds(diarize, progress_window)
+    for segment in segments:
+        if before_each:
+            before_each()
+        seg_dict = _process_single_segment(segment, raw_segments, live_srt_blocks, info=info, task=task, max_prog=max_prog, window=window)
+        raw_segments.append(seg_dict)
+        # Asked once the segment in hand is kept, so a pause never drops one the worker
+        # already produced: the resume starts where this one ended.
+        if stop_when and stop_when():
+            return raw_segments, True
+    return raw_segments, False
+
+
+def _progress_bounds(diarize, progress_window) -> tuple[int, tuple]:
+    """The ceiling this call climbs to and the share of the bar it owns."""
+    return (80 if diarize else 95), (progress_window or (0, 1))
+
+
+def diarize_segments(raw_segments, *, info, processed_path, min_speakers, max_speakers, hf_token, unit_id) -> list:
+    """Run diarization once over a complete segment list, falling back to it unchanged.
+
+    Public so that a decode made of several calls can merge their segments first and
+    fingerprint the file once: diarization numbers speakers per call, and two calls' numbers
+    would have no correspondence.
+    """
     return _run_diarization_safe(
         processed_path,
         raw_segments,
@@ -46,11 +104,11 @@ def consume_transcription_segments(
     )
 
 
-def _process_single_segment(segment, raw_segments, live_srt_blocks, *, info, task, max_prog) -> dict:
+def _process_single_segment(segment, raw_segments, live_srt_blocks, *, info, task, max_prog, window) -> dict:
     seg_dict = _build_segment_dict(segment)
     seg_idx = len(raw_segments) + 1
     _update_live_srt_metadata(segment, seg_idx, live_srt_blocks)
-    _update_segment_progress(segment, seg_idx, info, task, max_prog)
+    _update_segment_progress(segment, seg_idx, info, task, max_prog, window=window)
     _maybe_log_segment_progress(segment, seg_idx, info, task)
     return seg_dict
 
@@ -109,19 +167,21 @@ def _update_live_srt_metadata(segment, seg_idx: int, live_srt_blocks: list):
     scheduler.update_task_metadata(live_text="".join(live_srt_blocks), current_position=segment.end)
 
 
-def _update_segment_progress(segment, seg_idx: int, info, task, max_prog: int):
+def _update_segment_progress(segment, seg_idx: int, info, task, max_prog: int, *, window=(0, 1)):
     if info.duration <= 0:
         return
-    pct = _segment_progress_pct(segment.end, info.duration, max_prog)
+    pct = _segment_progress_pct(segment.end, info.duration, max_prog, window)
     scheduler.update_task_progress(
         min(max_prog, pct),
         f"{_task_verb(task)} (Seg {seg_idx} | {utils.format_duration(segment.end)} / {utils.format_duration(info.duration)})",
     )
 
 
-def _segment_progress_pct(segment_end: float, duration: float, max_prog: int) -> int:
+def _segment_progress_pct(segment_end: float, duration: float, max_prog: int, window=(0, 1)) -> int:
+    """Progress through the bar, with this call's ``(index, count)`` share of it applied."""
     scale = 100 if max_prog == 95 else 80
-    return int((segment_end / duration) * scale)
+    index, count = window
+    return int((index + min(segment_end / duration, 1.0)) / count * scale)
 
 
 def _maybe_log_segment_progress(segment, seg_idx: int, info, task):

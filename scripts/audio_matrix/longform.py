@@ -18,7 +18,7 @@ import os
 import random
 from pathlib import Path
 
-from scripts.audio_matrix import render
+from scripts.audio_matrix import longform_film, render
 
 TARGET_SECONDS = 1200.0
 # Fixed seed: the layout must be irregular (a uniform grid would not stress chunk
@@ -55,6 +55,40 @@ QUIET_WINDOW_MIN_SECONDS = 8.0
 # whether utterance-level VAD segmentation is even possible (at a 500ms split threshold,
 # most real turns merge rather than separate). The scene shape decides whether a
 # whole-file "is this multilingual" gate is the right abstraction at all.
+#
+# Checked against real film AUDIO, 2026-09-09: nine 12-minute excerpts from the library --
+# Romanian, Italian, Danish, French, Japanese and English titles -- run through the same VAD
+# the decoder uses (threshold 0.5, min_silence 250ms, pad 200ms). Pooled, 1284 regions:
+#
+#                        subtitle-derived     VAD-measured on audio
+#   utterance length     median 2.0-2.3s      median 1.66s, mean 2.65s, p90 5.17s
+#   gap between turns    median 0.30-0.37s    median 0.50s
+#   gaps below 0.50s     ~60%                 50.0%
+#   gaps >= 2.0s         14-15%               19.4%
+#   speech density       48-57%               50.9% mean, but 23.8-82.0% across titles
+#   regions per minute   --                   11.5
+#
+# Density is confirmed; the rest needs care, because the two sources measure different
+# things. A subtitle cue is timed for reading and covers a whole line; VAD splits *within*
+# a line at breaths and pauses, which is why the audio-measured region is shorter than the
+# cue that contains it -- the same effect gives 225 regions from 118 utterances on the
+# synthetic fixture. So neither figure is wrong; "utterance" and "region" are not the same
+# unit, and a fixture built to subtitle statistics is not automatically built to VAD ones.
+#
+# Two findings that only audio could give, both relevant to anything that decodes per region:
+#
+#   * 34.6% of real gaps are below even a 250ms split, so a third of adjacent turns merge
+#     whatever threshold is chosen. Per-region decoding still fixed the `windows` defect, so
+#     it does not require clean utterance boundaries -- only boundaries that rarely span a
+#     language change, which the scene shape provides.
+#   * Density varies 23.8-82.0% between titles, a far wider spread than the 48-57% band this
+#     profile targets. Cost scales with it: decoding by region measured ~1.34x baseline on
+#     the synthetic clip but 2.0-2.7x on real film, because real speech is denser and more
+#     fragmented than any of these fixtures.
+#
+# The one thing this profile still cannot reproduce is utterance length: it is set by the
+# source clips, which are ~6.3s pangram recordings, and no layout parameter shortens them.
+# Matching the measured 1.66s median needs new, shorter source clips.
 NATURAL_GAP_BANDS = (
     # (weight, low, high) -- reproduces the measured percentiles above.
     (60, 0.10, 0.50),
@@ -62,9 +96,16 @@ NATURAL_GAP_BANDS = (
     (12, 2.00, 8.00),
     (5, 8.00, 20.00),
 )
-# Utterances per scene before the language may change. Real films hold a language for a
-# scene, not a line; a 20-minute clip should contain a handful of switches, not a hundred.
-NATURAL_SCENE_UTTERANCES = (12, 30)
+# How long a scene runs before the language may change, in SECONDS of screen time rather than
+# in utterances. Real films hold a language for a scene, not a line.
+#
+# Seconds, because utterance count is a property of the source recordings and not of film.
+# The measured 12-30 real utterances per scene are 2.0-2.3s each, i.e. 30-75s of screen time;
+# expressed as a count and applied to these ~6.3s clips it produced 75-190s scenes, so a
+# 20-minute clip held four of them and changed language three times in 165 utterances -- a
+# nearly monolingual fixture claiming to be code-switched. In seconds the layout stays right
+# whatever the clips are, and self-corrects if shorter recordings are ever added.
+NATURAL_SCENE_SECONDS = (30.0, 75.0)
 # Share of scenes spoken in the clip's dominant language, mirroring a film that is mostly
 # one language with passages in others.
 NATURAL_DOMINANT_SHARE = 0.65
@@ -97,14 +138,7 @@ def _gap_seconds(rng: random.Random, index: int) -> float:
 
 def _natural_gap_seconds(rng: random.Random) -> float:
     """Return a pause drawn from the gap distribution measured on real film dialogue."""
-    total = sum(band[0] for band in NATURAL_GAP_BANDS)
-    pick = rng.uniform(0, total)
-    upto = 0.0
-    for weight, low, high in NATURAL_GAP_BANDS:
-        upto += weight
-        if pick <= upto:
-            return round(rng.uniform(low, high), 3)
-    return round(rng.uniform(*NATURAL_GAP_BANDS[-1][1:]), 3)
+    return longform_film.draw_band(rng, NATURAL_GAP_BANDS)
 
 
 def _plan(sources: list[dict], rng: random.Random) -> list[dict]:
@@ -133,9 +167,7 @@ def _plan_natural(sources: list[dict], rng: random.Random) -> list[dict]:
     from the measured distribution -- most of them tighter than any plausible VAD split
     threshold. See NATURAL_GAP_BANDS for where the numbers come from.
     """
-    by_language: dict[str, list[dict]] = {}
-    for clip in sources:
-        by_language.setdefault(clip["language"], []).append(clip)
+    by_language = longform_film.group_by_language(sources)
     languages = sorted(by_language)
     if not languages:
         return []
@@ -162,7 +194,9 @@ def _append_scene(blocks: list[dict], pool: list[dict], *, cursor: float, index:
     A scene is several consecutive utterances in one language -- which is what separates
     this layout from the stress grid, where the language changes every line.
     """
-    for _ in range(rng.randint(*NATURAL_SCENE_UTTERANCES)):
+    scene_budget = rng.uniform(*NATURAL_SCENE_SECONDS)
+    spent = 0.0
+    while spent < scene_budget:
         if cursor >= TARGET_SECONDS:
             break
         clip = pool[index % len(pool)]
@@ -170,6 +204,7 @@ def _append_scene(blocks: list[dict], pool: list[dict], *, cursor: float, index:
         gap = _natural_gap_seconds(rng)
         blocks.append({"kind": "gap", "duration": gap})
         cursor += clip["duration"] + gap
+        spent += clip["duration"] + gap
         index += 1
     return cursor, index
 
@@ -217,7 +252,7 @@ def _music_bed(seconds: float, dest: Path, rate: int) -> Path:
     return dest
 
 
-def _placed_bed(body: Path, start: float, total: float, dest: Path, root: Path, rate: int) -> Path:
+def _placed_bed(body: Path, start: float, total: float, dest: Path, *, root: Path, rate: int) -> Path:
     """Place ``body`` at ``start`` inside an otherwise silent full-length track."""
     head = root / f"{dest.stem}_head.wav"
     tail = root / f"{dest.stem}_tail.wav"
@@ -249,8 +284,8 @@ def _build_beds(total: float, context: dict, temporaries: list[Path]) -> list[Pa
     music_body = _music_bed(MUSIC_BED_SECONDS, paths["music_body"], rate)
     noise_body = _bed(NOISE_SOURCE, NOISE_BED_SECONDS, paths["noise_body"], rate)
     hum = _bed(HUM_SOURCE, total, paths["hum"], rate)
-    music = _placed_bed(music_body, total * 0.25, total, paths["music"], root, rate)
-    noise = _placed_bed(noise_body, total * 0.6, total, paths["noise"], root, rate)
+    music = _placed_bed(music_body, total * 0.25, total, paths["music"], root=root, rate=rate)
+    noise = _placed_bed(noise_body, total * 0.6, total, paths["noise"], root=root, rate=rate)
     music_body.unlink(missing_ok=True)
     noise_body.unlink(missing_ok=True)
     return [music, noise, hum]
@@ -265,17 +300,25 @@ def _mix_final(speech_track: Path, beds: list[Path], dest: Path, rate: int) -> N
     render.run_ffmpeg([*inputs, "-filter_complex", chain, "-ac", "1", "-ar", str(rate), "-c:a", "pcm_s16le", str(dest)])
 
 
-def build(sources: list[dict], dest: Path, context: dict, profile: str = "stress") -> dict:
+def build(sources: list[dict], dest: Path, context: dict, profile: str = "stress", shape: str | None = None) -> dict:
     """Build the long-form clip and return its ground-truth timeline.
 
     ``profile`` selects the layout: "stress" for the original worst case (a language
-    change on every utterance, generous pauses) or "natural" for the scene-shaped,
-    tight-pause layout measured from real film subtitle tracks. Keep both -- the stress
-    layout is where a decoder's language handling breaks most visibly, and the natural
-    layout is the only one that says whether a fix survives contact with real dialogue.
+    change on every utterance, generous pauses), "natural" for the scene-shaped,
+    tight-pause layout measured from real film subtitle tracks, or "film" for short lines
+    over a loud music-and-room bed, laid out from the acoustic structure measured on real
+    excerpts (see longform_film). Keep all three -- the stress layout is where a decoder's
+    language handling breaks most visibly, natural says whether a fix survives real pause
+    spacing, and film is the only one whose non-speech passages are not silent. ``shape``
+    applies to the film profile only: which passages a real title has around its dialogue
+    (film_shapes); the plain ``film`` shape has none.
     """
     rng = random.Random(LAYOUT_SEED)
-    planner = _plan_natural if profile == "natural" else _plan
+    # Film lays out its own scenes and builds its bed from them -- one continuous bed at a
+    # measured level, not three fixed ones -- so its planner hands back the scene spans too.
+    film_scenes: list[dict] = []
+    # A manifest entry without a shape, or with a null one, is the plain film layout.
+    planner = _planner_for(profile, film_scenes, shape or "film")
     # Collected as they are created, so the cleanup below removes exactly what exists. The
     # speech track is deliberately not built up front: the planner runs first, and computing
     # a path from the context before then made a planning failure surface as a path error.
@@ -291,7 +334,9 @@ def build(sources: list[dict], dest: Path, context: dict, profile: str = "stress
         temporaries.append(speech_track)
         render.concat(parts, speech_track, context["rate"])
         total = render.probe_duration(speech_track)
-        beds = _build_beds(total, context, temporaries)
+        beds = (
+            longform_film.beds(film_scenes, total, context, temporaries) if profile == "film" else _build_beds(total, context, temporaries)
+        )
         # Mixed to a temporary name and published below. The clip used to be written
         # straight to its final path and the sidecar only after the cleanup, so an
         # interruption in between -- or a mix that failed after the previous clip had been
@@ -309,6 +354,30 @@ def build(sources: list[dict], dest: Path, context: dict, profile: str = "stress
         for path in temporaries:
             path.unlink(missing_ok=True)
     return timeline
+
+
+PROFILES = ("stress", "natural", "film")
+
+
+def _planner_for(profile: str, film_scenes: list[dict], shape: str = "film"):
+    """The layout function for ``profile``; the film one also records its scenes.
+
+    An unknown name is an error, not the stress layout: a typo in a manifest spec used to
+    render the stress grid under the variant's name and stamp it as a valid cached artifact.
+    """
+    if profile not in PROFILES:
+        raise ValueError(f"unknown long-form profile {profile!r}; expected one of {', '.join(PROFILES)}")
+    if profile == "natural":
+        return _plan_natural
+    if profile == "stress":
+        return _plan
+
+    def plan_film(sources: list[dict], rng: random.Random) -> list[dict]:
+        blocks, scenes = longform_film.plan(sources, rng, TARGET_SECONDS, shape)
+        film_scenes.extend(scenes)
+        return blocks
+
+    return plan_film
 
 
 def _publish(staged_audio: Path, dest: Path, timeline: dict) -> None:

@@ -102,3 +102,8 @@ state/
 
 # SQLite in-memory session artefact dropped by tooling; never a source file.
 :memory:*
+# Scratch the real-media runners drop at the repo root so the test image can mount it
+# alongside the tree (`_real*/`, `_subs/`, `_fracture.py`, `_sprobe.py`, `_film_payload.json`):
+# excerpts of copyrighted library audio and subtitle text, helper scripts, saved payloads.
+# Never source, and never to be committed.
+/_*

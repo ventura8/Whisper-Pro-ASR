@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "whisper-pro-asr"
-version = "1.3.0"
+version = "1.4.0"
 description = "Enterprise-grade Whisper Automatic Speech Recognition web service"
 authors = ["DeepMind Team"]
 package-mode = false
@@ -135,7 +135,17 @@ build-backend = "poetry.core.masonry.api"
 # generator, the hardware audit, the remote validation harness -- and excluding it meant
 # those files were the only Python here that nothing linted, which is how a bare `except:`
 # and several dead imports survived in them.
-exclude = ["node_modules", ".fixture-tooling", "model_cache", "test_data"]
+# `./_*` is the scratch the real-media runners drop at the repository root so the test image
+# can mount it (see .gitignore); ruff walks the filesystem, not the index, so a probe in
+# flight failed the format gate on a file that was never source. Anchored to the root: a bare
+# `_*` is a basename pattern in ruff and silently excluded every `__init__.py` in the tree.
+exclude = [
+  "node_modules",
+  ".fixture-tooling",
+  "model_cache",
+  "test_data",
+  "./_*",
+]
 # Target Python version
 target-version = "py312"
 

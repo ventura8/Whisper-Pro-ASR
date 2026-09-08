@@ -310,6 +310,17 @@ class TestLifecycle:
         channel = FakeChannel(call_error=worker_channel.WorkerError("worker gone"))
         _engine(channel).unload()  # must not raise
 
+    def test_releasing_the_region_audio_is_one_call_to_the_worker(self):
+        """The file decoded for region detection is dropped on request, not at the next file."""
+        channel = FakeChannel()
+        _engine(channel).release_region_audio("/tmp/clip.wav")
+        assert channel.calls == [("release_region_audio", {"audio_path": "/tmp/clip.wav"})]
+
+    def test_releasing_against_a_dead_worker_is_not_an_error(self):
+        """A dead worker holds no samples; the request's outcome must not turn on the cleanup."""
+        channel = FakeChannel(call_error=worker_channel.WorkerError("worker gone"))
+        _engine(channel).release_region_audio("/tmp/clip.wav")  # must not raise
+
     def test_the_proxy_marks_itself_as_out_of_process_on_the_type(self):
         """language_detection_core needs that answer across an import cycle, and reads it off
         the type -- a MagicMock instance would invent the attribute and claim to be one."""

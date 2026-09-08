@@ -24,9 +24,9 @@ Health check and dashboard entry point. Returns JSON with service identity when 
 
 Returns hardware pool status, active sessions, telemetry history, and version.
 
-Three version-ish fields travel together: `version` is the bare release number (`"1.3.0"`),
+Three version-ish fields travel together: `version` is the bare release number (`"1.4.0"`),
 `edition` names the image variant (`"nvidia-intel"`, `"full"`, ...), and `version_display`
-combines the two (`"1.3.0 nvidia-intel"`). **Prefer `version_display` when showing a version
+combines the two (`"1.4.0 nvidia-intel"`). **Prefer `version_display` when showing a version
 to a person** -- two hosts on the same release can be running different images, and only that
 field distinguishes them.
 

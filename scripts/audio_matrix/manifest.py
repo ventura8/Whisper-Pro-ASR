@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+from scripts.audio_matrix import film_shapes, longform
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO_ROOT / "tests" / "e2e" / "fixtures" / "audio_matrix" / "manifest.json"
 CORE_DIR = MANIFEST_PATH.parent / "core"
@@ -100,6 +102,23 @@ def _err_missing_id(entry: dict) -> str:
     return "" if entry.get("id") else "missing field id"
 
 
+def _err_unknown_profile(entry: dict) -> str:
+    """Return an error when a long-form spec names a profile no planner implements."""
+    profile = entry.get("profile") or "stress"
+    return "" if profile in longform.PROFILES else f"unknown profile {profile!r} (expected one of {', '.join(longform.PROFILES)})"
+
+
+def _err_unknown_shape(entry: dict) -> str:
+    """Return an error when a long-form spec names a shape ``film_shapes`` does not define."""
+    shape = entry.get("shape") or "film"
+    return "" if shape in film_shapes.SHAPES else f"unknown shape {shape!r} (expected one of {', '.join(film_shapes.SHAPES)})"
+
+
+#: The long-form spec and each of its variants name a layout; a name nothing implements
+#: used to reach the planner as a KeyError after the sources were rendered.
+_LONGFORM_CHECKS: tuple[Callable[[dict], str], ...] = (_err_missing_id, _err_unknown_profile, _err_unknown_shape)
+
+
 #: Checks that apply to every generated entry, whatever section it is in. The clip checks
 #: above are additional, and only meaningful for spoken clips: a combined entry carries
 #: ``legs`` rather than one language, and an adversarial entry describes a transformation.
@@ -119,7 +138,7 @@ def _section_errors(section: str, entries: list[dict]) -> list[str]:
     language, an adversarial entry describes a transformation, and longform is a timeline --
     none of them has a ``language`` or ``tier`` to validate. All of them need an id.
     """
-    checks = _CHECKS if section == "clips" else _COMMON_CHECKS
+    checks = {"clips": _CHECKS, "longform": _LONGFORM_CHECKS}.get(section, _COMMON_CHECKS)
     messages: list[str] = []
     for entry in entries:
         if not entry:
@@ -180,7 +199,18 @@ def _all_sections(data: dict[str, Any]) -> list[tuple[str, list[dict]]]:
     the id checks treat it like everything else instead of skipping it.
     """
     sections: list[tuple[str, list[dict]]] = [(section, list(data.get(section) or [])) for section in SECTIONS]
-    return sections + [("longform", [data.get("longform") or {}])]
+    return sections + [("longform", _longform_specs(data.get("longform") or {}))]
+
+
+def _longform_specs(spec) -> list:
+    """The long-form spec and its variants -- each names its own profile and shape.
+
+    A spec that is not an object is handed through as it is, so _section_errors reports it
+    readably rather than `.get` raising here before validation can say what is wrong.
+    """
+    if not isinstance(spec, dict):
+        return [spec]
+    return [spec, *(spec.get("variants") or [])]
 
 
 def validate(data: dict[str, Any]) -> list[str]:

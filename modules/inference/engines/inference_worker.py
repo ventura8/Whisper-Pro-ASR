@@ -31,6 +31,17 @@ logger = logging.getLogger(__name__)
 #: unit_id -> engine instance. The worker's entire resident footprint.
 _ENGINES: dict[str, Any] = {}
 
+#: Files decoded for region detection, as ``{path: samples}``. The parent sends regions in
+#: chunks so a pause never holds an open stream, and decoding a twenty-minute file once per
+#: chunk would have made that chunking cost a second each. Keyed by path because one worker
+#: serves every unit of its engine type: two transcriptions on two units interleave their
+#: chunks through this process, and a one-entry cache re-decoded both files on every chunk.
+#: Bounded (oldest out) so an abandoned request cannot pin memory; the parent releases a
+#: file by path when its detection is over.
+_REGION_AUDIO: dict[str, Any] = {}
+#: Files kept at once: one per unit a worker is likely to serve, plus one being released.
+_REGION_AUDIO_LIMIT = 4
+
 
 def _apply_env(env: Optional[dict[str, str]]) -> None:
     """Apply device-visibility overrides before any runtime is imported."""
@@ -88,6 +99,7 @@ def _unload_all() -> int:
     handles = list(_ENGINES)
     for handle in handles:
         _unload_model(handle)
+    _REGION_AUDIO.clear()
     return len(handles)
 
 
@@ -172,6 +184,64 @@ def _transcribe(handle: str, audio_path: str, params: Optional[dict] = None) -> 
         yield {"event": "segment", "segment": _segment_to_dict(segment)}
 
 
+def _detect_language_regions(handle: str, audio_path: str, regions: list) -> Iterator[dict[str, Any]]:
+    """Detect a language for each caller-supplied speech region, one result per region.
+
+    A sibling of :func:`_detect_language_batch`, which walks fixed 30s windows from the start
+    of the file. Decoding by speech region needs the language of *arbitrary* spans instead, and
+    those spans are the only thing the parent can label a segment with: faster-whisper commits
+    to a language per decode window but never reports which, so the per-segment language has to
+    be measured here rather than read back from the transcription.
+
+    The file is decoded once in this process and sliced, so no audio arrays cross the pipe --
+    the same reason the batch variant exists in the worker rather than the parent.
+    """
+    engine = _get_engine(handle)
+    run_language_detection_core = importlib.import_module("modules.inference.pipeline.language_detection_core").run_language_detection_core
+
+    full_audio = _region_audio(audio_path)
+    for index, region in enumerate(regions or []):
+        # Both bounds clamped to the audio, and the span reported is the one sliced: VAD
+        # pads its regions, so the last one routinely overruns the file, and a negative
+        # start would otherwise index from the *end* of the array.
+        start = max(0, int(float(region["start"]) * 16000))
+        end = min(int(float(region["end"]) * 16000), len(full_audio))
+        if start >= end:
+            continue
+        chunk = full_audio[start:end].copy()
+        yield {
+            "event": "detection",
+            "index": index,
+            "start": start / 16000,
+            "end": end / 16000,
+            # skip_vad: the region already *is* VAD output, and re-running it on a short
+            # slice can return "no speech" for audio the decoder is about to transcribe.
+            "result": run_language_detection_core(engine, chunk, skip_vad=True),
+        }
+
+
+def _region_audio(audio_path: str):
+    """The decoded samples of ``audio_path``, decoded once per file across region chunks."""
+    if audio_path not in _REGION_AUDIO:
+        vad = importlib.import_module("modules.inference.pipeline.vad")
+        while len(_REGION_AUDIO) >= _REGION_AUDIO_LIMIT:
+            _REGION_AUDIO.pop(next(iter(_REGION_AUDIO)))
+        _REGION_AUDIO[audio_path] = vad.decode_audio(audio_path)
+    return _REGION_AUDIO[audio_path]
+
+
+def _release_region_audio(audio_path: str) -> bool:
+    """Drop the decoded samples of ``audio_path``; True when they were held.
+
+    Called by the parent once that file's detection is over -- after its last chunk, not
+    between chunks and not across a pause, where the samples are exactly what the next chunk
+    needs. Only that file: another unit's file, mid-detection in this same process, keeps
+    its samples. Without it a two-hour film's samples (460 MB as float32) sat in the worker
+    until they were evicted or the idle purge ran.
+    """
+    return _REGION_AUDIO.pop(audio_path, None) is not None
+
+
 def _detect_language_batch(handle: str, audio_path: str, segment_count: int) -> Iterator[dict[str, Any]]:
     """Scan up to ``segment_count`` 30s windows, streaming one result per window.
 
@@ -236,9 +306,11 @@ def worker_main(conn: Connection) -> None:
             "unload_all": _unload_all,
             "loaded_handles": _loaded_handles,
             "detect_language": _detect_language,
+            "release_region_audio": _release_region_audio,
         },
         stream_handlers={
             "transcribe": _transcribe,
             "detect_language_batch": _detect_language_batch,
+            "detect_language_regions": _detect_language_regions,
         },
     )

@@ -14,6 +14,7 @@ from modules.core import config, model_provisioning, utils
 from modules.inference import scheduler
 from modules.inference.pipeline import preprocessing
 from modules.inference.scheduler import state_helpers as scheduler_state_helpers
+from modules.inference.scheduler import unit_choice
 
 logger = logging.getLogger(__name__)
 
@@ -135,14 +136,13 @@ def _try_take_idle_unit():
         try:
             yield acquired
         finally:
-            # Intentionally do not release here; caller releases when unit is returned.
-            pass
+            pass  # not released here: the caller releases when the unit is returned
 
     with _acquire_model_lock_nonblocking() as acquired:
         if not acquired:
             return None
         try:
-            return scheduler.STATE.hw_pool.get(block=False)
+            return unit_choice.take_idle_unit(scheduler.STATE.hw_pool)
         except queue.Empty:
             scheduler.STATE.model_lock.release()
             return None
@@ -212,7 +212,7 @@ def _try_acquire_unit_now():
         if not acquired:
             return None
         try:
-            return scheduler.STATE.hw_pool.get(block=False)
+            return unit_choice.take_idle_unit(scheduler.STATE.hw_pool)
         except queue.Empty:
             scheduler.STATE.model_lock.release()
             return None

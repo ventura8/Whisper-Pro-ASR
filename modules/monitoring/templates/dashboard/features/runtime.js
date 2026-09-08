@@ -49,7 +49,7 @@ function _hasValidStatusData(data) {
 }
 
 function _renderTopStats(data) {
-    // version_display carries the image edition (e.g. "1.3.0 intel"); fall back to the
+    // version_display carries the image edition (e.g. "1.4.0 intel"); fall back to the
     // bare version for older payloads that predate it.
     document.getElementById('app-version').innerText = `Version ${data.version_display || data.version}`;
     document.getElementById('app-cpu-val').innerText = `${data.system.app_cpu_percent}%`;

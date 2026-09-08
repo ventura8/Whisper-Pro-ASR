@@ -61,7 +61,20 @@ class WhisperXEngine(BaseASREngine):
         word_timestamps: bool = False,
         **kwargs: Any,
     ) -> tuple[Iterator[SegmentWrapper], InferenceInfo]:
-        unsupported_opts = _unsupported_whisperx_options(initial_prompt, vad_filter, word_timestamps, bool(kwargs.get("multilingual")))
+        # Clips are refused, not ignored. Every other option below degrades to a transcript
+        # that is still the whole file's; clips silently dropped would decode the whole file
+        # as one span while the caller believes it was decoded region by region, in the
+        # language each region was detected in -- a wrong transcript, not a missing feature.
+        # The pipeline never offers this backend clips (speech_clips gates on the engine);
+        # a caller that does gets told rather than misled.
+        if kwargs.get("clip_timestamps"):
+            raise ValueError("WhisperX cannot decode by region: clip_timestamps is not supported by this engine")
+        unsupported_opts = _unsupported_whisperx_options(
+            initial_prompt,
+            vad_filter,
+            word_timestamps,
+            bool(kwargs.get("multilingual")),
+        )
         if unsupported_opts:
             logger.warning("[WhisperX] Ignoring unsupported options: %s", ", ".join(unsupported_opts))
 
@@ -99,9 +112,12 @@ class WhisperXEngine(BaseASREngine):
 
 
 def _unsupported_whisperx_options(
-    initial_prompt: Optional[str], vad_filter: bool, word_timestamps: bool, multilingual: bool = False
+    initial_prompt: Optional[str],
+    vad_filter: bool,
+    word_timestamps: bool,
+    multilingual: bool = False,
 ) -> list[str]:
-    """Options the caller asked for that this backend cannot honour.
+    """Options the caller asked for that this backend cannot honour, and ignores.
 
     ``multilingual`` is listed because its absence is invisible in the output: WhisperX
     commits to one language for the whole file, so on audio that changes language it
@@ -109,14 +125,17 @@ def _unsupported_whisperx_options(
     a plausible-looking transcript rather than an error. faster-whisper re-detects per
     30-second window, so the same request behaves differently depending only on which
     engine served it.
+
+    ``clip_timestamps`` is not in this list because it is not ignored: ``transcribe`` raises
+    on it, since clips dropped silently would mean a whole-file decode passed off as a
+    region-by-region one.
     """
-    unsupported = []
-    if multilingual:
-        unsupported.append("multilingual (per-window language detection)")
-    if initial_prompt:
-        unsupported.append("initial_prompt")
-    if not vad_filter:
-        unsupported.append("vad_filter")
-    if word_timestamps:
-        unsupported.append("word_timestamps")
-    return unsupported
+    # A table rather than a chain of ifs: each new option added a branch, and the fifth took
+    # the function past the project's complexity rank.
+    asked_for = (
+        (multilingual, "multilingual (per-window language detection)"),
+        (initial_prompt, "initial_prompt"),
+        (not vad_filter, "vad_filter"),
+        (word_timestamps, "word_timestamps"),
+    )
+    return [name for requested, name in asked_for if requested]

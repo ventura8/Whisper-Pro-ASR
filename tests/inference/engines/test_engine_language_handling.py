@@ -40,6 +40,13 @@ class TestMultilingualWindowDetection:
         engine.transcribe("clip.wav", language="fr", multilingual=True)
         assert engine.model.transcribe.call_args.kwargs["multilingual"] is True
 
+    def test_a_requests_batch_size_is_dropped_not_forwarded(self):
+        """batch_size is for the engine that batches (WhisperX); WhisperModel.transcribe has
+        no such argument and would reject the whole call over it."""
+        engine = self._engine()
+        engine.transcribe("clip.wav", language="fr", batch_size=8)
+        assert "batch_size" not in engine.model.transcribe.call_args.kwargs
+
 
 class TestOpenAIWhisperDetectLanguageShape:
     """Short audio must be padded to the encoder's 30s window before the mel is built.

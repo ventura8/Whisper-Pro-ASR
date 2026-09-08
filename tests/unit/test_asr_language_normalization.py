@@ -7,6 +7,8 @@ land on either unit, so this is settled before dispatch.
 
 # The unit under test is the module's internals; reaching them by name is the point.
 
+from unittest import mock
+
 from modules.api.routes import asr
 
 
@@ -89,3 +91,36 @@ def test_a_posix_style_locale_resolves_like_its_hyphenated_twin():
 def test_a_posix_locale_on_an_iso_639_2_primary_subtag_still_maps():
     """The underscore split has to happen before the 639-2 mapping, not after it."""
     assert asr._normalize_language("fra_FR") == "fr"
+
+
+def test_an_unsupported_code_reaches_the_pipeline_as_an_auto_detected_request():
+    """The other half of the fallback: once 'zz' is dropped, the language the pipeline uses is
+    one it detected, and the decode must be told so -- an explicit request keeps the
+    single-language path, an auto-detected one may be decoded by speech region."""
+    calls = {}
+
+    def run_transcription(target, lang, task, **kwargs):
+        calls.update(lang=lang, auto_detected=kwargs["auto_detected"])
+        return {"language": lang, "segments": []}
+
+    with (
+        mock.patch.object(asr.model_manager, "early_task_registration"),
+        mock.patch.object(asr.routes_utils, "log_audio_source_mode"),
+        mock.patch.object(asr, "_initialize_transcription_context", return_value=("/tmp/x.wav", None)),
+        mock.patch.object(asr, "_get_transcription_source", return_value=("/tmp/x.wav", None)),
+        mock.patch.object(asr, "_detect_lang_for_transcription", return_value="es") as detect,
+        mock.patch.object(asr.model_manager, "run_transcription", side_effect=run_transcription),
+        mock.patch.object(asr.model_manager, "update_task_metadata"),
+        mock.patch.object(asr, "_check_preemption"),
+    ):
+        asr._perform_transcription_task(
+            {"language": "zz", "task": "transcribe"},
+            "Transcription",
+            "/tmp/x.wav",
+            None,
+            "x.wav",
+            worker_context={"caller_info": {}, "request_json": {}, "endpoint": "/asr", "clean_audio": None},
+        )
+
+    assert detect.call_args.args[0] is None, "the unsupported code was dropped before detection"
+    assert calls == {"lang": "es", "auto_detected": True}
