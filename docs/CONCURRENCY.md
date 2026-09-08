@@ -127,6 +127,34 @@ Whisper Pro implements a **Zero-Wait Detection** system that allows high-priorit
 >
 > - The ASR flow performs cooperative `_check_preemption()` checks at stage boundaries (`Initializing`, `Language Detection`, `Vocal Separation`, `Inference`, and final completion update).
 > - This ensures priority work can preempt on stage changes, not only during long-running inner loops.
+>
+> **A paused task holds no worker channel (v1.4.0)**:
+>
+> - An isolated engine serves one request at a time over a channel whose lock is held for
+>   the life of a stream. A task that paused *inside* a stream -- between two decoded
+>   segments, or between two per-region language detections -- therefore kept the channel
+>   while the priority task that had asked for the pause waited for that same channel. On a
+>   host with one unit and one worker that is a deadlock, and it was measured on the Intel
+>   NUC (2026-09-12): one `/detect-language` from a subtitle client during a long-form
+>   transcription left 41 requests queued, the health check unanswered and the CPU idle.
+> - The blocking check now runs only when no stream is open. Per-region detection sends the
+>   regions to the worker in chunks (`segment_languages.DETECTION_CHUNK`), each consumed to
+>   the end, with the check between chunks. A decode asks a non-blocking
+>   `resumable_decode.preemption_pending()` before each segment; when a pause is pending it
+>   closes the stream (the channel cancels the worker-side decode and keeps the model),
+>   waits in the ordinary flow, and then issues a new call for what is left -- the clips
+>   past the last consumed segment, or the VAD's speech after that point for a whole-file
+>   call. Gap-fill slices are consumed whole; their check runs between gaps.
+> - The isolated *preprocessing* worker has the same shape and got the same treatment: a
+>   pause requested during a UVR pass (the transcription's own language-detection montage,
+>   or a full-file isolation) used to block inside the separation stream with the
+>   preprocessing channel held, while the priority task's own montage UVR waited for that
+>   channel. The yield inside that stream now only asks; when a pause is pending it raises,
+>   which the manager's contract turns into a cancelled worker-side separation and a freed
+>   channel, the ordinary wait runs, and the separation is started again
+>   (`resumable_decode.separate`). An in-process manager keeps its blocking yield.
+> - Nothing already consumed is decoded twice, and the priority task's own detection runs
+>   on a free channel. `tests/inference/runtime/test_resumable_decode.py` pins the invariant.
 
 ---
 

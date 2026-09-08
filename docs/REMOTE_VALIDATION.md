@@ -13,11 +13,20 @@ See [`docs/SETUP.md`](SETUP.md) for the image table and
 ```bash
 scripts/remote_validate.sh <user>@<host>                     # preflight + hardware audit
 scripts/remote_validate.sh <user>@<host> --device NPU --full # + build, run, accuracy suite
+scripts/remote_validate.sh <user>@<host> --wsl Ubuntu --full --target full --compose nvidia --suite smoke
 ```
 
 The script handles key creation, access checks, the hardware audit, sync, build, startup
 and the test run. It stops with an exact command for the two steps that need your password
 (authorising the key, and the `docker` group). Everything below explains what it does.
+
+The third form is how the `full` image -- the one the unsuffixed `latest` tag is meant to
+point at once a release repoints it -- is validated on a host that is not itself a full
+one: `docker-compose.full.yml` passes every vendor's devices
+through, and Compose refuses to start a container whose listed device is missing, so on a
+CUDA-only box (WSL2 has no `/dev/kfd`) the full *image* starts under the nvidia *override*.
+`--compose` only changes which override file starts the stack; the image built is still
+the target's.
 
 ## What you will be asked for
 
@@ -359,6 +368,150 @@ and disproven (173 regions, 295s of speech past the cutoff, last region ending 1
 as was a follow-up guess that the 5090 image predated gap-fill (it did not; the image
 contained all three fixes).
 
+## The mitigation that does work: decode by speech region (2026-09-10)
+
+The section below concluded that no decode *parameter* moves the long-form defects, and that a
+real fix needs the decoder to stop committing to one language across audio that changes. That
+turned out to be exactly right, and the lever was a decode *boundary* rather than a parameter:
+faster-whisper accepts `clip_timestamps`, caps each decode window at a clip edge, and skips the
+silence between clips entirely.
+
+Measured on the 20-minute fixture, three identical consecutive runs:
+
+| | `windows` misses | `quiet` noisy windows | RTF |
+| --- | --- | --- | --- |
+| baseline | 67 / 118 | 11 / 25 | 0.044 |
+| clips + per-window re-detection | 0 / 118 | 0 / 25 | 0.086 |
+| the above, breath-length splits rejoined | 5 / 118 (budget 11) | 0 / 25 | 0.063 |
+
+It only works paired with `multilingual=True`. Clips with per-window re-detection **off**
+measured 82/118 -- worse than shipping today -- because region-sized windows without
+re-detection just commit to the file language more often. Neither half is the fix alone.
+
+`quiet` closing was not a bonus: clips exclude the silence between them, so the decoder is never
+handed a silent window to invent speech into. That is the same mechanism this document already
+recorded for WHISPERX scoring 0/25, without WhisperX's single-language commitment.
+
+Two approaches were measured and rejected on the way, and are recorded here because the evidence
+for them exists nowhere else now that the manifest entries are gone:
+
+- **A coarse language map to drive utterance-level decoding.** 31% precision on real film, and a
+  12-24% false-trigger rate on monolingual film. Too imprecise to drive anything.
+- **Any whole-file "is this multilingual" gate.** The montage vote's top-language share
+  separates the synthetic fixture (0.30) from real film (0.92-1.00) cleanly -- but genuinely
+  code-switching films read 1.00 too, because the montage samples a handful of windows across
+  two hours and the foreign passages fall between them. `multilingual_suspected` is worse: it
+  reports False on the 10-language fixture, because its lone-dissenter rule needs a language to
+  hold two votes or a third of them, and nine windows over five languages give neither. Gating
+  on either would label the fixture and miss every real film.
+
+### Correction: the breath-rejoin merge was reading padded gaps (2026-09-10)
+
+The section above records `windows` closing at 5 of 118 against a budget of 11, and reads the
+five as the price of rejoining breath fragments. They were not a price; they were the same
+defect surviving in miniature.
+
+`speech_clips` merged regions whose gap fell under `SEGMENT_CLIP_MERGE_GAP_SEC`, but the
+regions came from Silero with `speech_pad_ms` already applied. Silero pads each side and
+splits any silence shorter than twice the pad down the middle, so every gap arrives shortened
+by up to 2*pad, and every silence below 2*pad arrives as ~0 -- indistinguishable from a breath.
+The threshold read 0.3s and merged at 0.7s of real silence. On the long-form fixture, where
+adjacent utterances are every one a different language and the closest are 0.403s apart, the
+tightest boundary presented as a 0.016s gap and was fused: **7 clips spanned a language change,
+and the 5 missed windows each scored exactly 0.00**.
+
+Two things this cost, both worth remembering:
+
+- **The budget hid it.** Five misses against a budget of eleven is a passing assertion, so
+  every long-form run reported green while a language boundary was being destroyed roughly
+  once every twenty-four utterances.
+- **The obvious fix was also wrong.** Adding the padding back before comparing looks correct
+  and merges nothing at all: with `speech_pad_ms=0` the fixture's smallest gap is 0.416s and
+  none fall under 0.3s, because the sub-0.4s gaps were an artifact of the padding rather than
+  a property of the audio. The information the merge needs does not survive padding, so the
+  scan has to be asked for unpadded regions and padded afterwards.
+
+Fixed by scanning with `speech_pad_ms=0`, merging on real silence, then padding each merged
+clip and clamping to the midpoint of its gaps -- the rule Silero itself uses -- so the flat
+`clip_timestamps` seek-point list stays monotonic. The threshold keeps its 0.3s default.
+Result on the same fixture: **0 of 118 missed**, 225 clips, coverage 99.9%, at 75% more wall
+clock on the laptop's CPU (1665s -> 2913s -- see the hybrid-host section below for why it was the
+CPU), since the speed had been coming from the fusing. On the same laptop's RTX 3080: 135s -> 195s.
+
+### Correction: decoding by region fractures monolingual film (2026-09-11)
+
+The section above fixes the multilingual fixture and says nothing about the case most of a
+library is: a film in one language. Measured on 21 ten-minute excerpts from the library --
+12 languages, mid-film dialogue, audio only, anonymised on the machine that holds the
+media -- with the **fracture rate**: the share of transcribed speech, by duration, that the
+response labels as a language other than the film's. Per-region decoding with the decoder
+re-detecting the language of every clip:
+
+| decode | median fracture | mean | median RTF (RTX 3080) |
+| --- | ---: | ---: | ---: |
+| whole file, one call (the v1.3.0 path) | 2.7% | 7.4% | 0.071 |
+| per region, decoder re-detects each clip | **20.1%** | 25.4% | 0.169 |
+
+A clip is one line of dialogue -- 1.1 s median on real film -- and language detection on
+one second of audio is confidently wrong about one time in five, almost always toward a
+neighbour: Russian as Ukrainian, Norwegian as Swedish or Danish, Italian as Spanish, and
+anything as English. That is the false-trigger rate that killed the coarse language map at
+12-24%, arriving through the opposite door, and it is invisible on the synthetic fixtures
+because their voices are clean enough that the same detector scores 225/225 on them.
+
+**Run-level hysteresis** (`language_runs.py`) is the fix the plan originally called for:
+detect per region *before* decoding, group consecutive regions of one language into runs,
+and let a block in another language start its own run only when it holds 3 s of confident
+speech (`SEGMENT_RUN_MIN_SWITCH_SEC`) -- or, on a clip with under 15 s of speech, a fifth
+of it (`SEGMENT_RUN_MIN_SWITCH_SHARE`), because half of a five-second file is not a slip.
+The anchor a block may return to for free is the language holding most of the labelled
+speech, not the whole-file detection: a music-heavy Polish excerpt read as English at file
+level, and anchoring on that pulled the whole film to English (58% fracture).
+
+Two ways of *decoding* the runs were then measured, and the first was wrong twice over:
+
+- **The run as one clip, decoder re-detecting** -- fracture 3.0% median, level with the
+  whole-file path. But the run's label was only ever reported; the decoder still chose its
+  own language from the clip. And a run spanning the passage between two scenes handed the
+  decoder that passage inside a window: on the film fixture **6 of its 19 quiet passages sat
+  inside a run**, `quiet` failed, and `windows` failed with it. On the RTX 5090 the same
+  build dropped a leg of `mix_de_en`, `mix_hi_en` and `mix_zh_en`: their 2 s second legs
+  fell under the 3 s bar and were absorbed into the first -- the dropped-leg failure the
+  six clips exist to catch, which is where the share rule above comes from.
+- **One call per language, told its language, one clip per region** (`run_decoding.py`)
+  -- the shipped design. Runs are grouped by language; each group is one `transcribe`
+  call with `language=` fixed and per-window re-detection off, its clips the run's
+  regions. A monolingual file is one call exactly as before; the ten-language stress
+  fixture is ten. The label is now what the decoder was told, so the reported language
+  and the transcript's language cannot disagree. Only the call in the file's own language
+  carries the caller's `initial_prompt`.
+
+Why one clip per region rather than the run: a forced-language decode of run-sized clips
+**dropped lines** -- on the first 180 s of the single-language film fixture, 5 of 46 lines
+came back with no text at all, against 0 of 46 from the same decode with region-sized
+clips and 0 of 46 (though merged into windows up to 11 s long) with re-detection on. The
+run decides the language; it is not a good decode window.
+
+One more door had to be closed. Gap filling re-transcribes speech the strict decode VAD
+excluded, and it detected each gap's language on the gap itself -- a slice of a second or
+two, the audio detection is worst on. With region-sized clips every pause between lines is
+uncovered, so it ran on 7-50 gaps per film and the Japanese film's foreign share went from
+8.7% back to 19.9%. A gap now takes the language of the run it sits in, or the nearest run,
+and detects its own only when no run has a language.
+
+Results with the shipped design on the RTX 3080 (`cuda:0`, device evidence in the log):
+stress **0/118** at RTF 0.166 (225 clips across 10 calls); natural, film and the new
+single-language film clip pass `windows`, `quiet`, `fracture`, `language`, coverage and
+throughput (RTF 0.19 / 0.17 / 0.17). On the 21 real films the fracture is **1.1% median**
+(mean 9.9%, 6 films over 5%, median RTF 0.149) -- under the whole-file path's 2.7%, because
+the runs also stop the file-level montage vote from pulling a whole film the wrong way.
+The film clip's `repetition` assertion counted one copy of its most frequent line more than
+the timeline holds; the extra one is a lone French line the hysteresis absorbed, decoded as
+German and rendered as the German sentence -- the documented single-line trade, not a loop.
+The assertion now judges consecutive repeats, and the clip passes 7 of 7 (RTF 0.170). Code-
+switched clips pass 18 of 18 on this design; subtitle overlap on the 7 real films is 0.505
+mean, the best of the four decodes measured (evidence README).
+
 ## Decoder mitigations that do not work (RTX 5090, 2026-09-04)
 
 Six mitigations swept against the long-form clip in one process, so the baseline and
@@ -552,6 +705,48 @@ The 0.90x is the number a default v1.2.2-style container was really getting; 2.6
 never the default path's before-and-after. Rows L2 and L3 in
 `docs/validation/v1.3.0/` are the logs behind this table.
 
+## Hybrid hosts: the pool's rotation sent every transcription to the CPU (2026-09-11)
+
+The fourth time a perfect transcript turned out to be running on the wrong silicon, and the
+first time the tell was speed rather than a provider name.
+
+The v1.3.0 rule `_keep_only_drivable_units` keeps a unit in the pool if *either* stage can
+use it: on a CUDA+Intel host the Intel iGPU stays, because vocal isolation runs there,
+even though CTranslate2 cannot. The stated trade was throughput -- a task landing on the
+Intel unit decodes on the CPU, but two tasks run where one did. What the rule did not
+account for is that the pool is a FIFO: a released unit goes back on the *tail*. Every
+auto-detect request runs language detection before transcription. Detection took `cuda:0`
+and returned it to the tail; the transcription then took the head -- the Intel unit -- and
+loaded a **second** CTranslate2 model on the CPU. Not under load. Every single request.
+
+Measured on the RTX 3080 laptop, the same 3-minute clip:
+
+| | rotation | preferring a drivable idle unit |
+| --- | ---: | ---: |
+| unit the transcription landed on | `GPU` (Intel -> CPU) | `cuda:0` |
+| engines loaded | 2 | 1 |
+| per-clip language detection | 5.97 s | 0.218 s |
+| wall clock | 13:35 | **1:00** |
+
+Every local FASTER-WHISPER number recorded before this correction -- the 1665s/2913s stress
+pair, RTF 1.4-3.3 on "the 3080", "this laptop fails the 1.0 budget before and after" -- was a
+CPU number. They are relabelled where they appear; they are consistent with the NUC's CPU
+figures, which is now explained rather than coincidental. The correctness results those runs
+produced stand: CPU int8 decoded the same audio to the same verdicts the 5090 gave in
+float16.
+
+**How it hid.** The banner reports `ASR Runtime: CUDA (Compute: float16)` because it
+describes `DEVICE`, which `_align_device_with_engine` correctly resolves to the CUDA unit.
+It says nothing about which unit a given task lands on. The line that does is
+`[ASR] Starting transcription on hardware unit <id>`, and `/status` per unit -- neither of
+which a raw pytest invocation looks at. `remote_validate.sh` checks `/status` post-suite;
+the local runs were driven without it.
+
+Fixed in `modules/inference/scheduler/unit_choice.py`: an idle unit the resolved engine
+can drive is preferred; the non-drivable unit is taken only when nothing drivable is idle,
+which is the case the v1.3.0 trade was made for. Both `_try_take_idle_unit` and the
+priority path use it.
+
 ## Engine comparison, controlled (RTX 5090, 2026-09-04)
 
 One machine, the `full` image, the same corpus for every engine: 24 single-language clips
@@ -593,6 +788,56 @@ the XPU path on Intel GPUs, and even there OpenVINO beats it (see the Intel tabl
 
 None of the three populates per-segment languages on its own; `segment_languages` comes
 from the pipeline's gap-fill, not from the engine.
+
+### Code-switched clips: the engine split is total, and the bar was hiding it (2026-09-10)
+
+The table above says WHISPERX "commits hard to one language". Scored per clip on the six
+combined fixtures -- one request each on the laptop (CPU decode, see the hybrid-host section;
+the verdicts are device-independent and W4/W5 reproduce them on the 5090), FASTER-WHISPER with
+`ASR_SEGMENT_FIRST=1` -- that commitment costs a whole leg every time:
+
+| clip | FASTER-WHISPER | WHISPERX | what WHISPERX returned |
+| --- | ---: | ---: | --- |
+| `mix_en_es` | 0.75 | 0.38 | Spanish only |
+| `mix_en_fr` | 1.00 | 0.50 | French only |
+| `mix_de_en` | 1.00 | 0.43 | German only |
+| `mix_hi_en` | 0.96 | 0.31 | Hindi only |
+| `mix_zh_en` | 0.88 | 0.21 | Chinese only |
+| `mix_ar_fr` | 1.00 | 0.50 | French only |
+
+Six of six on each engine, with no overlap between the two columns: every FASTER-WHISPER
+score is at or above 0.75 and every WHISPERX score at or below 0.50.
+
+**The bar admitted the defect it was written to catch.** `min_word_overlap` was 0.40 and a
+single *complete* leg scores about 0.50, so `mix_en_fr`, `mix_de_en` and `mix_ar_fr` were
+passing on WHISPERX while returning half the file. The test is named
+`test_mixed_language_clip_transcribes_both_halves`; it was asserting that at least one half
+survived. The bar is now 0.60 -- above the highest one-leg score measured and below the
+lowest two-leg score -- and only `mix_en_es` and `mix_zh_en` had ever been recorded as
+defects, because the other four were never scored on WHISPERX at all.
+
+**Why prose was not enough.** The `mix_zh_en` entry used to carry this, and it is worth
+keeping because it is the reason the whole set was re-measured rather than deleted:
+
+> The entry was deleted on 2026-09-04 on faster-whisper evidence from two machines and
+> restored the same day when WhisperX failed it: two accelerators running the same engine is
+> not two engines.
+
+That lesson survived as prose that nothing enforced, and it cost an XPASS on every run of
+the engine that handles the clip. The manifest entries now carry `xfail_engines`, so the
+defect is attached to WHISPERX as data and FASTER-WHISPER holds the six clips strictly.
+
+`clip_timestamps` cannot rescue WHISPERX: it accepts arbitrary kwargs and forwards none, so
+the option is on its unsupported list and the pipeline never offers it clips
+(`speech_clips._clipping_applies` gates on the engine).
+
+**OPENAI-WHISPER, measured on all six on the RTX 5090 (2026-09-11), drops a leg on three.**
+`mix_en_es` 0.38, `mix_en_fr` 0.50 and `mix_ar_fr` 0.50 return the second leg only;
+`mix_de_en`, `mix_hi_en` and `mix_zh_en` clear 0.60. The reference implementation detects
+the language once on the first window and decodes the whole file in it, and region decoding
+is a faster-whisper option, so the three entries are scoped to both engines. Which three
+fall is a property of the clip -- which leg the first-window detector prefers -- not of the
+engine build, and the split is the same on CUDA as the W5 smoke run found it.
 
 ### Choosing
 

@@ -154,12 +154,32 @@ def _describe_adversarial(entry: dict) -> str:
 
 
 def _flag_notes(entry: dict) -> str:
-    notes = []
-    if entry.get("smoke"):
-        notes.append("smoke")
-    if entry.get("xfail_reason"):
-        notes.append(f"xfail: {entry['xfail_reason']}")
+    """Render an entry's flags for the catalog, naming the engines a defect is limited to.
+
+    A bare "xfail:" reads as "this clip is broken", which is wrong for the code-switched
+    entries: they are defects on WHISPERX and held strictly on FASTER-WHISPER. The engine
+    list is what the suite actually acts on, so the catalog has to show it.
+    """
+    notes = [note for note in (_smoke_note(entry), _bar_note(entry), _xfail_note(entry)) if note]
     return "; ".join(notes) or "-"
+
+
+def _smoke_note(entry: dict) -> str:
+    return "smoke" if entry.get("smoke") else ""
+
+
+def _bar_note(entry: dict) -> str:
+    """A bar set from a measurement rather than the tier default, with its provenance: the
+    near misses hold a strict 0.3 instead of an xfail, and the catalog has to say why."""
+    return f"bar: {entry['bar_note']}" if entry.get("bar_note") else ""
+
+
+def _xfail_note(entry: dict) -> str:
+    if not entry.get("xfail_reason"):
+        return ""
+    engines = entry.get("xfail_engines")
+    scope = f" ({', '.join(engines)})" if engines else ""
+    return f"xfail{scope}: {entry['xfail_reason']}"
 
 
 def _cell(text: str) -> str:
@@ -325,20 +345,61 @@ def render(data: dict) -> str:
         _adversarial_rows(data["adversarial"]),
     )
 
-    path, _ = _locate(longform["id"], longform.get("committed", False))
-    lines += [
-        "## Long-form stress clip",
-        "",
-        f"`{longform['id']}` -- rendered on demand. About {longform['target_seconds'] // 60} minutes of speech in "
-        f"{len(longform['languages'])} languages ({', '.join(longform['languages'])}), interleaved with "
-        "silence, music and noise beds. Rendered to " + _rel(path) + ".",
-        "",
-        "Known defects it currently reproduces:",
-        "",
-    ]
-    lines += [f"- **{name}** -- {detail}" for name, detail in longform["known_defects"].items()]
-    lines += [""]
+    lines += ["## Long-form clips", ""]
+    # A variant states only what differs from the top-level spec and inherits the rest --
+    # except its recorded defects and whether it is translated, which are its own: a
+    # scene-shaped clip does not carry the stress grid's defects, and a second 20-minute
+    # decode is opted into per variant.
+    inherited = {key: value for key, value in longform.items() if key not in ("variants", "known_defects", "translate")}
+    for spec in [longform, *(longform.get("variants") or [])]:
+        lines += _longform_lines({**inherited, **spec})
     return "\n".join(lines)
+
+
+#: What each long-form layout is, for the reader choosing between them.
+_PROFILES = {
+    "stress": "a language change on every utterance over silence, music and noise beds -- the worst case",
+    "natural": "scene-shaped runs of one language with the pause spacing measured on real film",
+    "film": "short lines of dialogue over a music-and-room bed at the level measured on real film",
+}
+
+
+def _longform_lines(spec: dict) -> list[str]:
+    """One long-form variant: where it renders, how it is laid out, and its recorded defects."""
+    path, _ = _locate(spec["id"], spec.get("committed", False))
+    profile = str(spec.get("profile") or "stress")
+    languages = spec["languages"]
+    return [
+        f"`{spec['id']}` -- rendered on demand. About {spec['target_seconds'] // 60} minutes of audio in "
+        + (f"{len(languages)} languages ({', '.join(languages)})" if len(languages) > 1 else f"one language ({languages[0]})")
+        + f": {_PROFILES.get(profile, profile)}{_SHAPES.get(spec.get('shape', 'film'), '')}. Rendered to {_rel(path)}.",
+        *_known_defect_lines(spec.get("known_defects") or {}),
+    ]
+
+
+#: What a film shape adds around the dialogue, for the same reader.
+_SHAPES = {
+    "bookends": ", with a film's opening (logo and title music before the first line), a long passage inside, and its credits",
+    "episode": ", shaped as a television episode: a cold open, a title sequence louder than the dialogue, tighter scene gaps",
+}
+
+
+def _known_defect_lines(defects: dict) -> list[str]:
+    """The defect list, or a line saying there is none.
+
+    An empty mapping is the normal state after a fix -- the manifest records a fix by deleting
+    the entry -- so the heading must not be emitted with nothing under it. It was, and left two
+    consecutive blank lines that markdownlint rejected the moment the last defect was cleared.
+    """
+    if not defects:
+        return [
+            "",
+            "No known defects recorded: nothing in the manifest excuses an assertion on this clip. Which hosts",
+            "have run it, and with what result, is in docs/RELEASE_VALIDATION_PLAN.md -- a CPU host fails",
+            "`throughput` on every long-form clip, and that is recorded there, not here.",
+            "",
+        ]
+    return ["", "Known defects it currently reproduces:", ""] + [f"- **{name}** -- {detail}" for name, detail in defects.items()] + [""]
 
 
 def run() -> int:

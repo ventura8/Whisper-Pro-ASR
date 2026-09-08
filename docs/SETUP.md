@@ -497,7 +497,9 @@ project runs every quality gate through `Dockerfile.test` rather than on the hos
 It posts `tests/e2e/fixtures/speech_known_text.wav` to the running service and asserts the
 transcript contains both known sentences -- *"The quick brown fox jumps over the lazy
 dog."* and *"Whisper Pro ASR is running a hardware acceleration test on this machine."* --
-plus that segment timings span the full ~8.3s clip rather than stopping after the first
+each in order and within one word of itself (the decoder is not deterministic on the
+article of a sentence decoded in its own 3-second window; a missing or invented sentence
+still fails), plus that segment timings span the full ~8.3s clip rather than stopping after the first
 sentence.
 
 The test is skipped unless `RUN_REAL_ASR=1`, so it never slows CI. It drives a live

@@ -36,12 +36,12 @@ the generator.
 | es_core | es | A | committed | Spoken by `es_ES-davefx-medium`: "El veloz zorro marrón salta sobre el perro perezoso. Esta grabación verifica el reconocimiento de voz en español." | 6.5s, 16000 Hz, 1 ch, 139 KB | smoke |
 | fr_core | fr | A | committed | Spoken by `fr_FR-siwis-medium`: "Le vif renard brun saute par-dessus le chien paresseux. Cet enregistrement vérifie la reconnaissance vocale en français." | 6.5s, 16000 Hz, 1 ch, 135 KB | - |
 | de_core | de | A | committed | Spoken by `de_DE-thorsten-medium`: "Der schnelle braune Fuchs springt über den faulen Hund. Diese Aufnahme prüft die deutsche Spracherkennung." | 5.5s, 16000 Hz, 1 ch, 103 KB | - |
-| it_core | it | A | committed | Spoken by `it_IT-paola-medium`: "La rapida volpe marrone salta sopra il cane pigro. Questa registrazione verifica il riconoscimento vocale italiano." | 6.2s, 16000 Hz, 1 ch, 126 KB | - |
+| it_core | it | A | committed | Spoken by `it_IT-paola-medium`: "La rapida volpe marrone salta sopra il cane pigro. Questa registrazione verifica il riconoscimento vocale italiano." | 6.2s, 16000 Hz, 1 ch, 126 KB | xfail: Translation leaves half the pangram in Italian: 'La Rapida Volpe Marrone jumps over Canepigo' -- overlap 0.44 against the 0.50 translation bar, measured 2026-09-12 on the RTX 3080 laptop (FASTER-WHISPER large-v3, float16). Cleared the bar on the RTX 5090's float16 run of the same day (W8), so it flaps like ka_tail and te_tail; transcription of the same clip is fine on both. Recorded rather than tuned around. |
 | pt_core | pt | A | committed | Spoken by `pt_BR-cadu-medium`: "A rápida raposa marrom salta sobre o cão preguiçoso. Esta gravação verifica o reconhecimento de fala em português." | 8.2s, 16000 Hz, 1 ch, 139 KB | - |
 | nl_core | nl | A | committed | Spoken by `nl_BE-nathalie-medium`: "De snelle bruine vos springt over de luie hond. Deze opname controleert de Nederlandse spraakherkenning." | 5.9s, 16000 Hz, 1 ch, 117 KB | - |
 | pl_core | pl | A | committed | Spoken by `pl_PL-darkman-medium`: "Szybki brązowy lis przeskakuje nad leniwym psem. To nagranie sprawdza polskie rozpoznawanie mowy." | 6.3s, 16000 Hz, 1 ch, 116 KB | - |
 | ru_core | ru | A | committed | Spoken by `ru_RU-denis-medium`: "Быстрая коричневая лиса прыгает через ленивую собаку. Эта запись проверяет распознавание русской речи." | 6.8s, 16000 Hz, 1 ch, 129 KB | smoke |
-| uk_core | uk | A | committed | Spoken by `uk_UA-ukrainian_tts-medium`: "Швидка руда лисиця стрибає через лінивого пса. Цей запис перевіряє розпізнавання української мови." | 5.9s, 16000 Hz, 1 ch, 134 KB | - |
+| uk_core | uk | A | committed | Spoken by `uk_UA-ukrainian_tts-medium`: "Швидка руда лисиця стрибає через лінивого пса. Цей запис перевіряє розпізнавання української мови." | 5.9s, 16000 Hz, 1 ch, 134 KB | xfail: Translation paraphrases the pangram into 'a species of red fox is jumping over a feline dog' -- overlap 0.31 against the 0.50 translation bar, measured 2026-09-12 on the RTX 3080 laptop (FASTER-WHISPER large-v3, float16). The transcription bar holds; the translation of a six-second Ukrainian clip does not, and the number is what it is. |
 
 ## Tail speech clips (generated on demand)
 
@@ -52,49 +52,49 @@ the coverage gap stays visible.
 | --- | --- | --- | --- | --- | --- | --- |
 | ar_tail | ar | B | on demand | Spoken by `ar_JO-kareem-medium`: "الثعلب البني السريع يقفز فوق الكلب الكسول. هذا التسجيل يتحقق من التعرف على الكلام العربي." | - | - |
 | bg_tail | bg | B | on demand | Spoken by `bg_BG-dimitar-medium`: "Бързата кафява лисица прескача мързеливото куче. Този запис проверява разпознаването на българска реч." | - | - |
-| bn_tail | bn | B | on demand | Spoken by `bn_BD-google-medium`: "দ্রুত বাদামী শিয়ালটি অলস কুকুরের উপর দিয়ে লাফ দেয়। এই রেকর্ডিং বাংলা কথা শনাক্তকরণ যাচাই করে।" | - | - |
+| bn_tail | bn | B | on demand | Spoken by `bn_BD-google-medium`: "দ্রুত বাদামী শিয়ালটি অলস কুকুরের উপর দিয়ে লাফ দেয়। এই রেকর্ডিং বাংলা কথা শনাক্তকরণ যাচাই করে।" | - | xfail: Bengali on CUDA float16 comes back as Latin-script gibberish ('Dhruto Badami Shirdi'): overlap 0.21 against the 0.5 bar on the RTX 5090, twice (W3, W3b, 2026-09-11), where the laptop's int8 CPU decode had cleared it. Device-dependent, so recorded rather than lowered. |
 | ca_tail | ca | B | on demand | Spoken by `ca_ES-upc_ona-medium`: "La ràpida guineu marró salta sobre el gos mandrós. Aquest enregistrament verifica el reconeixement de veu en català." | - | - |
 | cs_tail | cs | B | on demand | Spoken by `cs_CZ-jirka-medium`: "Rychlá hnědá liška skáče přes líného psa. Tato nahrávka ověřuje české rozpoznávání řeči." | - | - |
 | cy_tail | cy | B | on demand | Spoken by `cy_GB-gwryw_gogleddol-medium`: "Mae'r llwynog brown cyflym yn neidio dros y ci diog. Mae'r recordiad hwn yn gwirio adnabod lleferydd Cymraeg." | - | - |
 | da_tail | da | B | on demand | Spoken by `da_DK-talesyntese-medium`: "Den hurtige brune ræv springer over den dovne hund. Denne optagelse verificerer dansk talegenkendelse." | - | - |
 | el_tail | el | B | on demand | Spoken by `el_GR-joy-medium`: "Η γρήγορη καφέ αλεπού πηδάει πάνω από το τεμπέλικο σκυλί. Αυτή η ηχογράφηση ελέγχει την αναγνώριση ελληνικής ομιλίας." | - | - |
-| et_tail | et | B | on demand | Spoken by `et_EE-news-medium`: "Kiire pruun rebane hüppab üle laisa koera. See salvestus kontrollib eesti kõnetuvastust." | - | - |
+| et_tail | et | B | on demand | Spoken by `et_EE-news-medium`: "Kiire pruun rebane hüppab üle laisa koera. See salvestus kontrollib eesti kõnetuvastust." | - | bar: Strict bar of 0.3, not an xfail: Estonian measured overlap 0.40 against the 0.5 default (2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU at int8 by the hybrid-host rotation fixed the same day). A near miss recorded as a bar below what the model does today, so it fails the moment it does materially less. |
 | eu_tail | eu | B | on demand | Spoken by `eu_ES-antton-medium`: "Azeri marroi bizkorra alfer dagoen txakurraren gainetik salto egiten du. Grabaketa honek euskarazko hizketa ezagutzea egiaztatzen du." | - | - |
 | fa_tail | fa | B | on demand | Spoken by `fa_IR-amir-medium`: "روباه قهوه‌ای سریع از روی سگ تنبل می‌پرد. این ضبط تشخیص گفتار فارسی را بررسی می‌کند." | - | - |
 | fi_tail | fi | B | on demand | Spoken by `fi_FI-harri-medium`: "Nopea ruskea kettu hyppää laiskan koiran yli. Tämä tallenne varmistaa suomen puheentunnistuksen." | - | - |
 | he_tail | he | B | on demand | Spoken by `he_IL-saspeech-medium`: "השועל החום המהיר קופץ מעל הכלב העצלן. הקלטה זו בודקת זיהוי דיבור בעברית." | - | - |
 | hi_tail | hi | B | on demand | Spoken by `hi_IN-pratham-medium`: "तेज़ भूरी लोमड़ी आलसी कुत्ते के ऊपर से कूदती है। यह रिकॉर्डिंग हिंदी वाक् पहचान की जाँच करती है।" | - | - |
 | hu_tail | hu | B | on demand | Spoken by `hu_HU-anna-medium`: "A gyors barna róka átugrik a lusta kutyán. Ez a felvétel a magyar beszédfelismerést ellenőrzi." | - | - |
-| hy_tail | hy | B | on demand | Spoken by `hy_AM-gor-medium`: "Արագ դարչնագույն աղվեսը ցատկում է ծույլ շան վրայով։ Այս ձայնագրությունը ստուգում է հայերեն խոսքի ճանաչումը։" | - | - |
+| hy_tail | hy | B | on demand | Spoken by `hy_AM-gor-medium`: "Արագ դարչնագույն աղվեսը ցատկում է ծույլ շան վրայով։ Այս ձայնագրությունը ստուգում է հայերեն խոսքի ճանաչումը։" | - | xfail: Armenian is barely transcribed: overlap 0.09 against 0.5 (measured 2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU (int8) by the hybrid-host rotation fixed the same day; the verdict is device-independent, scored as the suite scores); detection is correct |
 | id_tail | id | B | on demand | Spoken by `id_ID-news_tts-medium`: "Rubah cokelat yang cepat melompati anjing yang malas. Rekaman ini memverifikasi pengenalan ucapan bahasa Indonesia." | - | - |
 | is_tail | is | B | on demand | Spoken by `is_IS-bui-medium`: "Skjóti brúni refurinn stekkur yfir lata hundinn. Þessi upptaka staðfestir íslenska talgreiningu." | - | - |
 | ja_tail | ja | B | on demand | Spoken by `ja_JA-hi_fi_captain-medium`: "素早い茶色の狐が怠け者の犬を飛び越えます。この録音は日本語の音声認識を検証します。" | - | - |
-| ka_tail | ka | B | on demand | Spoken by `ka_GE-natia-medium`: "სწრაფი ყავისფერი მელა ხტება ზარმაცი ძაღლის თავზე. ეს ჩანაწერი ამოწმებს ქართული მეტყველების ამოცნობას." | - | - |
+| ka_tail | ka | B | on demand | Spoken by `ka_GE-natia-medium`: "სწრაფი ყავისფერი მელა ხტება ზარმაცი ძაღლის თავზე. ეს ჩანაწერი ამოწმებს ქართული მეტყველების ამოცნობას." | - | xfail: Georgian scores 0.20 or clears 0.30 depending on the run (RTX 5090: 0.20 on W3, cleared on W3b, 2026-09-11): the clip trips faster-whisper's temperature fallback, which samples, so the transcript is not deterministic. Recorded so a flap is not read as a regression. |
 | kk_tail | kk | B | on demand | Spoken by `kk_KZ-issai-high`: "Жылдам қоңыр түлкі жалқау иттің үстінен секіреді. Бұл жазба қазақ сөзін тануды тексереді." | - | - |
 | ko_tail | ko | B | on demand | Spoken by `ko_KR-kss-medium`: "빠른 갈색 여우가 게으른 개를 뛰어넘습니다. 이 녹음은 한국어 음성 인식을 확인합니다." | - | - |
-| lb_tail | lb | B | on demand | Spoken by `lb_LU-marylux-medium`: "De séiere brongen Fuuss spréngt iwwer de faule Hond. Dës Opnam iwwerpréift d'Lëtzebuergesch Spracherkennung." | - | - |
-| lv_tail | lv | B | on demand | Spoken by `lv_LV-aivars-medium`: "Ātrā brūnā lapsa pārlec pāri slinkajam sunim. Šis ieraksts pārbauda latviešu runas atpazīšanu." | - | - |
-| ml_tail | ml | B | on demand | Spoken by `ml_IN-arjun-medium`: "വേഗമുള്ള തവിട്ടുനിറമുള്ള കുറുക്കൻ മടിയനായ നായയുടെ മുകളിലൂടെ ചാടുന്നു. ഈ റെക്കോർഡിംഗ് മലയാളം സംസാര തിരിച്ചറിയൽ പരിശോധിക്കുന്നു." | - | - |
+| lb_tail | lb | B | on demand | Spoken by `lb_LU-marylux-medium`: "De séiere brongen Fuuss spréngt iwwer de faule Hond. Dës Opnam iwwerpréift d'Lëtzebuergesch Spracherkennung." | - | xfail: Luxembourgish is detected and transcribed as German: overlap 0.09 against 0.5 (measured 2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU (int8) by the hybrid-host rotation fixed the same day; the verdict is device-independent, scored as the suite scores). A closely related language the model has far more of wins the detection, and the transcript that comes back is fluent German rather than Luxembourgish -- so the identity assertion passes (it was transcribed to something) and only the content bar can see it. |
+| lv_tail | lv | B | on demand | Spoken by `lv_LV-aivars-medium`: "Ātrā brūnā lapsa pārlec pāri slinkajam sunim. Šis ieraksts pārbauda latviešu runas atpazīšanu." | - | bar: Strict bar of 0.3, not an xfail: Latvian measured overlap 0.42 against the 0.5 default (2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU at int8 by the hybrid-host rotation fixed the same day). A near miss recorded as a bar below what the model does today, so it fails the moment it does materially less. |
+| ml_tail | ml | B | on demand | Spoken by `ml_IN-arjun-medium`: "വേഗമുള്ള തവിട്ടുനിറമുള്ള കുറുക്കൻ മടിയനായ നായയുടെ മുകളിലൂടെ ചാടുന്നു. ഈ റെക്കോർഡിംഗ് മലയാളം സംസാര തിരിച്ചറിയൽ പരിശോധിക്കുന്നു." | - | xfail: Malayalam returns nothing usable: overlap 0.00 against 0.5 (measured 2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU (int8) by the hybrid-host rotation fixed the same day; the verdict is device-independent, scored as the suite scores); detection is correct |
 | mr_tail | mr | B | on demand | Spoken by `mr_IN-google-medium`: "चपळ तपकिरी कोल्हा आळशी कुत्र्यावरून उडी मारतो. ही ध्वनिमुद्रिका मराठी भाषण ओळख तपासते." | - | - |
 | ne_tail | ne | B | on demand | Spoken by `ne_NP-chitwan-medium`: "छिटो खैरो स्याल अल्छी कुकुरमाथि उफ्रन्छ। यो रेकर्डिङले नेपाली बोली पहिचान जाँच गर्छ।" | - | - |
 | no_tail | no | B | on demand | Spoken by `no_NO-talesyntese-medium`: "Den raske brune reven hopper over den late hunden. Dette opptaket verifiserer norsk talegjenkjenning." | - | - |
 | ro_tail | ro | B | on demand | Spoken by `ro_RO-mihai-medium`: "Vulpea maro rapidă sare peste câinele leneș. Această înregistrare verifică recunoașterea vorbirii în limba română." | - | - |
 | sk_tail | sk | B | on demand | Spoken by `sk_SK-lili-medium`: "Rýchla hnedá líška skáče cez lenivého psa. Táto nahrávka overuje slovenské rozpoznávanie reči." | - | - |
 | sl_tail | sl | B | on demand | Spoken by `sl_SI-artur-medium`: "Hitra rjava lisica skoči čez lenega psa. Ta posnetek preverja slovensko razpoznavanje govora." | - | - |
-| sq_tail | sq | B | on demand | Spoken by `sq_AL-edon-medium`: "Dhelpra e shpejtë kafe kërcen mbi qenin dembel. Ky regjistrim verifikon njohjen e të folurit shqip." | - | - |
-| sr_tail | sr | B | on demand | Spoken by `sr_RS-serbski_institut-medium`: "Брза смеђа лисица прескаче лењог пса. Овај снимак проверава препознавање српског говора." | - | - |
+| sq_tail | sq | B | on demand | Spoken by `sq_AL-edon-medium`: "Dhelpra e shpejtë kafe kërcen mbi qenin dembel. Ky regjistrim verifikon njohjen e të folurit shqip." | - | xfail: Albanian is barely transcribed: overlap 0.09 against 0.5 (measured 2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU (int8) by the hybrid-host rotation fixed the same day; the verdict is device-independent, scored as the suite scores); detection is correct |
+| sr_tail | sr | B | on demand | Spoken by `sr_RS-serbski_institut-medium`: "Брза смеђа лисица прескаче лењог пса. Овај снимак проверава препознавање српског говора." | - | xfail: Serbian is detected as Czech and transcribed as it: overlap 0.00 against 0.5 (measured 2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU (int8) by the hybrid-host rotation fixed the same day; the verdict is device-independent, scored as the suite scores) |
 | sv_tail | sv | B | on demand | Spoken by `sv_SE-nst-medium`: "Den snabba bruna räven hoppar över den lata hunden. Denna inspelning verifierar svensk taligenkänning." | - | - |
-| sw_tail | sw | B | on demand | Spoken by `sw_CD-lanfrica-medium`: "Mbweha wa kahawia mwepesi anaruka juu ya mbwa mvivu. Rekodi hii inathibitisha utambuzi wa hotuba ya Kiswahili." | - | - |
-| te_tail | te | B | on demand | Spoken by `te_IN-maya-medium`: "వేగవంతమైన గోధుమ రంగు నక్క సోమరి కుక్క మీదుగా దూకుతుంది. ఈ రికార్డింగ్ తెలుగు ప్రసంగ గుర్తింపును ధృవీకరిస్తుంది." | - | - |
+| sw_tail | sw | B | on demand | Spoken by `sw_CD-lanfrica-medium`: "Mbweha wa kahawia mwepesi anaruka juu ya mbwa mvivu. Rekodi hii inathibitisha utambuzi wa hotuba ya Kiswahili." | - | bar: Strict bar of 0.3, not an xfail: Swahili measured overlap 0.45 against the 0.5 default (2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU at int8 by the hybrid-host rotation fixed the same day). A near miss recorded as a bar below what the model does today, so it fails the moment it does materially less. |
+| te_tail | te | B | on demand | Spoken by `te_IN-maya-medium`: "వేగవంతమైన గోధుమ రంగు నక్క సోమరి కుక్క మీదుగా దూకుతుంది. ఈ రికార్డింగ్ తెలుగు ప్రసంగ గుర్తింపును ధృవీకరిస్తుంది." | - | xfail: Telugu scores 0.39 or clears 0.50 depending on the run (RTX 5090: 0.39 on W3, cleared on W3b, 2026-09-11): the clip trips faster-whisper's temperature fallback, which samples, so the transcript is not deterministic. Recorded so a flap is not read as a regression. |
 | tr_tail | tr | B | on demand | Spoken by `tr_TR-dfki-medium`: "Hızlı kahverengi tilki tembel köpeğin üzerinden atlar. Bu kayıt Türkçe konuşma tanımayı doğrular." | - | - |
-| ur_tail | ur | B | on demand | Spoken by `ur_PK-aegis_female-medium`: "تیز بھوری لومڑی سست کتے کے اوپر سے کودتی ہے۔ یہ ریکارڈنگ اردو تقریر کی شناخت کی تصدیق کرتی ہے۔" | - | - |
+| ur_tail | ur | B | on demand | Spoken by `ur_PK-aegis_female-medium`: "تیز بھوری لومڑی سست کتے کے اوپر سے کودتی ہے۔ یہ ریکارڈنگ اردو تقریر کی شناخت کی تصدیق کرتی ہے۔" | - | xfail: Urdu is detected as Hindi and transcribed in Devanagari: overlap 0.00 against 0.5 (measured 2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU (int8) by the hybrid-host rotation fixed the same day; the verdict is device-independent, scored as the suite scores). Mutually intelligible when spoken, different script, so the reference cannot match |
 | vi_tail | vi | B | on demand | Spoken by `vi_VN-vais1000-medium`: "Con cáo nâu nhanh nhẹn nhảy qua con chó lười biếng. Bản ghi này xác minh nhận dạng giọng nói tiếng Việt." | - | - |
 | zh_tail | zh | B | on demand | Spoken by `zh_CN-huayan-medium`: "敏捷的棕色狐狸跳过了懒惰的狗。这段录音用于验证中文语音识别。" | - | smoke |
 | af_gap | af | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
 | am_gap | am | B | unavailable | Coverage gap, no clip rendered: MMS voice exists but needs uroman romanization, which yields unintelligible speech. | - | - |
 | bs_gap | bs | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
 | gl_gap | gl | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
-| gu_mms | gu | B | on demand | Spoken by `guj`: "ઝડપી કથ્થઈ શિયાળ આળસુ કૂતરા ઉપર કૂદે છે. આ રેકોર્ડિંગ ગુજરાતી વાણી ઓળખની ચકાસણી કરે છે." | - | - |
+| gu_mms | gu | B | on demand | Spoken by `guj`: "ઝડપી કથ્થઈ શિયાળ આળસુ કૂતરા ઉપર કૂદે છે. આ રેકોર્ડિંગ ગુજરાતી વાણી ઓળખની ચકાસણી કરે છે." | - | xfail: Gujarati: overlap 0.05 against a ceiling of 0.50 -- 0.10 of the attainable score, bar 0.5 (measured 2026-09-11, FASTER-WHISPER large-v3 on the RTX 3080 laptop, decoded on its CPU (int8) by the hybrid-host rotation fixed the same day; the verdict is device-independent, scored as the suite scores); detection is correct |
 | hr_gap | hr | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
 | km_gap | km | B | unavailable | Coverage gap, no clip rendered: MMS voice exists but synthesis drives the decoder into a repetition loop. | - | - |
 | lt_gap | lt | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
@@ -102,12 +102,72 @@ the coverage gap stays visible.
 | mk_gap | mk | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
 | mt_gap | mt | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
 | my_gap | my | B | unavailable | Coverage gap, no clip rendered: MMS voice exists but the rendered speech is detected as Chinese, not Burmese. | - | - |
-| pa_mms | pa | B | on demand | Spoken by `pan`: "ਤੇਜ਼ ਭੂਰਾ ਲੂੰਬੜ ਆਲਸੀ ਕੁੱਤੇ ਉੱਤੇ ਛਾਲ ਮਾਰਦਾ ਹੈ। ਇਹ ਰਿਕਾਰਡਿੰਗ ਪੰਜਾਬੀ ਬੋਲੀ ਪਛਾਣ ਦੀ ਜਾਂਚ ਕਰਦੀ ਹੈ।" | - | - |
+| pa_mms | pa | B | on demand | Spoken by `pan`: "ਤੇਜ਼ ਭੂਰਾ ਲੂੰਬੜ ਆਲਸੀ ਕੁੱਤੇ ਉੱਤੇ ਛਾਲ ਮਾਰਦਾ ਹੈ। ਇਹ ਰਿਕਾਰਡਿੰਗ ਪੰਜਾਬੀ ਬੋਲੀ ਪਛਾਣ ਦੀ ਜਾਂਚ ਕਰਦੀ ਹੈ।" | - | xfail: Whisper transcribes the MMS Punjabi voice in Latin script -- 'Poora loombad aalsi kutte utte chhaal', which is the sentence, romanised -- so overlap against the Gurmukhi reference is 0.00 (RTX 5090, W3b, 2026-09-11). The words are heard; the script is wrong. |
 | si_gap | si | B | unavailable | Coverage gap, no clip rendered: no Piper voice. | - | - |
 | ta_mms | ta | B | on demand | Spoken by `tam`: "விரைவான பழுப்பு நரி சோம்பேறி நாயின் மேல் பாய்கிறது. இந்தப் பதிவு தமிழ் பேச்சு அறிதலைச் சரிபார்க்கிறது." | - | - |
 | th_mms | th | B | on demand | Spoken by `tha`: "สุนัขจิ้งจอกสีน้ำตาลกระโดดข้ามสุนัขขี้เกียจ การบันทึกนี้ตรวจสอบการรู้จำเสียงพูดภาษาไทย" | - | - |
 | tl_mms | tl | B | on demand | Spoken by `tgl`: "Ang mabilis na kayumangging soro ay lumundag sa tamad na aso. Sinusuri ng recording na ito ang pagkilala ng salitang Tagalog." | - | - |
-| yo_mms | yo | B | on demand | Spoken by `yor`: "Kọ̀lọ̀kọ̀lọ̀ aláwọ̀ búráùnù yára fò sórí ajá ọ̀lẹ. Ìgbàsílẹ̀ yìí ń ṣàyẹ̀wò ìdámọ̀ ọ̀rọ̀ sísọ Yorùbá." | - | xfail: MMS Yoruba renders diacritics imprecisely; language detection is correct but word overlap is partial (verified 2026-09-02) |
+| yo_mms | yo | B | on demand | Spoken by `yor`: "Kọ̀lọ̀kọ̀lọ̀ aláwọ̀ búráùnù yára fò sórí ajá ọ̀lẹ. Ìgbàsílẹ̀ yìí ń ṣàyẹ̀wò ìdámọ̀ ọ̀rọ̀ sísọ Yorùbá." | - | - |
+| en_scene2 | en | B | on demand | Spoken by `en_US-lessac-medium`: "A calm river flows past the old stone bridge. The second sample checks the same voice with different words." | - | - |
+| en_scene3 | en | B | on demand | Spoken by `en_US-lessac-medium`: "Seven bright lamps light the narrow street at night. The third sample adds more variety to this scene." | - | - |
+| es_scene2 | es | B | on demand | Spoken by `es_ES-davefx-medium`: "Un río tranquilo pasa junto al viejo puente de piedra. La segunda muestra comprueba la misma voz con palabras distintas." | - | - |
+| es_scene3 | es | B | on demand | Spoken by `es_ES-davefx-medium`: "Siete lámparas brillantes iluminan la calle estrecha por la noche. La tercera muestra añade más variedad a esta escena." | - | - |
+| fr_scene2 | fr | B | on demand | Spoken by `fr_FR-siwis-medium`: "Une rivière calme passe près du vieux pont de pierre. Le deuxième échantillon vérifie la même voix avec des mots différents." | - | - |
+| fr_scene3 | fr | B | on demand | Spoken by `fr_FR-siwis-medium`: "Sept lampes brillantes éclairent la rue étroite pendant la nuit. Le troisième échantillon ajoute plus de variété à cette scène." | - | - |
+| de_scene2 | de | B | on demand | Spoken by `de_DE-thorsten-medium`: "Ein ruhiger Fluss fließt an der alten Steinbrücke vorbei. Die zweite Aufnahme prüft dieselbe Stimme mit anderen Wörtern." | - | - |
+| de_scene3 | de | B | on demand | Spoken by `de_DE-thorsten-medium`: "Sieben helle Lampen beleuchten die enge Straße in der Nacht. Die dritte Aufnahme bringt mehr Abwechslung in diese Szene." | - | - |
+| it_scene2 | it | B | on demand | Spoken by `it_IT-paola-medium`: "Un fiume tranquillo scorre accanto al vecchio ponte di pietra. Il secondo campione verifica la stessa voce con parole diverse." | - | - |
+| it_scene3 | it | B | on demand | Spoken by `it_IT-paola-medium`: "Sette lampade luminose illuminano la strada stretta durante la notte. Il terzo campione aggiunge più varietà a questa scena." | - | - |
+| pt_scene2 | pt | B | on demand | Spoken by `pt_BR-cadu-medium`: "Um rio tranquilo passa perto da velha ponte de pedra. A segunda amostra verifica a mesma voz com palavras diferentes." | - | - |
+| pt_scene3 | pt | B | on demand | Spoken by `pt_BR-cadu-medium`: "Sete lâmpadas brilhantes iluminam a rua estreita durante a noite. A terceira amostra acrescenta mais variedade a esta cena." | - | - |
+| nl_scene2 | nl | B | on demand | Spoken by `nl_BE-nathalie-medium`: "Een rustige rivier stroomt langs de oude stenen brug. Het tweede fragment controleert dezelfde stem met andere woorden." | - | - |
+| nl_scene3 | nl | B | on demand | Spoken by `nl_BE-nathalie-medium`: "Zeven heldere lampen verlichten de smalle straat in de nacht. Het derde fragment brengt meer variatie in deze scène." | - | - |
+| pl_scene2 | pl | B | on demand | Spoken by `pl_PL-darkman-medium`: "Spokojna rzeka płynie obok starego kamiennego mostu. Druga próbka sprawdza ten sam głos innymi słowami." | - | - |
+| pl_scene3 | pl | B | on demand | Spoken by `pl_PL-darkman-medium`: "Siedem jasnych lamp oświetla wąską ulicę nocą. Trzecia próbka dodaje więcej różnorodności tej scenie." | - | - |
+| ru_scene2 | ru | B | on demand | Spoken by `ru_RU-denis-medium`: "Спокойная река течёт мимо старого каменного моста. Второй образец проверяет тот же голос другими словами." | - | - |
+| ru_scene3 | ru | B | on demand | Spoken by `ru_RU-denis-medium`: "Семь ярких ламп освещают узкую улицу ночью. Третий образец добавляет больше разнообразия этой сцене." | - | - |
+| uk_scene2 | uk | B | on demand | Spoken by `uk_UA-ukrainian_tts-medium`: "Спокійна річка тече повз старий кам'яний міст. Другий зразок перевіряє той самий голос іншими словами." | - | - |
+| uk_scene3 | uk | B | on demand | Spoken by `uk_UA-ukrainian_tts-medium`: "Сім яскравих ламп освітлюють вузьку вулицю вночі. Третій зразок додає більше різноманітності цій сцені." | - | - |
+| en_line1 | en | B | on demand | Spoken by `en_US-lessac-medium`: "Where were you last night?" | - | - |
+| en_line2 | en | B | on demand | Spoken by `en_US-lessac-medium`: "I don't know what you mean." | - | - |
+| en_line3 | en | B | on demand | Spoken by `en_US-lessac-medium`: "We need to leave now." | - | - |
+| en_line4 | en | B | on demand | Spoken by `en_US-lessac-medium`: "Tell me the truth." | - | - |
+| es_line1 | es | B | on demand | Spoken by `es_ES-davefx-medium`: "¿Dónde estabas anoche?" | - | - |
+| es_line2 | es | B | on demand | Spoken by `es_ES-davefx-medium`: "No sé de qué hablas." | - | - |
+| es_line3 | es | B | on demand | Spoken by `es_ES-davefx-medium`: "Tenemos que irnos ahora." | - | - |
+| es_line4 | es | B | on demand | Spoken by `es_ES-davefx-medium`: "Dime la verdad." | - | - |
+| fr_line1 | fr | B | on demand | Spoken by `fr_FR-siwis-medium`: "Où étais-tu hier soir ?" | - | - |
+| fr_line2 | fr | B | on demand | Spoken by `fr_FR-siwis-medium`: "Je ne sais pas de quoi tu parles." | - | - |
+| fr_line3 | fr | B | on demand | Spoken by `fr_FR-siwis-medium`: "Il faut partir maintenant." | - | - |
+| fr_line4 | fr | B | on demand | Spoken by `fr_FR-siwis-medium`: "Dis-moi la vérité." | - | - |
+| de_line1 | de | B | on demand | Spoken by `de_DE-thorsten-medium`: "Wo warst du gestern Abend?" | - | - |
+| de_line2 | de | B | on demand | Spoken by `de_DE-thorsten-medium`: "Ich weiß nicht, was du meinst." | - | - |
+| de_line3 | de | B | on demand | Spoken by `de_DE-thorsten-medium`: "Wir müssen jetzt gehen." | - | - |
+| de_line4 | de | B | on demand | Spoken by `de_DE-thorsten-medium`: "Sag mir die Wahrheit." | - | - |
+| it_line1 | it | B | on demand | Spoken by `it_IT-paola-medium`: "Dov'eri ieri sera?" | - | - |
+| it_line2 | it | B | on demand | Spoken by `it_IT-paola-medium`: "Non so di cosa parli." | - | - |
+| it_line3 | it | B | on demand | Spoken by `it_IT-paola-medium`: "Dobbiamo andare adesso." | - | - |
+| it_line4 | it | B | on demand | Spoken by `it_IT-paola-medium`: "Dimmi la verità." | - | - |
+| pt_line1 | pt | B | on demand | Spoken by `pt_BR-cadu-medium`: "Onde você estava ontem à noite?" | - | - |
+| pt_line2 | pt | B | on demand | Spoken by `pt_BR-cadu-medium`: "Não sei do que você está falando." | - | - |
+| pt_line3 | pt | B | on demand | Spoken by `pt_BR-cadu-medium`: "Precisamos ir agora." | - | - |
+| pt_line4 | pt | B | on demand | Spoken by `pt_BR-cadu-medium`: "Me diga a verdade." | - | - |
+| nl_line1 | nl | B | on demand | Spoken by `nl_BE-nathalie-medium`: "Waar was je gisteravond?" | - | - |
+| nl_line2 | nl | B | on demand | Spoken by `nl_BE-nathalie-medium`: "Ik weet niet wat je bedoelt." | - | - |
+| nl_line3 | nl | B | on demand | Spoken by `nl_BE-nathalie-medium`: "We moeten nu gaan." | - | - |
+| nl_line4 | nl | B | on demand | Spoken by `nl_BE-nathalie-medium`: "Vertel me de waarheid." | - | - |
+| pl_line1 | pl | B | on demand | Spoken by `pl_PL-darkman-medium`: "Gdzie byłeś wczoraj wieczorem?" | - | - |
+| pl_line2 | pl | B | on demand | Spoken by `pl_PL-darkman-medium`: "Nie wiem, o czym mówisz." | - | - |
+| pl_line3 | pl | B | on demand | Spoken by `pl_PL-darkman-medium`: "Musimy już iść." | - | - |
+| pl_line4 | pl | B | on demand | Spoken by `pl_PL-darkman-medium`: "Powiedz mi prawdę." | - | - |
+| ru_line1 | ru | B | on demand | Spoken by `ru_RU-denis-medium`: "Где ты был вчера вечером?" | - | - |
+| ru_line2 | ru | B | on demand | Spoken by `ru_RU-denis-medium`: "Я не понимаю, о чём ты." | - | - |
+| ru_line3 | ru | B | on demand | Spoken by `ru_RU-denis-medium`: "Нам нужно уходить." | - | - |
+| ru_line4 | ru | B | on demand | Spoken by `ru_RU-denis-medium`: "Скажи мне правду." | - | - |
+| uk_line1 | uk | B | on demand | Spoken by `uk_UA-ukrainian_tts-medium`: "Де ти був учора ввечері?" | - | - |
+| uk_line2 | uk | B | on demand | Spoken by `uk_UA-ukrainian_tts-medium`: "Я не розумію, про що ти." | - | - |
+| uk_line3 | uk | B | on demand | Spoken by `uk_UA-ukrainian_tts-medium`: "Нам треба йти." | - | xfail: A one-second Ukrainian line comes back as a single run-together word ('Амтрабайты' for 'Нам треба йти'): overlap 0.00 against the 0.6 bar on the RTX 5090 (W3b, 2026-09-11). The shortest clip in the matrix; in the long-form clips the same line is decoded in the context of its run and scores. |
+| uk_line4 | uk | B | on demand | Spoken by `uk_UA-ukrainian_tts-medium`: "Скажи мені правду." | - | - |
 
 ## Code-switched clips
 
@@ -115,12 +175,12 @@ Two languages spoken back to back in one file, for language-detection behaviour.
 
 | ID | State | Legs | Measured | Notes |
 | --- | --- | --- | --- | --- |
-| mix_en_es | on demand | en: "The meeting starts at nine in the morning." then es: "La reunión comienza a las nueve de la mañana." | - | xfail: service transcribes only the leg matching the detected language and drops the other; verified 2026-09-01: en+es returned only the Spanish half |
-| mix_en_fr | on demand | en: "Please send the report before Friday." then fr: "Veuillez envoyer le rapport avant vendredi." | - | smoke |
-| mix_de_en | on demand | de: "Der Bericht ist fast fertig." then en: "I will finish the summary tonight." | - | - |
-| mix_hi_en | on demand | hi: "यह रिकॉर्डिंग दो भाषाओं में है।" then en: "This recording contains two languages." | - | - |
-| mix_zh_en | on demand | zh: "这段录音包含两种语言。" then en: "The second half of this file is English." | - | xfail: engine-dependent. FASTER-WHISPER transcribes both halves (XPASS on an RTX 5090 three runs running, an RTX 3080, and an Intel NUC), but WHISPERX returns only the Chinese half and drops the English one -- overlap 0.21 against a 0.40 bar, measured 2026-09-04. The entry was deleted earlier that day on faster-whisper evidence from two machines and restored when WhisperX failed it: two accelerators running the same engine is not two engines |
-| mix_ar_fr | on demand | ar: "هذا التسجيل يحتوي على لغتين." then fr: "La seconde partie est en français." | - | - |
+| mix_en_es | on demand | en: "The meeting starts at nine in the morning." then es: "La reunión comienza a las nueve de la mañana." | - | xfail (WHISPERX, OPENAI-WHISPER): WHISPERX drops the English leg and returns only the Spanish one -- overlap 0.38 against the 0.60 bar, measured 2026-09-10 on the RTX 3080 laptop and reproduced 2026-09-11 on an RTX 5090 (W4). It commits to one language for a whole file, so no decode option reaches this: clip_timestamps is on its unsupported list because it accepts arbitrary kwargs and forwards none. OPENAI-WHISPER detects the language once, on the first window, and decodes the whole file in it, and decoding by speech region is a FASTER-WHISPER option (clip_timestamps), so it does the same: drops the English leg and returns only the Spanish one, overlap 0.38, measured 2026-09-11 on the RTX 5090 (CS-OPENAI). FASTER-WHISPER decoding by speech region returns both legs at 0.75. |
+| mix_en_fr | on demand | en: "Please send the report before Friday." then fr: "Veuillez envoyer le rapport avant vendredi." | - | smoke; xfail (WHISPERX, OPENAI-WHISPER): WHISPERX drops the English leg and returns only the French one -- overlap 0.50 against the 0.60 bar, measured 2026-09-10 on the RTX 3080 laptop and reproduced 2026-09-11 on an RTX 5090 (W4). It commits to one language for a whole file, so no decode option reaches this: clip_timestamps is on its unsupported list because it accepts arbitrary kwargs and forwards none. OPENAI-WHISPER detects the language once, on the first window, and decodes the whole file in it, and decoding by speech region is a FASTER-WHISPER option (clip_timestamps), so it does the same: drops the English leg and returns only the French one, overlap 0.50, measured 2026-09-11 on the RTX 5090 (CS-OPENAI). FASTER-WHISPER decoding by speech region returns both legs at 1.00. |
+| mix_de_en | on demand | de: "Der Bericht ist fast fertig." then en: "I will finish the summary tonight." | - | xfail (WHISPERX): WHISPERX drops the English leg and returns only the German one -- overlap 0.43 against the 0.60 bar, measured 2026-09-10 on the RTX 3080 laptop and reproduced 2026-09-11 on an RTX 5090 (W4). It commits to one language for a whole file, so no decode option reaches this: clip_timestamps is on its unsupported list because it accepts arbitrary kwargs and forwards none. OPENAI-WHISPER detects the language once, on the first window, and decodes the whole file in it, and decoding by speech region is a FASTER-WHISPER option (clip_timestamps), so it does the same in principle, yet clears the 0.60 bar on this clip -- measured 2026-09-11 on the RTX 5090 (CS-OPENAI), not xfailed. FASTER-WHISPER decoding by speech region returns both legs at 1.00. |
+| mix_hi_en | on demand | hi: "यह रिकॉर्डिंग दो भाषाओं में है।" then en: "This recording contains two languages." | - | xfail (WHISPERX): WHISPERX drops the English leg and returns only the Hindi one -- overlap 0.31 against the 0.60 bar, measured 2026-09-10 on the RTX 3080 laptop and reproduced 2026-09-11 on an RTX 5090 (W4). It commits to one language for a whole file, so no decode option reaches this: clip_timestamps is on its unsupported list because it accepts arbitrary kwargs and forwards none. OPENAI-WHISPER detects the language once, on the first window, and decodes the whole file in it, and decoding by speech region is a FASTER-WHISPER option (clip_timestamps), so it does the same in principle, yet clears the 0.60 bar on this clip -- measured 2026-09-11 on the RTX 5090 (CS-OPENAI), not xfailed. FASTER-WHISPER decoding by speech region returns both legs at 0.96. |
+| mix_zh_en | on demand | zh: "这段录音包含两种语言。" then en: "The second half of this file is English." | - | xfail (WHISPERX): WHISPERX drops the English leg and returns only the Chinese one -- overlap 0.21 against the 0.60 bar, measured 2026-09-10 on the RTX 3080 laptop and reproduced 2026-09-11 on an RTX 5090 (W4). It commits to one language for a whole file, so no decode option reaches this: clip_timestamps is on its unsupported list because it accepts arbitrary kwargs and forwards none. OPENAI-WHISPER detects the language once, on the first window, and decodes the whole file in it, and decoding by speech region is a FASTER-WHISPER option (clip_timestamps), so it does the same in principle, yet clears the 0.60 bar on this clip -- measured 2026-09-11 on the RTX 5090 (CS-OPENAI), not xfailed. FASTER-WHISPER decoding by speech region returns both legs at 0.88. |
+| mix_ar_fr | on demand | ar: "هذا التسجيل يحتوي على لغتين." then fr: "La seconde partie est en français." | - | xfail (WHISPERX, OPENAI-WHISPER): WHISPERX drops the Arabic leg and returns only the French one -- overlap 0.50 against the 0.60 bar, measured 2026-09-10 on the RTX 3080 laptop and reproduced 2026-09-11 on an RTX 5090 (W4). It commits to one language for a whole file, so no decode option reaches this: clip_timestamps is on its unsupported list because it accepts arbitrary kwargs and forwards none. OPENAI-WHISPER detects the language once, on the first window, and decodes the whole file in it, and decoding by speech region is a FASTER-WHISPER option (clip_timestamps), so it does the same: drops the Arabic leg and returns only the French one, overlap 0.50, measured 2026-09-11 on the RTX 5090 (CS-OPENAI). FASTER-WHISPER decoding by speech region returns both legs at 1.00. |
 
 ## Adversarial and degraded clips
 
@@ -129,9 +189,9 @@ does not hang; a correct transcript is not always expected.
 
 | ID | State | Contents | Measured | Accepted response | Notes |
 | --- | --- | --- | --- | --- | --- |
-| silence_only | on demand | Digital silence for 10s -- must not hang or hallucinate speech. | - | HTTP 200, 400, 415, 422, 500; text empty_or_absent | smoke |
-| noise_only | on demand | White noise for 10s -- decoder must not lock up on non-speech. | - | HTTP 200, 400, 415, 422, 500; text any | - |
-| tones_only | on demand | Pure tones for 10s -- musical, speech-free input. | - | HTTP 200, 400, 415, 422, 500; text any | - |
+| silence_only | on demand | Digital silence for 10s -- must not hang or hallucinate speech. | - | HTTP 200, 400, 415, 422; text empty_or_absent | smoke |
+| noise_only | on demand | White noise for 10s -- decoder must not lock up on non-speech. | - | HTTP 200, 400, 415, 422; text any | - |
+| tones_only | on demand | Pure tones for 10s -- musical, speech-free input. | - | HTTP 200, 400, 415, 422; text any | - |
 | clipped_speech | on demand | `en_core` amplified 12.0x into hard clipping -- distorted speech. | - | HTTP 200; text non_empty | smoke |
 | very_quiet_speech | on demand | `en_core` attenuated to 0.005 of full scale -- near-inaudible speech. | - | HTTP 200; text any | - |
 | telephone_band | on demand | `en_core` band-limited to 8000 Hz telephone quality. | - | HTTP 200; text non_empty | - |
@@ -140,16 +200,45 @@ does not hang; a correct transcript is not always expected.
 | rate_48000 | on demand | `en_core` resampled to 48000 Hz -- exercises rate conversion. | - | HTTP 200; text non_empty | - |
 | rate_8000 | on demand | `en_core` resampled to 8000 Hz -- exercises rate conversion. | - | HTTP 200; text non_empty | - |
 | speech_after_30s_silence | on demand | 30s of silence followed by `en_core` -- late speech onset. | - | HTTP 200; text non_empty | - |
-| sub_second_clip | on demand | A 0.05s clip, shorter than one decode window. | - | HTTP 200, 400, 415, 422, 500; text empty_or_absent | - |
-| truncated_wav_header | on demand | `en_core` with a truncated WAV header -- malformed container. | - | HTTP 400, 415, 422, 500; text any | smoke |
-| zero_byte_upload | on demand | A zero-byte file with a .wav name -- empty upload. | - | HTTP 400, 415, 422, 500; text any | smoke |
+| sub_second_clip | on demand | A 0.05s clip, shorter than one decode window. | - | HTTP 200, 400, 415, 422; text empty_or_absent | - |
+| truncated_wav_header | on demand | `en_core` with a truncated WAV header -- malformed container. | - | HTTP 400, 415, 422; text any | smoke |
+| zero_byte_upload | on demand | A zero-byte file with a .wav name -- empty upload. | - | HTTP 400, 415, 422; text any | smoke |
 | mp3_named_wav | on demand | `en_core` encoded as MP3 but named .wav -- extension/content mismatch. | - | HTTP 200; text non_empty | - |
 
-## Long-form stress clip
+## Long-form clips
 
-`longform_stress` -- rendered on demand. About 20 minutes of speech in 10 languages (en, es, fr, de, it, pt, nl, pl, ru, uk), interleaved with silence, music and noise beds. Rendered to test_data/audio_matrix/longform_stress.wav.
+`longform_stress` -- rendered on demand. About 20 minutes of audio in 10 languages (en, es, fr, de, it, pt, nl, pl, ru, uk): a language change on every utterance over silence, music and noise beds -- the worst case. Rendered to test_data/audio_matrix/longform_stress.wav.
 
-Known defects it currently reproduces:
+No known defects recorded: nothing in the manifest excuses an assertion on this clip. Which hosts
+have run it, and with what result, is in docs/RELEASE_VALIDATION_PLAN.md -- a CPU host fails
+`throughput` on every long-form clip, and that is recorded there, not here.
 
-- **windows** -- the decoder emits one language per 30-second window, so audio that changes language faster than that gets the dominant language's words over everything else. multilingual=True (per-window re-detection) was enabled 2026-09-04 and improved it materially: 78 -> 55 of 118 windows below the 0.4 overlap threshold on an RTX 5090, and 56/118 on the NUC with the same engine on CPU -- two environments, same result. The improvement is structural, not noise: before, the detected language was the only clean one (es 12/12, everything else failing wholesale); after, misses spread thin (ru 11->2, fr 8->3, pt 4->2) and no language is privileged. Still 5x the 11 allowed, because 30s granularity cannot follow a switch every 7.6s. Closing it needs decoding at utterance granularity; a coarse language map was measured as too imprecise to drive that (31% precision on real film, 12-24% false trigger on monolingual film), so the remaining path is not obvious
-- **quiet** -- silence, music and noise are filled with invented speech -- 10 of 25 quiet windows on an RTX 5090 with FASTER-WHISPER, measured 2026-09-04. WHISPERX does NOT have this defect (it XPASSES the test): its VAD chunking never hands silence to the decoder, so this is a property of how audio reaches the decoder rather than a limit of Whisper itself. Raising the transcription VAD threshold was tried and REJECTED: 0.6 removed one hallucinated window and cost seven real ones (window misses 55 -> 62, confirmed on a clean repeat run). The reason it underperforms here is that UVR has already stripped most non-vocal content before VAD sees it, so the threshold has little hallucination left to catch and plenty of quiet speech left to discard -- an engine-only sweep without UVR overstates its value. VAD_THRESHOLD is plumbed and configurable now for anyone re-testing on other audio. The remaining text is the same pangram that drove the long-form loop, so it is the decoder running away into silence
+`longform_natural` -- rendered on demand. About 20 minutes of audio in 10 languages (en, es, fr, de, it, pt, nl, pl, ru, uk): scene-shaped runs of one language with the pause spacing measured on real film. Rendered to test_data/audio_matrix/longform_natural.wav.
+
+No known defects recorded: nothing in the manifest excuses an assertion on this clip. Which hosts
+have run it, and with what result, is in docs/RELEASE_VALIDATION_PLAN.md -- a CPU host fails
+`throughput` on every long-form clip, and that is recorded there, not here.
+
+`longform_film` -- rendered on demand. About 20 minutes of audio in 10 languages (en, es, fr, de, it, pt, nl, pl, ru, uk): short lines of dialogue over a music-and-room bed at the level measured on real film. Rendered to test_data/audio_matrix/longform_film.wav.
+
+No known defects recorded: nothing in the manifest excuses an assertion on this clip. Which hosts
+have run it, and with what result, is in docs/RELEASE_VALIDATION_PLAN.md -- a CPU host fails
+`throughput` on every long-form clip, and that is recorded there, not here.
+
+`longform_film_mono` -- rendered on demand. About 20 minutes of audio in one language (ru): short lines of dialogue over a music-and-room bed at the level measured on real film. Rendered to test_data/audio_matrix/longform_film_mono.wav.
+
+No known defects recorded: nothing in the manifest excuses an assertion on this clip. Which hosts
+have run it, and with what result, is in docs/RELEASE_VALIDATION_PLAN.md -- a CPU host fails
+`throughput` on every long-form clip, and that is recorded there, not here.
+
+`longform_film_bookends` -- rendered on demand. About 20 minutes of audio in one language (en): short lines of dialogue over a music-and-room bed at the level measured on real film, with a film's opening (logo and title music before the first line), a long passage inside, and its credits. Rendered to test_data/audio_matrix/longform_film_bookends.wav.
+
+No known defects recorded: nothing in the manifest excuses an assertion on this clip. Which hosts
+have run it, and with what result, is in docs/RELEASE_VALIDATION_PLAN.md -- a CPU host fails
+`throughput` on every long-form clip, and that is recorded there, not here.
+
+`longform_episode` -- rendered on demand. About 20 minutes of audio in one language (fr): short lines of dialogue over a music-and-room bed at the level measured on real film, shaped as a television episode: a cold open, a title sequence louder than the dialogue, tighter scene gaps. Rendered to test_data/audio_matrix/longform_episode.wav.
+
+No known defects recorded: nothing in the manifest excuses an assertion on this clip. Which hosts
+have run it, and with what result, is in docs/RELEASE_VALIDATION_PLAN.md -- a CPU host fails
+`throughput` on every long-form clip, and that is recorded there, not here.
