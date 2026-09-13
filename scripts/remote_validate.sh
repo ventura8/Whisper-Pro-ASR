@@ -29,11 +29,19 @@
 #                     accuracy (default, 9 tests ~4min) | smoke (~20min)
 #                     full (156 tests ~2h) | stress (full matrix + the 20-min clip)
 #                     longform (the 20-minute clip alone, NVIDIA only)
+#                     codeswitch (the six two-language clips, ~5min; one run per engine)
+#   --compose NAME  Which docker-compose.NAME.yml override starts the stack, when it is not
+#                   the target's own. The full image lists every vendor's devices and Compose
+#                   refuses to start it on a host missing one (/dev/kfd on a CUDA-only box),
+#                   so validating the full image there is `--target full --compose nvidia`.
 #   --fixtures      Sync the generated audio matrix (~3.2G). Needed for smoke and above;
 #                   only the ~10-language core tier is committed.
 #   --separation    Turn UVR vocal isolation ON for the run (ENABLE_VOCAL_SEPARATION=true).
 #   --env KEY=VALUE Extra environment for the remote container. Repeatable. Needed for the
 #                   plan's isolation rows, e.g. --env ASR_ISOLATE_PREPROCESSING=0.
+#   --timeout SEC   Seconds the test client waits per transcription (default 900). A CPU-only
+#                   host needs far more for the long-form clip; too low reads as assertion
+#                   failures, not as a timeout.
 #                   Off by default, matching the service. Required to exercise the UVR
 #                   path at all: the isolated preprocessing worker -- and therefore its
 #                   channel, its device provider and its RPC deadline -- is only created
@@ -77,6 +85,7 @@ rsync_path_args() {
 ENGINE="AUTO"
 PREPROCESS="AUTO"
 SUITE="accuracy"
+COMPOSE=""
 FIXTURES=false
 SEPARATION=false
 # Extra KEY=VALUE settings prepended to the compose "up". The isolation rows of the
@@ -84,6 +93,22 @@ SEPARATION=false
 # and without this they had to be run by hand -- which is how L8 stayed unrun long enough
 # for a 500 on every gap-fill to reach a release candidate.
 EXTRA_ENV=()
+# How long the test client waits for one transcription. 900s is ample on a GPU and far too
+# little for a 20-minute clip on a CPU-only host, where it expires mid-request -- and the
+# failure arrives as three unrelated assertions failing rather than as a timeout, which has
+# cost four runs and two wrong conclusions. Raise it for slow hosts rather than reading the
+# assertions as a result.
+# `-`, not `:-`: an explicitly empty value is kept so the check below rejects it, and only an
+# unset variable takes the default.
+REAL_ASR_TIMEOUT="${REAL_ASR_TIMEOUT-900}"
+# The environment's value gets the same check --timeout gets below: anything but whole
+# seconds greater than zero would otherwise reach the test client and fail twenty minutes in.
+case "$REAL_ASR_TIMEOUT" in
+'' | *[!0-9]* | 0)
+	echo "REAL_ASR_TIMEOUT expects a whole number of seconds greater than zero, got: $REAL_ASR_TIMEOUT" >&2
+	exit 2
+	;;
+esac
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -94,6 +119,14 @@ while [ $# -gt 0 ]; do
 		TARGET="${2:?--target needs a value}"
 		if [ ! -f "${REPO_ROOT}/docker-compose.${TARGET}.yml" ]; then
 			echo "unknown --target '${TARGET}': no docker-compose.${TARGET}.yml in ${REPO_ROOT}" >&2
+			exit 2
+		fi
+		shift 2
+		;;
+	--compose)
+		COMPOSE="${2:?--compose needs a value}"
+		if [ ! -f "${REPO_ROOT}/docker-compose.${COMPOSE}.yml" ]; then
+			echo "unknown --compose '${COMPOSE}': no docker-compose.${COMPOSE}.yml in ${REPO_ROOT}" >&2
 			exit 2
 		fi
 		shift 2
@@ -152,9 +185,9 @@ while [ $# -gt 0 ]; do
 	--suite)
 		SUITE="${2:?--suite needs a value}"
 		case "$SUITE" in
-		accuracy | smoke | full | stress | longform) ;;
+		accuracy | smoke | full | stress | longform | codeswitch) ;;
 		*)
-			echo "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform)" >&2
+			echo "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform|codeswitch)" >&2
 			exit 2
 			;;
 		esac
@@ -168,11 +201,35 @@ while [ $# -gt 0 ]; do
 		SEPARATION=true
 		shift
 		;;
+	# echo + exit 2, not die: die is defined after this loop, so a bad value here used to fail
+	# as "die: command not found" -- the right outcome by accident, with the wrong message.
+	--timeout)
+		if [ $# -lt 2 ]; then
+			echo "--timeout needs a value in seconds" >&2
+			exit 2
+		fi
+		# Whole seconds, greater than zero. Anything else reached the test client as
+		# REAL_ASR_TIMEOUT and surfaced twenty minutes later as a float() error inside pytest.
+		case "$2" in
+		'' | *[!0-9]* | 0)
+			echo "--timeout expects a whole number of seconds greater than zero, got: $2" >&2
+			exit 2
+			;;
+		esac
+		REAL_ASR_TIMEOUT="$2"
+		shift 2
+		;;
 	--env)
-		[ $# -ge 2 ] || die "--env needs a KEY=VALUE argument"
+		if [ $# -lt 2 ]; then
+			echo "--env needs a KEY=VALUE argument" >&2
+			exit 2
+		fi
 		case "$2" in
 		[A-Za-z_]*=*) EXTRA_ENV+=("$2") ;;
-		*) die "--env expects KEY=VALUE, got: $2" ;;
+		*)
+			echo "--env expects KEY=VALUE, got: $2" >&2
+			exit 2
+			;;
 		esac
 		shift 2
 		;;
@@ -220,7 +277,13 @@ REMOTE_HOST="${REMOTE#*@}"
 
 # BatchMode turns a would-be password prompt into an immediate error instead of a hang,
 # which is the difference between a clear failure and a stuck session.
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes)
+# ServerAlive: the long-form suite holds one ssh session open for the whole transcription --
+# 48 minutes on a CPU host -- and without keepalives a connection that dies in that window
+# never delivers EOF. The remote finishes, the local runner waits forever, and the result is
+# lost with no error: that is how a completed NUC run (225 clips, 200 OK, RTF 2.38) reached
+# this machine as an output file that simply stopped. 30s x 6 fails a dead link in 3 minutes.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes
+	-o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 
 # On Windows, sshd hands the command to cmd.exe, where `;`, `$( )`, quotes and parentheses
 # are either meaningless or actively mangled -- a probe rewritten by cmd reports absent
@@ -642,7 +705,8 @@ fi
 # is layered in only when the host really has /dev/accel. Without it OpenVINO enumerates
 # "CPU, GPU" and an ASR_DEVICE=NPU request runs on the iGPU while every log line still
 # says NPU -- a false pass that looks exactly like a real one.
-COMPOSE_FILES="-f docker-compose.yml -f docker-compose.${TARGET}.yml"
+COMPOSE_FILES="-f docker-compose.yml -f docker-compose.${COMPOSE:-$TARGET}.yml"
+[ -z "$COMPOSE" ] || note "starting the ${TARGET} image with the ${COMPOSE} compose override"
 # Pass the NPU through whenever the host has one, not only when --device NPU is given.
 # Tying this to --device was wrong: that flag selects the *ASR* device, and the NPU cannot
 # run ASR at all -- its working use is UVR preprocessing. Gating on it left the NPU
@@ -769,9 +833,17 @@ longform)
 	SUITE_ARGS="tests/real_audio/test_longform_stress.py"
 	SUITE_ENV="-e RUN_GPU_LONG_ASR=1"
 	;;
+# Just the six code-switched clips. Every engine but FASTER-WHISPER returns one leg of a
+# two-language file, and the manifest records that per engine (`xfail_engines`) -- which
+# means every engine has to be measured on all six before its entry can be written. The
+# smoke tier carries one of the six and the full tier costs two hours; this is five minutes.
+codeswitch)
+	SUITE_ARGS="tests/real_audio/test_code_switched.py"
+	SUITE_ENV=""
+	;;
 # Unreachable: --suite is validated during argument parsing. Kept so a future tier added
 # to one list and not the other fails here rather than running with an empty selection.
-*) die "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform)" ;;
+*) die "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform|codeswitch)" ;;
 esac
 
 hdr "Suite: ${SUITE} (engine=${ENGINE}, preprocess=${PREPROCESS}, real speech over HTTP)"
@@ -781,7 +853,7 @@ note "this can take ~2h for full/stress; output is trimmed to the last 80 lines"
 # so a failing suite set SUITE_FAILED=false and the run reported a clean pass.
 ssh_run "cd ${WORK_DIR} && docker run --rm --network host ${GPU_FLAG} -v \$PWD:/app -w /app -u \$(id -u):\$(id -g) \
   -e WHISPER_PRO_ASR_TEST_IMAGE=1 -e RUN_REAL_ASR=1 -e HOME=/tmp -e WHISPER_BASE_URL=http://127.0.0.1:9000 \
-  -e REAL_ASR_TIMEOUT=900 ${SUITE_ENV} \
+  -e REAL_ASR_TIMEOUT=${REAL_ASR_TIMEOUT} ${SUITE_ENV} \
   whisper-pro-asr-test:latest /bin/bash -c 'set -o pipefail; python3 -m pytest ${SUITE_ARGS} -ra --no-cov --tb=short 2>&1 | tail -80'" ||
 	SUITE_FAILED=true
 

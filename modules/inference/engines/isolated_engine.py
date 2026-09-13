@@ -259,6 +259,27 @@ class IsolatedEngine(BaseASREngine):
         finally:
             stream.close()
 
+    def detect_language_regions(self, audio_path: str, regions: list) -> Iterator[dict[str, Any]]:
+        """Stream one detection result per caller-supplied speech region.
+
+        Closed explicitly for the same reason ``detect_language_batch`` is: a detection pass is
+        abandoned routinely, and an unclosed stream leaves the worker decoding into a pipe
+        nobody reads while the channel lock is held to the deadline.
+        """
+        self._ensure_loaded()
+        stream = self._channel.stream(
+            "detect_language_regions",
+            handle=self.handle,
+            audio_path=audio_path,
+            regions=regions,
+        )
+        try:
+            for event in stream:
+                if event.get("event") == "detection":
+                    yield event
+        finally:
+            stream.close()
+
     def cancel(self) -> None:
         """Ask the worker to stop the in-flight stream (cooperative preemption)."""
         self._channel.cancel_in_stream()

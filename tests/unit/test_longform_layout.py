@@ -16,6 +16,7 @@ conveniently easy to segment.
 
 import random
 import statistics
+from unittest import mock
 
 import pytest
 
@@ -65,6 +66,16 @@ class TestNaturalGapDistribution:
         # The finding that matters: ~60% of real turns would be MERGED, not split, by
         # VAD at min_silence_duration_ms=500. A fixture without this property makes
         # utterance-level segmentation look far easier than it is.
+        #
+        # Cross-checked against real film audio on 2026-09-09 rather than subtitle timings:
+        # nine 12-minute excerpts in six languages, run through the decoder's own VAD, put
+        # 50.0% of gaps under 500ms and 34.6% under even a 250ms split. So the property holds
+        # on audio as well as on subtitles, and the merging is if anything more stubborn --
+        # a third of adjacent turns merge at any threshold worth using.
+        #
+        # What that turned out NOT to imply is that per-region decoding needs clean utterance
+        # boundaries. It closed the `windows` defect anyway, because it only needs boundaries
+        # that rarely span a language *change*, and real switches are scene-shaped.
         tight = sum(1 for g in self.gaps if g < 0.5) / len(self.gaps)
         assert tight >= 0.5, f"only {tight:.0%} of gaps are under 500ms; real dialogue is ~60%"
 
@@ -156,24 +167,24 @@ class TestStressProfileIsUnchanged:
 class TestBuildSelectsTheProfile:
     """Which layout build() plans for a given profile name."""
 
-    def test_unknown_profile_falls_back_to_stress(self, monkeypatch):
-        """An unrecognised profile must yield the stress plan, not merely *a* plan.
+    def test_an_unknown_profile_is_an_error_not_the_stress_layout(self, monkeypatch):
+        """A typo in a manifest spec used to render the stress grid under the variant's name --
+        and stamp it as a valid cached artifact. It must fail before anything is planned."""
+        monkeypatch.setattr(longform, "_render_blocks", mock.Mock(side_effect=AssertionError("must not plan")))
+        with pytest.raises(ValueError, match="unknown long-form profile 'natrual'"):
+            longform.build(_sources(), None, {"root": None, "rate": 16000}, profile="natrual")
 
-        Asserting only "switches > 0" passed for the natural profile too, so the fallback
-        could have silently selected the wrong layout. The two plans are compared instead.
-        """
+    def test_the_stress_profile_is_the_stress_layout(self, monkeypatch):
+        """Named explicitly now, "stress" must still select the stress plan and not merely *a*
+        plan: asserting only "switches > 0" passed for the natural profile too."""
         plans = {}
 
         def fake_render(blocks, _context, _temporaries):
-            plans[fake_render.profile] = [(block["kind"], block.get("language"), round(block["duration"], 4)) for block in blocks]
+            plans["built"] = [(block["kind"], block.get("language"), round(block["duration"], 4)) for block in blocks]
             raise RuntimeError("stop after planning")
 
         monkeypatch.setattr(longform, "_render_blocks", fake_render)
-
-        for profile in ("stress", "anything-else"):
-            fake_render.profile = profile
-            with pytest.raises(RuntimeError, match="stop after planning"):
-                longform.build(_sources(), None, {"root": None, "rate": 16000}, profile=profile)
-            assert plans[profile], f"{profile} produced no blocks"
-
-        assert plans["anything-else"] == plans["stress"], "an unknown profile did not fall back to the stress layout"
+        with pytest.raises(RuntimeError, match="stop after planning"):
+            longform.build(_sources(), None, {"root": None, "rate": 16000}, profile="stress")
+        stress = longform._plan(_sources(), random.Random(longform.LAYOUT_SEED))
+        assert plans["built"] == [(b["kind"], b.get("language"), round(b["duration"], 4)) for b in stress]

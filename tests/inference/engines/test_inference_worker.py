@@ -124,7 +124,7 @@ class TestTheModelPool:
 
         assert inference_worker._unload_model("cuda:0") is True
         assert engine.unloaded is True
-        assert inference_worker._loaded_handles() == []
+        assert not inference_worker._loaded_handles()
 
     def test_unloading_an_absent_handle_reports_false_rather_than_raising(self):
         """Unloading an absent handle reports false rather than raising."""
@@ -134,13 +134,13 @@ class TestTheModelPool:
         """An engine without unload is still dropped."""
         inference_worker._ENGINES["cpu"] = object()
         assert inference_worker._unload_model("cpu") is True
-        assert inference_worker._loaded_handles() == []
+        assert not inference_worker._loaded_handles()
 
     def test_unload_all_returns_how_many_it_released(self):
         """Unload all returns how many it released."""
         inference_worker._ENGINES.update({"a": FakeEngine(), "b": FakeEngine()})
         assert inference_worker._unload_all() == 2
-        assert inference_worker._loaded_handles() == []
+        assert not inference_worker._loaded_handles()
 
 
 class TestFlatteningToPicklablePayloads:
@@ -267,16 +267,23 @@ class TestDetectLanguage:
 class TestDetectLanguageBatch:
     """Windowed detection, decoded once in this process."""
 
-    def _patch(self, monkeypatch, audio, calls):
-        """Point the worker's lazy imports at fakes."""
+    def _patch(self, monkeypatch, audio, calls, chunks=None):
+        """Point the worker's lazy imports at fakes; ``chunks`` collects each slice's samples."""
+        # The worker keeps the last file's samples between region chunks; every test here
+        # uses the same fake path with different audio, so start each one without it.
+        inference_worker._REGION_AUDIO.clear()
+
+        def detect(engine, chunk, skip_vad):
+            calls.append(len(chunk))
+            if chunks is not None:
+                chunks.append(list(chunk))
+            return {"language": "en"}
 
         def import_module(name):
             """Return the fake module the test scripted."""
             if name.endswith("vad"):
                 return SimpleNamespace(decode_audio=lambda _p: audio)
-            return SimpleNamespace(
-                run_language_detection_core=lambda engine, chunk, skip_vad: calls.append(len(chunk)) or {"language": "en"}
-            )
+            return SimpleNamespace(run_language_detection_core=detect)
 
         monkeypatch.setattr(inference_worker.importlib, "import_module", import_module)
 
@@ -291,6 +298,84 @@ class TestDetectLanguageBatch:
         assert [e["event"] for e in events] == ["detection", "detection"]
         assert [e["index"] for e in events] == [0, 1]
         assert calls == [30 * 16000, 30 * 16000]
+
+    def test_arbitrary_regions_are_sliced_and_streamed_one_result_each(self, monkeypatch):
+        """The sibling handler decoding by speech region uses, rather than fixed windows.
+
+        Per-segment language has to be measured, not read back: faster-whisper commits to a
+        language per decode window and never reports which. The spans that need labelling are
+        the VAD regions, which are neither 30s nor aligned to the start of the file.
+        """
+        calls: list[int] = []
+        chunks: list[list[int]] = []
+        inference_worker._ENGINES["u"] = FakeEngine()
+        # Distinct sample values, so a slice taken from the wrong offset cannot pass on length.
+        audio = list(range(60 * 16000))
+        self._patch(monkeypatch, audio, calls, chunks)
+
+        regions = [{"start": 1.0, "end": 3.0}, {"start": 10.0, "end": 10.5}]
+        events = list(inference_worker._detect_language_regions("u", "/clip.wav", regions))
+
+        assert [e["index"] for e in events] == [0, 1]
+        assert [(e["start"], e["end"]) for e in events] == [(1.0, 3.0), (10.0, 10.5)]
+        assert calls == [2 * 16000, int(0.5 * 16000)], "each slice is its own region, not a window"
+        one_to_three_seconds = audio[16000:48000]
+        ten_to_ten_and_a_half = audio[160000:168000]
+        assert chunks[0] == one_to_three_seconds, "the first slice starts at the region's own offset"
+        assert chunks[1] == ten_to_ten_and_a_half
+
+    def test_a_region_running_past_the_audio_is_clamped_not_dropped(self, monkeypatch):
+        """VAD pads its regions, so the last one routinely overruns the decoded length."""
+        calls: list[int] = []
+        inference_worker._ENGINES["u"] = FakeEngine()
+        self._patch(monkeypatch, [0.0] * (10 * 16000), calls)
+
+        events = list(inference_worker._detect_language_regions("u", "/clip.wav", [{"start": 9.0, "end": 12.0}]))
+
+        assert len(events) == 1
+        assert calls == [1 * 16000]
+        assert (events[0]["start"], events[0]["end"]) == (9.0, 10.0), "the span reported is the one sliced, inside the audio"
+
+    def test_a_region_starting_before_the_audio_is_clamped_to_it(self, monkeypatch):
+        """A negative start is a Python slice from the *end* of the array; both bounds are
+        clamped, and the span reported is the one that was sliced."""
+        calls: list[int] = []
+        chunks: list[list[int]] = []
+        inference_worker._ENGINES["u"] = FakeEngine()
+        audio = list(range(10 * 16000))
+        self._patch(monkeypatch, audio, calls, chunks)
+
+        events = list(inference_worker._detect_language_regions("u", "/clip.wav", [{"start": -0.5, "end": 12.0}]))
+
+        assert (events[0]["start"], events[0]["end"]) == (0.0, 10.0)
+        assert chunks[0] == audio, "the whole file, from its first sample"
+
+    def test_the_decoded_audio_is_kept_between_chunks_of_the_same_file(self, monkeypatch):
+        """Regions arrive in chunks so a pause never holds a stream; the file is decoded once
+        for all of them, and again only when a different file arrives."""
+        decodes: list[str] = []
+
+        def import_module(name):
+            if name.endswith("vad"):
+                return SimpleNamespace(decode_audio=lambda path: decodes.append(path) or list(range(10 * 16000)))
+            return SimpleNamespace(run_language_detection_core=lambda *a, **k: {"detected_language": "en", "confidence": 0.9})
+
+        inference_worker._REGION_AUDIO.clear()
+        inference_worker._ENGINES["u"] = FakeEngine()
+        monkeypatch.setattr(inference_worker.importlib, "import_module", import_module)
+        list(inference_worker._detect_language_regions("u", "/a.wav", [{"start": 0.0, "end": 1.0}]))
+        list(inference_worker._detect_language_regions("u", "/a.wav", [{"start": 1.0, "end": 2.0}]))
+        list(inference_worker._detect_language_regions("u", "/b.wav", [{"start": 0.0, "end": 1.0}]))
+        assert decodes == ["/a.wav", "/b.wav"]
+        assert list(inference_worker._REGION_AUDIO) == ["/b.wav"], "one file at a time"
+        inference_worker._unload_all()
+        assert not inference_worker._REGION_AUDIO, "an idle purge releases it"
+
+    def test_no_regions_yields_nothing(self, monkeypatch):
+        """An empty region list is a stream with nothing in it, not an error."""
+        inference_worker._ENGINES["u"] = FakeEngine()
+        self._patch(monkeypatch, [0.0] * (10 * 16000), [])
+        assert not list(inference_worker._detect_language_regions("u", "/clip.wav", []))
 
     def test_the_scan_stops_at_the_end_of_the_audio_not_at_segment_count(self, monkeypatch):
         """A 40s clip asked for 10 windows must yield 2, not 10 empty ones."""

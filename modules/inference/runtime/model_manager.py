@@ -20,7 +20,17 @@ from modules.inference.pipeline.language_detection_core import (
     run_language_detection,
     run_language_detection_core,
 )
-from modules.inference.runtime import gap_filling, init_failures, preprocessor_pool
+from modules.inference.runtime import (
+    decode_options,
+    gap_filling,
+    init_failures,
+    language_runs,
+    preprocessor_pool,
+    resumable_decode,
+    run_decoding,
+    segment_languages,
+    speech_clips,
+)
 from modules.inference.runtime.concurrency import _check_preemption, _get_current_task_info, model_lock_ctx
 from modules.inference.runtime.model_lifecycle import (
     _clear_uvr_models,
@@ -31,19 +41,13 @@ from modules.inference.runtime.model_lifecycle import (
     _read_reclamation_memory_snapshot,
     _run_garbage_collection_and_reclamation,
 )
-from modules.inference.runtime.model_segment_processing import consume_transcription_segments
 
 __all__ = ["run_language_detection_core", "run_language_detection", "run_batch_language_detection", "run_batch_language_detection_direct"]
 
 
 def early_task_registration(task_type="ASR/LD", stage="Initializing", filename=None, is_priority=False):
     """Register a task through the scheduler compatibility surface."""
-    return scheduler.early_task_registration(
-        task_type=task_type,
-        stage=stage,
-        filename=filename,
-        is_priority=is_priority,
-    )
+    return scheduler.early_task_registration(task_type=task_type, stage=stage, filename=filename, is_priority=is_priority)
 
 
 def update_task_metadata(**kwargs):
@@ -220,17 +224,36 @@ def run_transcription(
     initial_prompt=None,
     vad_filter=True,
     word_timestamps=False,
-    **_kwargs,
+    **kwargs,
 ):
-    """Executes ASR inference with hardware locking."""
+    """Executes ASR inference with hardware locking.
+
+    ``auto_detected`` rides in kwargs, as ``batch_size`` already does, rather than widening a
+    signature that is at its argument limit.
+    """
+    forced = decode_options.force_transcription(kwargs.get("force_transcription"))
     _LIFECYCLE_STATE["last_activity"] = time.time()
     perf = {"dur_iso": 0}
     with model_lock_ctx() as (model, unit_id):
         _update_audio_duration_metadata(audio_path)
 
         processed_path = _isolate_vocals_if_needed(audio_path, unit_id, perf)
-        was_auto_detect = not language
-        language, _multilingual_suspected = _detect_language_after_isolation(language, processed_path, model)
+        # Whether the *caller* named a language, which is not the same as whether one has
+        # arrived here. The route resolves an auto-detected language up front unless vocal
+        # separation is going to run, so on the default configuration `language` is already
+        # concrete by this point and `not language` reported False for every request -- which
+        # silently disabled per-window re-detection and gap filling on exactly the path most
+        # deployments use. `auto_detected` carries the caller's intent past that detection;
+        # `not language` remains the fallback for callers that do not pass it.
+        was_auto_detect = (not language) if kwargs.get("auto_detected") is None else kwargs["auto_detected"]
+        # The montage's "multilingual suspected" flag is discarded on purpose: computed from a
+        # handful of windows, it reads a code-switching film as monolingual (config_segmentation).
+        language, _suspected = _detect_language_after_isolation(language, processed_path, model)
+        # A translation is English whatever was spoken, so a named language there is the main
+        # audio, not the output: every language in the file is translated from itself. Only a
+        # transcription in a named language is decoded as one -- that is what was asked to read
+        # -- unless transcription is forced, which translates the other languages instead.
+        follows_switches = was_auto_detect or decode_options.translates(task) or forced
 
         try:
             params = {
@@ -243,10 +266,11 @@ def run_transcription(
                 "initial_prompt": initial_prompt,
                 "vad_filter": vad_filter,
                 "word_timestamps": word_timestamps,
-                # Gap-filling (see _fill_language_gaps) needs to know whether the caller
-                # forced a language: an explicit request must never be second-guessed by
-                # re-detecting and re-transcribing a "gap" in a different language.
+                # Whether the caller forced a language, and whether the decode may still follow
+                # a switch: a forced transcription is never second-guessed by a gap in another.
                 "was_auto_detect": was_auto_detect,
+                "follows_switches": follows_switches,
+                "force_transcription": forced,
             }
             return _execute_transcription_pipeline(
                 model,
@@ -296,8 +320,7 @@ def _detect_language_after_isolation(language, processed_path, model):
 
 def _isolate_vocals_if_needed(audio_path, unit_id, perf):
     processed_path = audio_path
-    should_clean_audio = will_isolate_vocals()
-    if should_clean_audio:
+    if will_isolate_vocals():
         perf["start_iso"] = time.time()
         check_preemption()
         processed_path = run_vocal_isolation_direct(audio_path, unit_id)
@@ -306,26 +329,13 @@ def _isolate_vocals_if_needed(audio_path, unit_id, perf):
     return processed_path
 
 
-def _execute_transcription_pipeline(
-    model,
-    processed_path,
-    *,
-    params,
-    unit_id,
-    perf,
-) -> dict:
+def _execute_transcription_pipeline(model, processed_path, *, params, unit_id, perf) -> dict:
     language = params.get("language")
     task = params.get("task")
     diarize = params.get("diarize")
-    min_speakers = params.get("min_speakers")
-    max_speakers = params.get("max_speakers")
-    hf_token = params.get("hf_token")
-    initial_prompt = params.get("initial_prompt")
-    vad_filter = params.get("vad_filter")
-    word_timestamps = params.get("word_timestamps")
     was_auto_detect = params.get("was_auto_detect", not language)
-    op_name = "translation" if str(task).lower() == "translate" else "transcription"
-
+    follows_switches = params.get("follows_switches", was_auto_detect)
+    op_name = "translation" if decode_options.translates(task) else "transcription"
     logger.info("[ASR] Starting %s on hardware unit %s", op_name, unit_id)
 
     perf["start_inf"] = time.time()
@@ -333,65 +343,51 @@ def _execute_transcription_pipeline(
     scheduler.update_task_metadata(start_inference=perf["start_inf"])
     scheduler.update_task_progress(None, "Inference")
     check_preemption()
-    trans_res = model.transcribe(
+    # Regions -> per-region language -> runs of one language -> one decoder call per language,
+    # each told its language (run_decoding). Detection runs before the decode because the runs
+    # are what make decoding by region safe on film that is not code-switching at all: a decode
+    # window of one line is mislabelled one time in five, a run of several seconds is not.
+    regions = speech_clips.regions_for(processed_path, follows_switches)
+    runs = language_runs.build(regions, segment_languages.for_clips(model, processed_path, regions, check_preemption), language)
+    call_options = decode_options.for_decode(params, was_auto_detect)
+    results, info, clip_regions = run_decoding.decode(
+        model,
         processed_path,
-        language=language,
-        task=task,
-        beam_size=config.DEFAULT_BEAM_SIZE,
-        initial_prompt=initial_prompt,
-        vad_filter=vad_filter,
-        word_timestamps=word_timestamps,
-        vad_parameters={
-            "min_silence_duration_ms": config.VAD_MIN_SILENCE_DURATION_MS,
-            "threshold": config.VAD_THRESHOLD,
+        runs,
+        options=call_options,
+        consume={
+            "task": task,
+            "diarize": diarize,
+            "min_speakers": params.get("min_speakers"),
+            "max_speakers": params.get("max_speakers"),
+            "hf_token": params.get("hf_token"),
+            "unit_id": unit_id,
+            "processed_path": processed_path,
+            "preemption_check": check_preemption,
+            # Non-blocking; a decode that pauses closes its stream first (resumable_decode).
+            "pause_pending": resumable_decode.preemption_pending,
         },
-        # `language` here is always resolved -- detection has already run -- so the engine
-        # cannot tell an auto-detected language from one the caller demanded. Only the
-        # former may be revised per window; an explicit request must be honoured as given.
-        multilingual=was_auto_detect,
     )
 
-    results = consume_transcription_segments(
-        trans_res[0],
-        trans_res[1],
-        task,
-        diarize=diarize,
-        min_speakers=min_speakers,
-        max_speakers=max_speakers,
-        hf_token=hf_token,
-        unit_id=unit_id,
-        processed_path=processed_path,
-        preemption_check=check_preemption,
-    )
-
-    # One coarse, file-level entry: the language the engine reported for the whole file,
-    # spanning its whole duration. It is not per-segment coverage -- nothing here inspects
-    # individual segments -- and it stays this shape when gap filling is skipped below.
-    # Gap filling is what replaces it with genuinely per-region entries.
-    segment_languages = [
-        {
-            "start": 0.0,
-            "end": round(trans_res[1].duration, 2),
-            "language": trans_res[1].language,
-            "confidence": trans_res[1].language_probability,
-        }
-    ]
+    # Per run where runs exist, one coarse file-level entry otherwise. The runs are what each
+    # decoder call was told to decode in, so their languages are the segments' languages by
+    # construction. Not behind a whole-file "is this multilingual" gate: every such signal
+    # measured reads a genuinely code-switching film as monolingual, because the montage
+    # samples a few windows across two hours and the foreign passages fall between them.
+    language_spans = segment_languages.spans_for(runs, results, info)
     # Diarization is excluded: it speaker-fingerprints processed_path as one whole file,
     # and a gap re-transcribed on its own slice would get its own local speaker numbering
     # with no correspondence to the rest -- reconciling that is real work of its own.
-    if was_auto_detect and not diarize and config.ASR_MULTILINGUAL_SEGMENTATION:
-        results, segment_languages = gap_filling.fill_language_gaps(
+    if follows_switches and not diarize and config.ASR_MULTILINGUAL_SEGMENTATION:
+        results, language_spans = gap_filling.fill_language_gaps(
             model,
             processed_path,
             results,
-            segment_languages,
-            options={
-                "task": task,
-                "initial_prompt": initial_prompt,
-                "vad_filter": vad_filter,
-                "word_timestamps": word_timestamps,
-            },
-            duration_sec=trans_res[1].duration,
+            language_spans,
+            decoded_spans=clip_regions,
+            runs=runs,
+            options=decode_options.for_gaps(call_options),
+            duration_sec=info.duration,
             unit_id=unit_id,
             preemption_check=check_preemption,
         )
@@ -402,10 +398,10 @@ def _execute_transcription_pipeline(
     res = {
         "text": "",  # Placeholder
         "segments": results,
-        "language": trans_res[1].language,
-        "language_probability": trans_res[1].language_probability,
-        "video_duration_sec": trans_res[1].duration,
-        "segment_languages": segment_languages,
+        "language": info.language,
+        "language_probability": info.language_probability,
+        "video_duration_sec": info.duration,
+        "segment_languages": language_spans,
         "performance": {
             "queue_sec": round(perf["dur_queue"], 2),
             "isolation_sec": round(perf["dur_iso"], 2),
@@ -451,7 +447,7 @@ def run_vocal_isolation_direct(audio_path, unit_id, force=False, stage="Vocal Se
     if not preprocessor:
         return audio_path
 
-    result_path = preprocessor.preprocess_audio(audio_path, force=force, yield_cb=check_preemption, stage=stage)
+    result_path = resumable_decode.separate(preprocessor, audio_path, force=force, stage=stage, preemption_check=check_preemption)
     if preprocessor.separator:
         scheduler.STATE.uvr_loaded = True
 

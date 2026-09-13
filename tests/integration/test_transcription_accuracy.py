@@ -41,6 +41,16 @@ EXPECTED_PHRASES = (
     "whisper pro asr is running a hardware acceleration test on this machine",
 )
 
+#: Words a sentence may differ by and still be that sentence. One, because the decoder is
+#: not deterministic on an article: decoded by speech region (the shipped design, one window
+#: per line), the fox sentence is a 3-second window on its own, and on it beam search with
+#: the shipped settings returns "A quick brown fox" where greedy search and the whole-file
+#: window return "The" -- log-probabilities within 0.01 of each other, measured on the RTX
+#: 3080 and the NUC's CPU alike (2026-09-13). What this suite exists to catch is a broken
+#: accelerator path -- empty output, nonsense, a sentence missing -- and a bar of one word
+#: per sentence still catches every one of those.
+MAX_WORDS_OFF_PER_PHRASE = 1
+
 # A first start downloads the model while tasks wait in the queue, so allow for that.
 REQUEST_TIMEOUT_SEC = float(os.environ.get("REAL_ASR_TIMEOUT", "900"))
 
@@ -96,15 +106,49 @@ def test_fixture_is_present_and_non_trivial():
     assert FIXTURE.stat().st_size > 100_000
 
 
+def _words_off(phrase: str, transcript: list[str]) -> int:
+    """How many words the closest stretch of ``transcript`` is from ``phrase``, in order.
+
+    Word-level edit distance against every stretch of the transcript within a word of the
+    phrase's length, so a substituted article costs one and a dropped or invented sentence
+    costs the sentence. Set overlap would not do: "A quick brown fox jumps over the lazy
+    dog" holds every word of the expected sentence, "the" included.
+    """
+    expected = phrase.split()
+    best = len(expected)
+    for length in (len(expected) - 1, len(expected), len(expected) + 1):
+        for start in range(0, max(1, len(transcript) - length + 1)):
+            stop = start + length
+            best = min(best, _edit_distance(expected, transcript[start:stop]))
+    return best
+
+
+def _edit_distance(a: list[str], b: list[str]) -> int:
+    previous = list(range(len(b) + 1))
+    for i, word in enumerate(a, 1):
+        current = [i]
+        for j, other in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (word != other)))
+        previous = current
+    return previous[-1]
+
+
+def _assert_says(phrases: tuple, payload: dict) -> None:
+    transcript = spoken_words(payload)
+    for phrase in phrases:
+        off = _words_off(phrase, transcript)
+        said = " ".join(transcript)
+        assert off <= MAX_WORDS_OFF_PER_PHRASE, f"expected {phrase!r} within {MAX_WORDS_OFF_PER_PHRASE} word(s), {off} off in: {said!r}"
+
+
 def test_transcribes_known_speech_accurately():
     """The real engine must return the fixture's actual sentences, not garbage.
 
     This is the check that catches a broken accelerator: CPU fallback still produces
-    correct text, but a half-working GPU path produces empty or nonsense output.
+    correct text, but a half-working GPU path produces empty or nonsense output. Each
+    sentence must be there in order, within ``MAX_WORDS_OFF_PER_PHRASE`` of itself.
     """
-    transcript = " ".join(spoken_words(_post_fixture_json()))
-    for phrase in EXPECTED_PHRASES:
-        assert phrase in transcript, f"expected {phrase!r} in transcript, got: {transcript!r}"
+    _assert_says(EXPECTED_PHRASES, _post_fixture_json())
 
 
 def test_segments_cover_the_full_clip():
@@ -160,8 +204,7 @@ def test_v1_transcriptions_returns_openai_shaped_payload():
 
 def test_v1_translations_returns_english_text():
     """/v1/audio/translations must transcribe the already-English fixture to English."""
-    transcript = " ".join(spoken_words(_post_fixture_json("/v1/audio/translations?output=json")))
-    assert EXPECTED_PHRASES[0] in transcript, f"expected the fox sentence, got: {transcript!r}"
+    _assert_says(EXPECTED_PHRASES[:1], _post_fixture_json("/v1/audio/translations?output=json"))
 
 
 def test_v1_accepts_the_openai_file_field_name():

@@ -267,24 +267,117 @@ def _build_section(section: str, data: dict[str, Any], args: argparse.Namespace,
     return failed
 
 
-def _longform_sources(data: dict[str, Any], context: dict) -> list[dict]:
-    """Return the rendered tier-A clips the long-form timeline is assembled from."""
-    wanted = set(data.get("longform", {}).get("languages") or [])
-    sources = []
-    for entry in manifest.clips(data):
-        path = context["root"] / f"{entry['id']}.wav"
-        if entry["language"] in wanted and path.exists():
-            sources.append({**entry, "path": str(path), "duration": render.probe_duration(path)})
+def _longform_sources(data: dict[str, Any], context: dict, *, profile: str, languages: list[str] | None = None) -> list[dict]:
+    """Return the rendered clips the long-form timeline is assembled from.
+
+    The stress profile takes exactly one clip per language and the natural profile takes all
+    of them, and that difference is load-bearing rather than cosmetic.
+
+    Stress alternates language on every utterance, which it does by cycling its source list --
+    so a list holding three clips per language stops alternating and starts repeating a
+    language two or three times in a row. That happened: adding clips took the stress fixture
+    from 118 utterances switching at every boundary to 117 switching at 78 of 116, silently
+    changing the artifact every recorded `windows` measurement is stated against. One clip per
+    language keeps that fixture byte-identical to the one those numbers describe.
+
+    Natural wants the opposite. Its scenes are a dozen to thirty consecutive utterances in one
+    language, so with a single source a scene is one sentence repeated up to thirty times --
+    which trips the repetition filter and measures that filter rather than language handling.
+
+    Film takes everything, including the ``role: line`` clips -- short single lines of
+    dialogue that reproduce the ~1.3s utterances real film is made of. The other two profiles
+    exclude those on purpose: natural takes every clip of a language, so adding the lines to
+    the manifest would otherwise have changed the natural fixture under every number recorded
+    against it, exactly as adding the scene clips once changed the stress grid.
+
+    ``languages`` is the variant's own list; without one the top-level spec's applies. The
+    three original variants all name the same ten, so they are unchanged by this -- it exists
+    so a variant can be built in one language, which is what most of the library is.
+    """
+    wanted = _top_level_languages(data) if languages is None else list(languages)
+    sources = _eligible(profile, _rendered_clips_in(data, context, wanted))
+    _require_every_language(wanted, sources)
     return sources
 
 
+def _eligible(profile: str, sources: list[dict]) -> list[dict]:
+    """The rendered clips a profile lays out from: film takes all, the others no lines,
+    and stress one clip per language."""
+    if profile == "film":
+        return sources
+    sources = [clip for clip in sources if clip.get("role") != "line"]
+    return sources if profile == "natural" else _one_per_language(sources)
+
+
+def _require_every_language(wanted: list[str], sources: list[dict]) -> None:
+    """A language the spec asks for and no eligible rendered clip supplies is an error.
+
+    Silently dropped, the clip laid out without it would still carry the variant's name, and
+    every number stated against the fixture would describe audio that lacks a language the
+    manifest says it has.
+    """
+    missing = sorted(set(wanted) - {clip["language"] for clip in sources})
+    if missing:
+        raise ValueError(f"no eligible rendered clip for long-form language(s): {', '.join(missing)}")
+
+
+def _rendered_clips_in(data: dict[str, Any], context: dict, languages: list[str] | None = None) -> list[dict]:
+    """Every rendered clip whose language the long-form spec, or ``languages``, asks for.
+
+    A variant's own list wins whenever it gives one, an empty list included: ``[]`` asks for
+    no languages and gets no sources, so the build fails where it says why, rather than
+    quietly rendering the top-level set under the variant's name.
+    """
+    wanted = set(_top_level_languages(data) if languages is None else languages)
+    rendered = []
+    for entry in manifest.clips(data):
+        path = context["root"] / f"{entry['id']}.wav"
+        if entry["language"] in wanted and path.exists():
+            rendered.append({**entry, "path": str(path), "duration": render.probe_duration(path)})
+    return rendered
+
+
+def _top_level_languages(data: dict[str, Any]) -> list[str]:
+    """The languages the top-level long-form spec names; what a variant without its own gets."""
+    return list(data.get("longform", {}).get("languages") or [])
+
+
+def _one_per_language(sources: list[dict]) -> list[dict]:
+    """The first rendered clip of each language, in the manifest's own order."""
+    seen: dict[str, dict] = {}
+    for entry in sources:
+        seen.setdefault(entry["language"], entry)
+    return list(seen.values())
+
+
 def _build_longform(data: dict[str, Any], context: dict) -> int:
-    """Build the long-form stress clip, returning the failure count."""
+    """Build every long-form variant, returning the total failure count.
+
+    The stress grid and the scene-shaped natural clip measure different things and neither
+    replaces the other: stress switches language on every utterance, which is a deliberate
+    worst case, while natural reproduces the pause distribution and scene shape of real
+    screen dialogue.
+    """
     spec = data.get("longform") or {}
     if not spec:
         logger.info("longform     not configured")
         return 0
-    sources = _longform_sources(data, context)
+    failures = 0
+    for entry in [spec, *(spec.get("variants") or [])]:
+        failures += _build_one_longform(entry, data, context)
+    return failures
+
+
+def _build_one_longform(spec: dict, data: dict[str, Any], context: dict) -> int:
+    """Build a single long-form variant, returning the failure count."""
+    try:
+        sources = _longform_sources(data, context, profile=str(spec.get("profile") or "stress"), languages=spec.get("languages"))
+    except ValueError as exc:
+        # A language the spec names with nothing rendered for it: reported as this variant's
+        # failure, like every other one, rather than as a traceback that loses the sections
+        # and variants already built.
+        logger.error("FAILED   longform %s: %s", spec.get("id", "<no id>"), exc)
+        return 1
     if not sources:
         logger.error("FAILED   longform: no rendered source clips; generate the clips section first")
         return 1
@@ -304,10 +397,19 @@ def _longform_digest(spec: dict, sources: list[dict], context: dict) -> str:
 
     ``path`` and ``duration`` are dropped: they are properties of this machine's cache
     directory, so including them would make the digest differ between checkouts of the same
-    manifest and force a needless 20-minute rebuild on every fresh clone.
+    manifest and force a needless 20-minute rebuild on every fresh clone. ``variants`` is
+    dropped too: the top-level spec carries the list of every other variant, none of which
+    reaches ``longform.build`` for the base clip, so adding a variant was rebuilding the
+    stress grid for a byte-identical file.
     """
-    source_specs = [{key: value for key, value in source.items() if key not in ("path", "duration")} for source in sources]
-    return cache.spec_digest({"entry": spec, "defaults": context["defaults"], "sources": source_specs}, _tool_versions())
+    entry = _without(spec, ("variants",))
+    source_specs = [_without(source, ("path", "duration")) for source in sources]
+    return cache.spec_digest({"entry": entry, "defaults": context["defaults"], "sources": source_specs}, _tool_versions())
+
+
+def _without(mapping: dict, keys: tuple[str, ...]) -> dict:
+    """A copy of ``mapping`` without ``keys``."""
+    return {key: value for key, value in mapping.items() if key not in keys}
 
 
 def _try_build_longform(spec: dict, sources: list[dict], context: dict) -> str:
@@ -326,7 +428,7 @@ def _try_build_longform(spec: dict, sources: list[dict], context: dict) -> str:
         # The manifest's profile, not longform.build's "stress" default: a spec asking for
         # the "natural" scene-shaped layout was silently rendered as the stress layout, so
         # the ground-truth sidecar described a timeline the audio did not have.
-        timeline = longform.build(sources, dest, context, profile=spec.get("profile", "stress"))
+        timeline = longform.build(sources, dest, context, profile=spec.get("profile") or "stress", shape=spec.get("shape") or "film")
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         logger.error("FAILED   %s: %s", spec.get("id", "longform"), _brief(error))
         return "failed"

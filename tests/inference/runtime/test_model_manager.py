@@ -463,6 +463,39 @@ def test_model_manager_enables_per_window_detection_when_language_was_detected()
     assert mock_model.transcribe.call_args.kwargs["multilingual"] is True
 
 
+def test_a_pre_resolved_auto_detected_language_still_enables_per_window_detection():
+    """The route resolves an auto-detected language before this point on the default config.
+
+    Vocal separation is off by default, so `_detect_lang_for_transcription` fills the language
+    in up front and `run_transcription` receives a concrete code. Inferring intent from
+    `not language` therefore reported "explicitly requested" for every ordinary request, which
+    silently disabled per-window re-detection on the path most deployments actually use -- the
+    shipped `multilingual=True` fix only ever engaged when separation was enabled. The caller's
+    intent has to travel separately from the resolved value.
+    """
+    mock_model = mock.MagicMock()
+    mock_info = mock.MagicMock(language="es", language_probability=0.95, duration=5.0)
+    mock_model.transcribe.return_value = ([mock.MagicMock(start=0.0, end=1.0, text="hola")], mock_info)
+    mock_model.detect_language.return_value = ("es", 0.95, [("es", 0.95)])
+    model_manager.MODEL_POOL["CPU"] = mock_model
+
+    model_manager.run_transcription("test.wav", language="es", task="transcribe", auto_detected=True)
+
+    assert mock_model.transcribe.call_args.kwargs["multilingual"] is True
+
+
+def test_an_explicit_request_is_still_honoured_when_intent_is_forwarded():
+    """The other half of the same switch: a demanded language is never revised per window."""
+    mock_model = mock.MagicMock()
+    mock_info = mock.MagicMock(language="fr", language_probability=1.0, duration=5.0)
+    mock_model.transcribe.return_value = ([mock.MagicMock(start=0.0, end=1.0, text="bonjour")], mock_info)
+    model_manager.MODEL_POOL["CPU"] = mock_model
+
+    model_manager.run_transcription("test.wav", language="fr", task="transcribe", auto_detected=False)
+
+    assert mock_model.transcribe.call_args.kwargs["multilingual"] is False
+
+
 def test_preprocessor_resolution_paths_cover_shared_and_cpu_fallbacks():
     """Cover helper branches for preferred and unit-specific preprocessor selection."""
     model_manager.PREPROCESSOR_POOL.clear()

@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 #: unit_id -> engine instance. The worker's entire resident footprint.
 _ENGINES: dict[str, Any] = {}
 
+#: The last file decoded for region detection, as ``{path: samples}`` -- one entry. The
+#: parent sends regions in chunks so a pause never holds an open stream, and decoding a
+#: twenty-minute file once per chunk would have made that chunking cost a second each.
+_REGION_AUDIO: dict[str, Any] = {}
+
 
 def _apply_env(env: Optional[dict[str, str]]) -> None:
     """Apply device-visibility overrides before any runtime is imported."""
@@ -88,6 +93,7 @@ def _unload_all() -> int:
     handles = list(_ENGINES)
     for handle in handles:
         _unload_model(handle)
+    _REGION_AUDIO.clear()
     return len(handles)
 
 
@@ -172,6 +178,51 @@ def _transcribe(handle: str, audio_path: str, params: Optional[dict] = None) -> 
         yield {"event": "segment", "segment": _segment_to_dict(segment)}
 
 
+def _detect_language_regions(handle: str, audio_path: str, regions: list) -> Iterator[dict[str, Any]]:
+    """Detect a language for each caller-supplied speech region, one result per region.
+
+    A sibling of :func:`_detect_language_batch`, which walks fixed 30s windows from the start
+    of the file. Decoding by speech region needs the language of *arbitrary* spans instead, and
+    those spans are the only thing the parent can label a segment with: faster-whisper commits
+    to a language per decode window but never reports which, so the per-segment language has to
+    be measured here rather than read back from the transcription.
+
+    The file is decoded once in this process and sliced, so no audio arrays cross the pipe --
+    the same reason the batch variant exists in the worker rather than the parent.
+    """
+    engine = _get_engine(handle)
+    run_language_detection_core = importlib.import_module("modules.inference.pipeline.language_detection_core").run_language_detection_core
+
+    full_audio = _region_audio(audio_path)
+    for index, region in enumerate(regions or []):
+        # Both bounds clamped to the audio, and the span reported is the one sliced: VAD
+        # pads its regions, so the last one routinely overruns the file, and a negative
+        # start would otherwise index from the *end* of the array.
+        start = max(0, int(float(region["start"]) * 16000))
+        end = min(int(float(region["end"]) * 16000), len(full_audio))
+        if start >= end:
+            continue
+        chunk = full_audio[start:end].copy()
+        yield {
+            "event": "detection",
+            "index": index,
+            "start": start / 16000,
+            "end": end / 16000,
+            # skip_vad: the region already *is* VAD output, and re-running it on a short
+            # slice can return "no speech" for audio the decoder is about to transcribe.
+            "result": run_language_detection_core(engine, chunk, skip_vad=True),
+        }
+
+
+def _region_audio(audio_path: str):
+    """The decoded samples of ``audio_path``, decoded once per file across region chunks."""
+    if audio_path not in _REGION_AUDIO:
+        vad = importlib.import_module("modules.inference.pipeline.vad")
+        _REGION_AUDIO.clear()
+        _REGION_AUDIO[audio_path] = vad.decode_audio(audio_path)
+    return _REGION_AUDIO[audio_path]
+
+
 def _detect_language_batch(handle: str, audio_path: str, segment_count: int) -> Iterator[dict[str, Any]]:
     """Scan up to ``segment_count`` 30s windows, streaming one result per window.
 
@@ -240,5 +291,6 @@ def worker_main(conn: Connection) -> None:
         stream_handlers={
             "transcribe": _transcribe,
             "detect_language_batch": _detect_language_batch,
+            "detect_language_regions": _detect_language_regions,
         },
     )

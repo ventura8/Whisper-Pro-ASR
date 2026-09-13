@@ -16,6 +16,7 @@ import functools
 import json
 import os
 import re
+import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from typing import Any
 import pytest
 
 from scripts.audio_matrix.render import probe_duration
+from tests.real_audio import service_client
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "e2e" / "fixtures"
 MATRIX_DIR = FIXTURES_DIR / "audio_matrix"
@@ -71,8 +73,12 @@ def normalize(text: str) -> str:
     the same normalized text -- the fragmentation is identical on both sides, so it
     cancels. An Indic entry left on the default ``words`` tokenizer is a scoring bug, not a
     stylistic choice.
+
+    Russian ``ё`` is folded to ``е``: written Russian drops the diaeresis almost everywhere
+    and so does Whisper, so a reference spelt "чём" scored a correct "чем" as a miss
+    (`ru_line2` at 0.50 against 0.60 on the RTX 5090). The two are one letter in practice.
     """
-    return re.sub(r"[^\w ]+", " ", text.lower(), flags=re.UNICODE).strip()
+    return re.sub(r"[^\w ]+", " ", text.lower().replace("ё", "е"), flags=re.UNICODE).strip()
 
 
 def words(text: str) -> list[str]:
@@ -140,7 +146,59 @@ def _word_overlap_chars(expected: list[str], actual: list[str]) -> float:
     return len(expected_grams & _char_bigrams(actual)) / len(expected_grams)
 
 
-_OVERLAP_STRATEGIES = {"words": _word_overlap_tokens, "chars": _word_overlap_chars}
+def _fold_marks(word: str) -> str:
+    """Drop combining marks, leaving the base letters."""
+    return "".join(c for c in unicodedata.normalize("NFD", word) if unicodedata.category(c) != "Mn")
+
+
+def _word_overlap_chars_folded(expected: list[str], actual: list[str]) -> float:
+    """Character-bigram overlap after folding away combining marks.
+
+    For languages the model transcribes phonetically but not orthographically. Whisper writes
+    Yoruba without its tone and vowel marks and places word breaks differently -- "kolo-kolo"
+    for "kọ̀lọ̀kọ̀lọ̀", "ala wobura nulera" for "aláwọ̀ búráùnù yára" -- so word overlap scores
+    a recognisably correct transcript at 0.00 and reports a total failure that did not happen.
+    Measured on that clip: words 0.00, chars 0.09, words folded 0.20, chars folded 0.76.
+
+    This is a laxer bar than the other strategies and is meant to be: it asks whether the right
+    sounds were heard, not whether the orthography matches. Use it only where the model's
+    spelling of a language differs systematically from the reference, never to rescue a clip
+    that is simply being transcribed wrongly -- unrelated text still scores low.
+    """
+    return _word_overlap_chars([_fold_marks(w) for w in expected], [_fold_marks(w) for w in actual])
+
+
+def overlap_ceiling(expected: list[str], tokenizer: str = "words") -> float:
+    """The score a flawless transcript of ``expected`` can reach under ``tokenizer``.
+
+    ``normalize`` replaces Unicode combining marks with spaces, so a reference word that
+    carries them -- every Yoruba tone mark, every Indic vowel sign -- is split into fragments
+    before it is compared. A transcript is tokenized by ``words`` first and never sees those
+    fragments joined, so identical text still scores below 1.0: 0.71 for Yoruba under
+    ``words``, ~0.90 under ``chars``. That cap is a property of the reference, not of the
+    audio, which makes a single ``min_word_overlap`` mean different things in different
+    scripts. Scoring against ``bar * ceiling`` instead asks the same question everywhere:
+    what fraction of the attainable score did the transcript reach.
+
+    Built exactly as a real transcript is scored -- the reference joined, tokenized by
+    ``words``, and compared to itself -- so it moves with the scoring code, never with a
+    hand-maintained table.
+    """
+    return word_overlap(expected, words(" ".join(expected)), tokenizer)
+
+
+def content_threshold(clip: dict) -> float:
+    """The bar a clip's transcript must clear: its declared ``min_word_overlap``, as a
+    fraction of the ceiling its own reference allows."""
+    tokenizer = clip.get("tokenizer", "words")
+    return float(clip["min_word_overlap"]) * overlap_ceiling(clip["expect_words"], tokenizer)
+
+
+_OVERLAP_STRATEGIES = {
+    "words": _word_overlap_tokens,
+    "chars": _word_overlap_chars,
+    "chars_folded": _word_overlap_chars_folded,
+}
 
 
 def word_overlap(expected: list[str], actual: list[str], tokenizer: str = "words") -> float:
@@ -156,6 +214,40 @@ def word_overlap(expected: list[str], actual: list[str], tokenizer: str = "words
         # the manifest error it is.
         raise AssertionError(f"manifest declares tokenizer {tokenizer!r}, which is not one of {sorted(_OVERLAP_STRATEGIES)}")
     return _OVERLAP_STRATEGIES[tokenizer]([normalize(word) for word in expected], actual)
+
+
+def text_in_window(segments: list[dict], start: float, end: float) -> str:
+    """The text of every segment whose midpoint falls inside ``[start, end)``.
+
+    The one rule for attributing text to a stretch of audio, shared by the long-form windows
+    and the code-switched legs: a segment is placed by where it sits, not by what it touches.
+    """
+    inside = [seg for seg in segments if start <= (float(seg["start"]) + float(seg["end"])) / 2 < end]
+    return " ".join(str(seg.get("text", "")) for seg in inside)
+
+
+def foreign_share(segments: list[dict], windows: list[dict]) -> float:
+    """The share of spoken seconds whose transcript carries a language other than the one spoken.
+
+    Duration-weighted, so finer segmentation cannot inflate it -- the mistake that once read a
+    real-media improvement as a 49% regression -- and judged per ground-truth window against
+    the language the sidecar says was spoken there. A segment that reports no language is
+    counted as wrong: the reporting path is part of what is measured. No speech at all
+    scores 0.0, since nothing was mislabelled.
+    """
+    spoken = wrong = 0.0
+    for window in windows:
+        for seg in segments:
+            seconds, same = _judged(seg, window)
+            spoken += seconds
+            wrong += 0.0 if same else seconds
+    return wrong / spoken if spoken else 0.0
+
+
+def _judged(seg: dict, window: dict) -> tuple[float, bool]:
+    """The seconds a segment shares with a ground-truth window, and whether the language matches."""
+    shared = min(float(seg["end"]), float(window["end"])) - max(float(seg["start"]), float(window["start"]))
+    return max(0.0, shared), str(seg.get("language") or "").lower() == str(window["language"]).lower()
 
 
 def clip_duration(path: Path) -> float:
@@ -226,6 +318,55 @@ def assert_declared_response(case: dict, response) -> None:
         assert_text_policy(case, response.json())
 
 
+def english_words_for(clip_id: str) -> list[str] | None:
+    """The English meaning of a matrix clip, as scoring tokens, or None when it has none.
+
+    The matrix is built from one sentence pool rendered in every language -- ``ru_line4``
+    says what ``en_line4`` says, every ``*_core`` is the same pangram and sign-off -- so a
+    clip's English counterpart is the clip with the same suffix under ``en_``. That is what
+    a translation of the clip is scored against; a clip with no English sibling cannot be.
+    """
+    counterpart = clip_id if clip_id.startswith("en_") else "en_" + clip_id.split("_", 1)[-1]
+    entry = _clips_by_id().get(counterpart)
+    return words(entry["text"]) if entry else None
+
+
+@functools.lru_cache(maxsize=1)
+def _clips_by_id() -> dict[str, dict]:
+    """``clip id -> entry``, built once: a long-form translation asks for it per window."""
+    return {clip["id"]: clip for clip in load_manifest().get("clips") or []}
+
+
+@functools.lru_cache(maxsize=1)
+def _clip_ids_by_line() -> dict[tuple[str, str], str]:
+    """``(language, text) -> clip id``, to find the clip a long-form window was cut from."""
+    return {(clip["language"], clip["text"]): clip["id"] for clip in load_manifest().get("clips") or []}
+
+
+def window_english_words(window: dict) -> list[str] | None:
+    """What a long-form window's line means in English, or None when the clip is unknown."""
+    clip_id = _clip_ids_by_line().get((window["language"], window["text"]))
+    return english_words_for(clip_id) if clip_id else None
+
+
+def translation_words(entry: dict) -> list[str]:
+    """The English a code-switched clip should translate to, from both its legs.
+
+    An English leg contributes its own text; every other leg contributes the ``translation``
+    the manifest records for it, so a leg that was transcribed rather than translated -- the
+    Spanish left in Spanish -- scores against what it should have said in English.
+    """
+    expected: list[str] = []
+    for leg in entry.get("legs") or []:
+        expected.extend(words(leg["text"] if leg["language"] == "en" else leg.get("translation", "")))
+    return expected
+
+
+def foreign_leg_words(entry: dict) -> list[str]:
+    """The words of a code-switched clip's non-English legs, as spoken -- what must be gone."""
+    return [word for leg in entry.get("legs") or [] if leg["language"] != "en" for word in words(leg["text"])]
+
+
 @functools.lru_cache(maxsize=1)
 def load_manifest() -> dict[str, Any]:
     """Load the audio-matrix manifest, or an empty manifest when it is absent.
@@ -248,12 +389,46 @@ def _entry_marks(entry: dict, scope: str | None) -> list[pytest.MarkDecorator]:
     a mixed-language file whose second half is dropped still detects a language and still
     returns HTTP 200. ``xfail_scope`` names the concern the defect affects, so the other
     tests stay strict instead of reporting a wall of meaningless XPASS.
+
+    ``xfail_engines`` narrows the same way along the other axis. Every code-switched clip
+    is a defect on WHISPERX and none is on FASTER-WHISPER, so without it the default engine
+    reports six XPASSes -- the wall the paragraph above exists to prevent -- and the entries
+    have to say "engine-dependent" in prose that nothing enforces. An entry that omits the
+    key applies to every engine, which is what all the pre-existing entries mean.
     """
     marks = [pytest.mark.smoke] if entry.get("smoke") else []
     reason = entry.get("xfail_reason")
-    if not reason or entry.get("xfail_scope") not in (None, scope):
+    if not reason or not _scope_applies(entry.get("xfail_scope"), scope):
+        return marks
+    if not _defect_applies_to_running_engine(entry):
         return marks
     return marks + [pytest.mark.xfail(strict=False, reason=str(reason))]
+
+
+def _scope_applies(declared, scope: str | None) -> bool:
+    """Whether a defect declared for ``declared`` concerns the test asking about ``scope``.
+
+    One name or a list of them: an engine that drops a leg drops it whether the clip is
+    transcribed or translated, so that entry names both concerns rather than leaving the
+    translation test strict against a defect already on record.
+    """
+    if declared is None:
+        return True
+    return scope in declared if isinstance(declared, list) else declared == scope
+
+
+def _defect_applies_to_running_engine(entry: dict) -> bool:
+    """Return whether this entry's defect belongs to the engine that is answering.
+
+    Unknown engine means apply the mark: collection happens before any request, and on a
+    host with no service every real-audio test skips anyway, so guessing "not affected"
+    there would turn a skipped suite into a strict one the moment a service appeared.
+    """
+    engines = entry.get("xfail_engines")
+    if not engines:
+        return True
+    running = service_client.running_engine()
+    return running is None or running in engines
 
 
 def _entry_is_selected(entry: dict, tier: str | None) -> bool:

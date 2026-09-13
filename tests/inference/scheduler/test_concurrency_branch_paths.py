@@ -213,6 +213,35 @@ def test_try_take_idle_unit_queue_empty_releases_permit():
         mock_release.assert_called_once()
 
 
+CUDA = {"id": "cuda:0", "type": "CUDA", "name": "NVIDIA GPU 0"}
+INTEL = {"id": "GPU", "type": "GPU", "name": "Intel GPU"}
+
+
+def _pool_with(*units):
+    pool = queue.Queue()
+    for unit in units:
+        pool.put(unit)
+    return pool
+
+
+@pytest.mark.parametrize("take", [concurrency._try_take_idle_unit, concurrency._try_acquire_unit_now])
+def test_both_callers_take_the_drivable_unit_over_the_head_of_the_pool(take):
+    """The rotation trap on a hybrid host: detection returned the CUDA unit to the tail, so the
+    head is the Intel unit FASTER-WHISPER cannot drive. Both acquisition paths go through
+    unit_choice, and both must hand the task the card -- the priority path and the standard
+    one had each read the head directly before."""
+    pool = _pool_with(INTEL, CUDA)
+    with (
+        mock.patch.object(scheduler.STATE, "hw_pool", pool),
+        mock.patch.object(scheduler.STATE.model_lock, "acquire", return_value=True),
+        mock.patch.object(scheduler.STATE.model_lock, "release") as release,
+        mock.patch("modules.core.config.engine_for_unit", return_value="FASTER-WHISPER"),
+    ):
+        assert take() is CUDA
+    assert list(pool.queue) == [INTEL], "the unit not taken stays idle"
+    release.assert_not_called()
+
+
 def test_priority_acquire_unit_fallback_marks_borrowed():
     """Cover fallback borrow path when no targeted unit is set."""
     utils.THREAD_CONTEXT.target_unit_id = None

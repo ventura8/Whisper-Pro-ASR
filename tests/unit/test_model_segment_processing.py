@@ -182,3 +182,62 @@ def test_run_diarization_safe_returns_empty_list_without_segments():
 
     assert results == []
     mock_run.assert_not_called()
+
+
+def test_a_progress_window_confines_one_call_to_its_share_of_the_bar():
+    """The second of two calls climbs from the middle of the bar, never back from zero."""
+    segments = [SimpleNamespace(start=0.0, end=5.0, text="a", words=None), SimpleNamespace(start=5.0, end=10.0, text="b", words=None)]
+    info = SimpleNamespace(duration=10.0, language="en")
+
+    with (
+        mock.patch("modules.inference.runtime.model_segment_processing.scheduler.update_task_metadata"),
+        mock.patch("modules.inference.runtime.model_segment_processing.scheduler.update_task_progress") as mock_progress,
+    ):
+        model_segment_processing.consume_segments(
+            segments, info, "transcribe", diarize=False, preemption_check=lambda: None, progress_window=(1, 2)
+        )
+
+    assert [call.args[0] for call in mock_progress.call_args_list] == [75, 95]
+
+
+def test_without_a_window_progress_is_the_whole_bar():
+    """The single-call path is unchanged: a segment at the end of the file is at the cap."""
+    assert model_segment_processing._segment_progress_pct(10.0, 10.0, 95) == 100
+    assert model_segment_processing._segment_progress_pct(2.5, 10.0, 95) == 25
+    assert model_segment_processing._segment_progress_pct(2.5, 10.0, 80) == 20
+
+
+def _quiet(monkeypatch):
+    for name in ("_update_live_srt_metadata", "_update_segment_progress", "_maybe_log_segment_progress"):
+        monkeypatch.setattr(model_segment_processing, name, lambda *a, **k: None)
+
+
+def test_consume_until_pause_keeps_the_segment_in_hand_and_pulls_no_more(monkeypatch):
+    """A pause is asked for after each segment is kept, so nothing the worker produced is
+    lost, and the next segment is never requested: the stream is left for the caller to close."""
+    _quiet(monkeypatch)
+    pulled: list[int] = []
+
+    def segments():
+        for index in range(4):
+            pulled.append(index)
+            yield SimpleNamespace(start=float(index), end=index + 1.0, text=f"s{index}", words=None)
+
+    answers = iter([False, True])
+    results, paused = model_segment_processing.consume_until_pause(
+        segments(), SimpleNamespace(duration=4.0, language="en"), "transcribe", diarize=False, pause_pending=lambda: next(answers, False)
+    )
+    assert paused is True
+    assert [seg["text"] for seg in results] == ["s0", "s1"]
+    assert pulled == [0, 1], "the third segment was never requested from the worker"
+
+
+def test_consume_until_pause_returns_everything_when_nothing_asks(monkeypatch):
+    """No pause: the same segments consume_segments would return, and paused is False."""
+    _quiet(monkeypatch)
+    segments = [SimpleNamespace(start=0.0, end=1.0, text="a", words=None), SimpleNamespace(start=1.0, end=2.0, text="b", words=None)]
+    results, paused = model_segment_processing.consume_until_pause(
+        segments, SimpleNamespace(duration=2.0, language="en"), "transcribe", diarize=False, pause_pending=lambda: False
+    )
+    assert paused is False
+    assert [seg["text"] for seg in results] == ["a", "b"]
