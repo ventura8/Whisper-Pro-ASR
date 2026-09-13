@@ -18,7 +18,7 @@ from modules.core.config_helpers import (
 from modules.core.constants import HALLUCINATION_PHRASES
 from modules.core.mount_helpers import get_custom_mount_points, resolve_temp_dir
 
-from . import config_model_paths, config_paths, config_resolution, device_probe, engine_registry
+from . import config_model_paths, config_paths, config_resolution, config_segmentation, device_probe, engine_registry
 
 # Explicitly referenced to satisfy the unused-import check; both are part of this
 # module's public surface and are read through it by callers and tests.
@@ -31,7 +31,7 @@ HOST = os.environ.get("HOST") or ".".join(["0", "0", "0", "0"])
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 #: Which image this container was built from (cpu, intel, nvidia, amd, nvidia-intel,
 #: full), stamped per target in the Dockerfile. Two containers can run the same VERSION
 #: with very different accelerator support, so the dashboard shows both. Empty when the
@@ -412,6 +412,18 @@ DEFAULT_BEAM_SIZE = int(os.environ.get("ASR_BEAM_SIZE", 5))
 # default because it fixes a recorded defect (dropped code-switched legs); disable if it
 # ever needs to be rolled back without a code change.
 ASR_MULTILINGUAL_SEGMENTATION = os.environ.get("ASR_MULTILINGUAL_SEGMENTATION", "true").strip().lower() in ("true", "1", "yes")
+
+# Decoding by speech region; grouped in its own module because this file is at its length
+# limit and these values are only meaningful together.
+ASR_SEGMENT_FIRST = config_segmentation.ASR_SEGMENT_FIRST
+SEGMENT_SPLIT_MIN_SILENCE_MS = config_segmentation.SEGMENT_SPLIT_MIN_SILENCE_MS
+SEGMENT_SPLIT_PAD_MS = config_segmentation.SEGMENT_SPLIT_PAD_MS
+SEGMENT_FIRST_MIN_REGIONS = config_segmentation.SEGMENT_FIRST_MIN_REGIONS
+SEGMENT_CLIP_MERGE_GAP_SEC = config_segmentation.SEGMENT_CLIP_MERGE_GAP_SEC
+SEGMENT_RUN_MIN_SWITCH_SEC = config_segmentation.SEGMENT_RUN_MIN_SWITCH_SEC
+SEGMENT_RUN_MIN_SWITCH_SHARE = config_segmentation.SEGMENT_RUN_MIN_SWITCH_SHARE
+ASR_SEGMENT_LANGUAGES = config_segmentation.ASR_SEGMENT_LANGUAGES
+ASR_FORCE_TRANSCRIPTION = config_segmentation.ASR_FORCE_TRANSCRIPTION
 
 # Debug and Logging
 DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"

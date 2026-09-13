@@ -550,6 +550,15 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
         with:
           images: ventura8/whisper-pro-asr
+          # latest=auto (the action's default) appends `latest` for EVERY matrix target on a
+          # semver tag push, and the `type=raw` rule below can only add tags, never suppress
+          # it. On v1.3.0 all nine targets therefore raced for `latest` and the last to finish
+          # won it: `amd-rocm-torch`, an image that transcribes on the CPU and carries no
+          # WhisperX, published as the tag the README tells people to pull. `latest` is
+          # therefore added by the one `type=raw` rule below: `full` only, and only where the
+          # moving tags advance (main and a release tag, PUBLISH_MOVING_TAG) -- a tag push is
+          # the release, and it must not leave `latest` on whatever main held before the merge.
+          flavor: latest=false
           tags: |
             type=ref,event=branch,suffix=-${{ matrix.target }}
             type=semver,pattern={{version}}-${{ matrix.target }}
@@ -558,7 +567,7 @@ jobs:
             type=semver,pattern={{version}},enable=${{ matrix.target == 'full' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.target == 'full' }}
             type=sha,format=long,enable=${{ matrix.target == 'full' }}
-            type=raw,value=latest,enable=${{ matrix.target == 'full' && github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ matrix.target == 'full' && env.PUBLISH_MOVING_TAG == 'true' }}
 
       - name: Resolve Base Image For Target
         id: base

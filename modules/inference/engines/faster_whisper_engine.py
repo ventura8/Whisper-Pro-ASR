@@ -212,6 +212,9 @@ class FasterWhisperEngine(BaseASREngine):
             "multilingual": language is None,
         }
         params.update(kwargs)
+        # A request's batch size is for the engine that batches (WhisperX); WhisperModel's
+        # transcribe has no such argument and would reject the whole call over it.
+        params.pop("batch_size", None)
         return self.model.transcribe(audio_path, language=language, task=task, **params)
 
     def detect_language(self, audio: Any):

@@ -2,6 +2,8 @@
 
 from unittest import mock
 
+import pytest
+
 from modules.inference.engines import whisperx_engine
 from modules.inference.engines.whisperx_engine import _unsupported_whisperx_options
 from modules.inference.engines.whisperx_worker import _detect_language, _dispatch, _transcribe, _unload_model
@@ -53,6 +55,25 @@ def test_whisperx_engine_transcribe_logs_unsupported_options(caplog):
     assert len(list(segments)) == 1
     assert info.language == "en"
     assert "Ignoring unsupported options" in caplog.text
+
+
+def test_whisperx_engine_refuses_clips_before_reaching_the_worker():
+    """Clips are the one option that must not be ignored: a whole-file decode returned as if
+    it were region by region is a wrong transcript, so the engine raises instead."""
+    with (
+        mock.patch("modules.inference.engines.whisperx_engine.worker") as mock_worker,
+        mock.patch("modules.inference.engines.base.utils.get_audio_duration", return_value=1.0),
+    ):
+        mock_worker.call_with_generation.return_value = ("handle-1", 0)
+        mock_worker.generation.return_value = 0
+        engine = whisperx_engine.WhisperXEngine(model_id="m", device="cpu")
+        with pytest.raises(ValueError, match="clip_timestamps"):
+            engine.transcribe("x.wav", clip_timestamps=[0.0, 1.0])
+        mock_worker.call.assert_not_called()
+        # An empty clip list is the ordinary whole-file call and goes through.
+        mock_worker.call.return_value = {"language": "en", "segments": []}
+        engine.transcribe("x.wav", clip_timestamps=[])
+        mock_worker.call.assert_called_once()
 
 
 def test_whisperx_engine_detect_language_with_path():

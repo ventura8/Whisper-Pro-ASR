@@ -90,6 +90,11 @@ class _SeparatorProbe:
 class IsolatedPreprocessor:
     """Runs UVR in a worker process, presenting the in-process manager interface."""
 
+    #: A yield inside the separation stream must not block: the stream holds the worker
+    #: channel, and a priority task that asked for the pause may need this same worker
+    #: for its own montage. The pipeline abandons the stream instead (resumable_decode).
+    yield_may_block = False
+
     def __init__(self, assigned_unit: Optional[dict] = None) -> None:
         self._unit = assigned_unit
         self._device_id = assigned_unit["id"] if assigned_unit else "CPU"

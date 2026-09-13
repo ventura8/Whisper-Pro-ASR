@@ -44,6 +44,7 @@ class RequestParams(TypedDict, total=False):
     subtitle_highlight_words: bool
     vad_filter: bool
     word_timestamps: bool
+    force_transcription: Optional[bool]
     clean_audio: Optional[bool]
     max_line_width: Optional[int]
     max_line_count: Optional[int]
@@ -198,7 +199,10 @@ def _perform_transcription_task(
             # own substring matching against the container's stream tags.
             requested_lang = _normalize_language(params.get("language"))
             lang = _detect_lang_for_transcription(requested_lang, source_path, clean_wav)
-            result = _run_transcription(params, source_path, clean_wav, lang)
+            # The caller's intent, not the resolved value: _detect_lang_for_transcription may
+            # already have filled `lang` in, and an engine cannot tell a detected language from
+            # a demanded one.
+            result = _run_transcription(params, source_path, clean_wav, lang, requested_lang is None)
 
             if result:
                 model_manager.update_task_metadata(result=result)
@@ -258,6 +262,7 @@ def _run_transcription(
     source_path: str,
     clean_wav: Optional[str],
     lang: Optional[str],
+    auto_detected: bool,
 ) -> TranscriptionResult:
     _check_preemption()
     target_audio = clean_wav if clean_wav else source_path
@@ -265,6 +270,7 @@ def _run_transcription(
         target_audio,
         lang,
         params["task"],
+        auto_detected=auto_detected,
         diarize=params.get("diarize", False),
         min_speakers=params.get("min_speakers"),
         max_speakers=params.get("max_speakers"),
@@ -273,6 +279,7 @@ def _run_transcription(
         vad_filter=params.get("vad_filter", True),
         word_timestamps=params.get("word_timestamps", False),
         batch_size=params.get("batch_size"),
+        force_transcription=params.get("force_transcription"),
     )
 
 
@@ -375,6 +382,8 @@ def _apply_prompt_and_format_flags(
     params["subtitle_highlight_words"] = _parse_subtitle_highlight(query_params, form_data)
     params["vad_filter"] = _parse_bool_param(query_params, form_data, "vad_filter", True)
     params["word_timestamps"] = _parse_bool_param(query_params, form_data, "word_timestamps", False)
+    # None means "the deployment's ASR_FORCE_TRANSCRIPTION"; a request may turn it either way.
+    params["force_transcription"] = _parse_bool_param(query_params, form_data, "force_transcription", None)
     clean_audio = _parse_bool_param(query_params, form_data, "clean_audio", None)
     if clean_audio is None:
         clean_audio = _parse_bool_param(query_params, form_data, "vocal_separation", None)
