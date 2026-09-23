@@ -6,6 +6,7 @@ Split from test_routes_utils.py to stay under the file size limit.
 import asyncio
 import io
 import os
+import time
 from unittest import mock
 
 import pytest
@@ -364,3 +365,37 @@ async def test_write_upload_to_disk_async_writes_every_chunk(tmp_path):
 
     with open(target, "rb") as written:
         assert written.read() == payload
+
+
+@pytest.mark.anyio
+async def test_write_upload_to_disk_async_removes_file_created_by_a_racing_open(tmp_path):
+    """Cancellation *during* the threaded open must still leave no file behind.
+
+    The worker thread creates the file whatever the event loop is doing, so a cleanup
+    that unlinks before the open finishes removes nothing and the file appears a moment
+    later. The open here is delayed so cancellation lands squarely inside that window.
+    """
+    target = str(tmp_path / "raced.wav")
+    real_open = open
+
+    def _slow_open(*args, **kwargs):
+        time.sleep(0.2)
+        return real_open(*args, **kwargs)
+
+    class _NeverReadUpload:
+        async def seek(self, _offset):
+            return None
+
+        async def read(self, _size):  # pragma: no cover - cancelled before it is reached
+            return b""
+
+    with mock.patch("builtins.open", _slow_open):
+        task = asyncio.ensure_future(routes_utils._write_upload_to_disk_async(_NeverReadUpload(), target))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # Give the worker thread time to finish its open and the cleanup to catch up.
+        await asyncio.sleep(0.5)
+
+    assert not os.path.exists(target), "the racing open left its file behind"

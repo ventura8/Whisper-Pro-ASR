@@ -83,7 +83,13 @@ fi
 # just the working tree. The container runs as the invoking user so nothing it writes is
 # left root-owned.
 #
-# The scanner cache goes in a named volume rather than under the working tree. It holds a
+# A caller-owned host directory rather than a named volume: a fresh named volume is
+# created root-owned, and this container runs as the invoking user, so the scanner would
+# fail creating its cache before analysis ever started.
+SONAR_CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/whisper-pro-asr-sonar"
+mkdir -p "${SONAR_CACHE_DIR}"
+
+# The scanner cache goes outside the working tree. It holds a
 # provisioned JRE -- ~136 MB of OpenJDK, including markdown under legal/ and a
 # java.security with a high-entropy line -- and every linter here walks the filesystem
 # rather than the git index, so caching it inside the repository failed Markdownlint and
@@ -95,7 +101,7 @@ docker run --rm \
 	-e SONAR_TOKEN \
 	-e SONAR_HOST_URL="https://sonarcloud.io" \
 	-e SONAR_USER_HOME=/opt/sonar-cache \
-	-v whisper-pro-asr-sonar-cache:/opt/sonar-cache \
+	-v "${SONAR_CACHE_DIR}:/opt/sonar-cache" \
 	-v "${PWD}:/usr/src" \
 	sonarsource/sonar-scanner-cli:latest \
 	-Dsonar.branch.name="$(git rev-parse --abbrev-ref HEAD)" \

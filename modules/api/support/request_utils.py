@@ -3,6 +3,7 @@ Private utilities and helpers for API routes.
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import traceback
@@ -103,6 +104,25 @@ async def _write_upload_to_disk(upload_file, tmp_path: str) -> dict:
     return {"success": False, "used_sync": False, "error": "write_failed"}
 
 
+async def _close_and_discard(open_task, tmp_path: str) -> None:
+    """Join an in-flight `open`, close whatever it produced, and remove the path.
+
+    Cancellation can land while `open` is still running in its worker thread. That
+    thread creates the file regardless of what the event loop is doing, so unlinking
+    before it finishes leaves the file behind -- and closing an orphaned handle does
+    not remove it. Joining first is what makes the removal deterministic. The awaits
+    are shielded because this runs inside a task that is already being cancelled.
+    """
+    handle = None
+    if open_task is not None:
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            handle = await asyncio.shield(open_task)
+    if handle is not None:
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await asyncio.shield(asyncio.to_thread(handle.close))
+    _remove_path_if_exists(tmp_path)
+
+
 async def _stream_upload_to_handle(upload_file, handle) -> None:
     """Copy the upload into an already-open handle, one chunk at a time.
 
@@ -117,6 +137,7 @@ async def _stream_upload_to_handle(upload_file, handle) -> None:
 
 
 async def _write_upload_to_disk_async(upload_file, tmp_path: str) -> bool:
+    open_task = None
     try:
         await upload_file.seek(0)
         # The read side is awaited but the write side was not: `open` and `f.write` are
@@ -127,7 +148,8 @@ async def _write_upload_to_disk_async(upload_file, tmp_path: str) -> bool:
         # to a thread. No aiofiles dependency is added for one copy loop.
         handle = None
         try:
-            handle = await asyncio.to_thread(open, tmp_path, "wb")
+            open_task = asyncio.ensure_future(asyncio.to_thread(open, tmp_path, "wb"))
+            handle = await asyncio.shield(open_task)
             await _stream_upload_to_handle(upload_file, handle)
         finally:
             # `handle` is bound before the try so that a cancellation anywhere in the loop
@@ -143,7 +165,7 @@ async def _write_upload_to_disk_async(upload_file, tmp_path: str) -> bool:
     except asyncio.CancelledError:
         # A cancelled upload leaves a partial file behind: the caller's cleanup only runs
         # for the returns above, and CancelledError is a BaseException that passes it by.
-        _remove_path_if_exists(tmp_path)
+        await _close_and_discard(open_task, tmp_path)
         raise
 
 
