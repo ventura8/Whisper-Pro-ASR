@@ -487,11 +487,17 @@ jobs:
         # container at /app -- so the report arrives saying <source>/app</source>. The
         # scanner resolves each filename against those roots, none of which exist in the
         # runner workspace, so every file silently fails to match and the analysis reports
-        # 0.0% coverage on a report that actually measured 96.6%. Rewriting the roots to
-        # the project base dir is what makes the numbers land on the files.
+        # 0.0% coverage on a report that actually measured 96.9%.
+        #
+        # Rewritten to the workspace as an ABSOLUTE path, not ".". A relative root worked
+        # for modules/ -- whose entries resolve through the "/app/modules" root, rewritten
+        # to "./modules" -- and silently failed for scripts/, whose filenames are relative
+        # to the bare "/app" root and so depended on "." resolving. The result was a
+        # scripts/ tree the scanner reported at 0% coverage while the report it was reading
+        # recorded 100%. An absolute root removes the ambiguity for every entry at once.
         run: |
           if [ -f coverage.xml ]; then
-            sed -i 's#<source>/app#<source>.#g' coverage.xml
+            sed -i "s#<source>/app#<source>${GITHUB_WORKSPACE}#g" coverage.xml
             echo "coverage.xml source roots:"
             grep -o '<source>[^<]*</source>' coverage.xml
           else

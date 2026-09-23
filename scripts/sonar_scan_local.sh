@@ -100,7 +100,11 @@ if [ "${WITH_COVERAGE}" = "1" ]; then
 	# Same container-path problem the CI job fixes: the suite runs at /app, so coverage.py
 	# writes <source>/app</source> and the scanner -- rooted at the repository -- matches
 	# none of it, reporting 0.0% from a report that measured the tree correctly.
-	sed -i 's#<source>/app#<source>.#g' coverage.xml
+	#
+	# An absolute root rather than ".": entries under the bare "/app" root (everything in
+	# scripts/) depended on "." resolving and silently did not match, so those files were
+	# reported at 0% from a report recording 100%.
+	sed -i "s#<source>/app#<source>${PWD}#g" coverage.xml
 
 	# An export that silently did not happen is the other way a stale or absent report
 	# reaches the scanner, so require every report the properties file points at --
