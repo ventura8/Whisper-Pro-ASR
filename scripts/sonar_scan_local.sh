@@ -71,13 +71,22 @@ if [ "${WITH_COVERAGE}" = "1" ]; then
 fi
 
 # Blame drives new-code detection, so the scanner needs the real .git directory, not
-# just the working tree. The container runs as the invoking user so that .scannerwork/
-# and the scanner cache are not left root-owned in the repository.
+# just the working tree. The container runs as the invoking user so nothing it writes is
+# left root-owned.
+#
+# The scanner cache goes in a named volume rather than under the working tree. It holds a
+# provisioned JRE -- ~136 MB of OpenJDK, including markdown under legal/ and a
+# java.security with a high-entropy line -- and every linter here walks the filesystem
+# rather than the git index, so caching it inside the repository failed Markdownlint and
+# gitleaks on third-party files, on any machine that had run a local scan. Gitignoring it
+# does not help, for the same reason `.fixture-tooling` needs an explicit markdownlint
+# exclusion and `./_*` needs one in ruff.
 docker run --rm \
 	-u "$(id -u):$(id -g)" \
 	-e SONAR_TOKEN \
 	-e SONAR_HOST_URL="https://sonarcloud.io" \
-	-e SONAR_USER_HOME=/usr/src/.sonar \
+	-e SONAR_USER_HOME=/opt/sonar-cache \
+	-v whisper-pro-asr-sonar-cache:/opt/sonar-cache \
 	-v "${PWD}:/usr/src" \
 	sonarsource/sonar-scanner-cli:latest \
 	-Dsonar.branch.name="$(git rev-parse --abbrev-ref HEAD)" \

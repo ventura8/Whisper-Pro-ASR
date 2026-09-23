@@ -436,7 +436,12 @@ jobs:
     # stage still gets analysed -- that is when the findings matter most; the download
     # steps tolerate a missing report from a stage that never produced one.
     needs: [python-tests, js-unit-tests]
-    if: always() && needs.python-tests.result != 'cancelled'
+    # A fork pull request cannot read SONAR_TOKEN, so the scan could only ever fail there
+    # and block the gate on a contribution nobody can fix from the fork side.
+    if: >-
+      always() && needs.python-tests.result != 'cancelled' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -467,7 +472,10 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - name: SonarQube Quality Gate
-        uses: SonarSource/sonarqube-scan-action/sonarqube-quality-gate@ba9859eae8dd6bd29e412f25ddbbef3d032000f4  # v8.2.2
+        # Its own repository, not a sub-action of sonarqube-scan-action: that path does
+        # not exist and the step failed to load in 4s, taking the job -- and with it both
+        # publish jobs -- down with it.
+        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa  # v1.2.1
         timeout-minutes: 10
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

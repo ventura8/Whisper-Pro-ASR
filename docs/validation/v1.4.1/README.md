@@ -62,13 +62,13 @@ the suite reports 8 of 9 failures as `Server disconnected without sending a resp
 
 The last line before the process disappears:
 
-```
+```text
 [System] Injecting OpenVINO options into session: {'device_type': 'GPU', 'num_streams': '1'}
 ```
 
 which the service logs *immediately after* announcing the opposite:
 
-```
+```text
 [Preprocess] Intel GPU arch v12.0 is below v12.55 (Arc/Alchemist);
             keeping vocal isolation in-process, where the OpenVINO provider is stable.
 ```
