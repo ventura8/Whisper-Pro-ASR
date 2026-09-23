@@ -111,9 +111,10 @@ def test_build_cleans_up_when_concat_fails(context, deps, tmp_path):
     """Failure is when leftovers would otherwise accumulate in the cache directory."""
     deps["concat"].side_effect = RuntimeError("ffmpeg exploded")
     dest = tmp_path / "mix_en_fr.partial.wav"
+    entry = _entry()
 
     with pytest.raises(RuntimeError):
-        combined.build(_entry(), dest, context)
+        combined.build(entry, dest, context)
 
     assert [p.name for p in tmp_path.iterdir() if p.name.startswith("_")] == []
 

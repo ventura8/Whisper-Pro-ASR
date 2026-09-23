@@ -89,8 +89,10 @@ def test_locate_distinguishes_committed_from_generated():
     committed_path, committed_state = audio_catalog._locate("en_core", True)
     generated_path, generated_state = audio_catalog._locate("am_tail", False)
 
-    assert committed_path.suffix == ".flac" and committed_state == "committed"
-    assert generated_path.suffix == ".wav" and generated_state == "on demand"
+    assert committed_path.suffix == ".flac"
+    assert committed_state == "committed"
+    assert generated_path.suffix == ".wav"
+    assert generated_state == "on demand"
 
 
 def test_facts_does_not_probe_a_generated_clip(tmp_path):

@@ -420,17 +420,20 @@ def test_beds_extends_the_last_scene_to_cover_the_remainder(tmp_path):
 
 def test_beds_refuses_to_cover_audio_with_no_scenes(tmp_path):
     """Silence would be a plausible-looking bed for a clip that has none."""
+    context = _bed_context(tmp_path)
+
     with pytest.raises(ValueError, match="no scenes to render a bed from"):
-        longform_film.beds([], 20.0, _bed_context(tmp_path), [])
+        longform_film.beds([], 20.0, context, [])
 
 
 def test_beds_registers_every_temporary_before_rendering_it(tmp_path):
     """Registration before render is what makes a part-way failure leave nothing behind."""
     scenes = [{"bed": "music", "bed_db": 0.0, "end": 10.0}]
     temporaries = []
+    context = _bed_context(tmp_path)
 
     with mock.patch.object(longform_film.render, "mix", side_effect=RuntimeError("ffmpeg exploded")):
         with pytest.raises(RuntimeError):
-            longform_film.beds(scenes, 10.0, _bed_context(tmp_path), temporaries)
+            longform_film.beds(scenes, 10.0, context, temporaries)
 
     assert temporaries == [tmp_path / "_lf_bed_0000.wav"]

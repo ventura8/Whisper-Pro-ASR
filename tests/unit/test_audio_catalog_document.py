@@ -47,7 +47,8 @@ def test_speech_rows_render_the_spoken_text(no_probe):
     rows = audio_catalog._speech_rows([_clip()])
 
     assert rows[0][0] == "en_core"
-    assert "en_US-amy" in rows[0][4] and "hello" in rows[0][4]
+    assert "en_US-amy" in rows[0][4]
+    assert "hello" in rows[0][4]
 
 
 def test_a_voiceless_clip_is_listed_as_a_coverage_gap(no_probe):
@@ -58,7 +59,8 @@ def test_a_voiceless_clip_is_listed_as_a_coverage_gap(no_probe):
     rows = audio_catalog._speech_rows([entry])
 
     assert rows[0][3] == "unavailable"
-    assert "Coverage gap" in rows[0][4] and "Amharic" in rows[0][4]
+    assert "Coverage gap" in rows[0][4]
+    assert "Amharic" in rows[0][4]
 
 
 def test_a_voiceless_clip_without_a_reason_still_renders(no_probe):

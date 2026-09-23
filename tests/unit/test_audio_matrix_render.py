@@ -115,7 +115,8 @@ def test_mix_declares_one_input_per_source_without_normalising(ffmpeg_run):
     render.mix(["sine=f=697", "sine=f=1209"], Path("out.wav"), 16000)
 
     args = _args(ffmpeg_run)
-    assert args.count("-f") == 2 and args.count("lavfi") == 2
+    assert args.count("-f") == 2
+    assert args.count("lavfi") == 2
     assert "amix=inputs=2:duration=first:normalize=0" in args[args.index("-filter_complex") + 1]
 
 

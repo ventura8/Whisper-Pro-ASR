@@ -100,7 +100,9 @@ def test_telephone_band_limits_and_resamples(context, calls):
     adversarial.build_telephone(context["root"] / "out.wav", {"source": "en_core"}, context)
 
     chain = calls["filtered"].call_args[0][2]
-    assert "aresample=8000" in chain and "highpass=f=300" in chain and "lowpass=f=3400" in chain
+    assert "aresample=8000" in chain
+    assert "highpass=f=300" in chain
+    assert "lowpass=f=3400" in chain
 
 
 def test_stereo_requests_two_channels(context, calls):

@@ -36,7 +36,8 @@ def test_status_units_prints_a_row_per_unit(capsys, monkeypatch):
     lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
     assert len(lines) == 2
     assert "Intel(R) AI Boost" in lines[0]
-    assert "ASR=NPU" in lines[0] and "measured=True" in lines[0]
+    assert "ASR=NPU" in lines[0]
+    assert "measured=True" in lines[0]
     assert "UVR=GPU" not in lines[0]
     assert "measured=False" in lines[1]
 

@@ -99,8 +99,10 @@ def test_export_whisper_invokes_optimum_cli_with_int8_openvino():
 
     cmd = run.call_args[0][0]
     assert cmd[:3] == ["optimum-cli", "export", "openvino"]
-    assert "--model" in cmd and "openai/whisper-large-v3" in cmd
-    assert "--weight-format" in cmd and "int8" in cmd
+    assert "--model" in cmd
+    assert "openai/whisper-large-v3" in cmd
+    assert "--weight-format" in cmd
+    assert "int8" in cmd
     assert cmd[-1].endswith("whisper-openvino")
     assert run.call_args.kwargs["check"] is True
 
