@@ -31,7 +31,7 @@ HOST = os.environ.get("HOST") or ".".join(["0", "0", "0", "0"])
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 #: Which image this container was built from (cpu, intel, nvidia, amd, nvidia-intel,
 #: full), stamped per target in the Dockerfile. Two containers can run the same VERSION
 #: with very different accelerator support, so the dashboard shows both. Empty when the
