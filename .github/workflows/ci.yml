@@ -436,12 +436,25 @@ jobs:
     # stage still gets analysed -- that is when the findings matter most; the download
     # steps tolerate a missing report from a stage that never produced one.
     needs: [python-tests, js-unit-tests]
+    # Two conditions beyond the test-stage guard:
+    #
     # A fork pull request cannot read SONAR_TOKEN, so the scan could only ever fail there
     # and block the gate on a contribution nobody can fix from the fork side.
+    #
+    # And every commit fires this workflow twice -- once for `pull_request`, once for the
+    # branch `push`. The PR run analyses the pull request; the push run analyses the branch,
+    # and analysing a non-main branch is not available on this plan, so that job failed on
+    # every push with no gate to report while the PR run beside it passed. Restricted to the
+    # pull request and to the refs whose branch analysis does exist. Nothing is lost: both
+    # publish jobs run only on main, a release branch or a tag, where this still runs.
     if: >-
       always() && needs.python-tests.result != 'cancelled' &&
       (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
+       github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name == 'pull_request' ||
+       github.ref == 'refs/heads/main' ||
+       startsWith(github.ref, 'refs/heads/release/') ||
+       startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
