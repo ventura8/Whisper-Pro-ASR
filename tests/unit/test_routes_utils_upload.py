@@ -328,11 +328,11 @@ async def test_write_upload_to_disk_async_closes_handle_when_cancelled_mid_write
 
     def _tracking_open(*args, **kwargs):
         """Record every handle so the assertions can prove one was opened and closed."""
-        # Not a `with`: this stands in for `open` itself and has to hand the caller a live
-        # handle. Closing it here would destroy the very thing the test asserts about.
-        handle = real_open(*args, **kwargs)  # pylint: disable=consider-using-with
-        opened.append(handle)
-        return handle
+        # Deliberately leaves the handle open: this stands in for `open` itself and has
+        # to hand the caller a live handle, so closing it here would destroy the very
+        # thing the test asserts about. The helper under test is what closes it.
+        opened.append(real_open(*args, **kwargs))
+        return opened[-1]
 
     class _CancellingUpload:
         """An upload whose first chunk read is cancelled."""
@@ -427,16 +427,20 @@ async def test_write_upload_to_disk_async_removes_file_created_by_a_racing_open(
             """Accept the rewind the helper performs before copying."""
             return None
 
-        async def read(self, _size):  # pragma: no cover - cancelled before it is reached
-            """Never called: the task is cancelled while `open` is still running."""
+        async def read(self, _size):
+            """Never reached: the task is cancelled while `open` is still running."""
             return b""
 
     with mock.patch("builtins.open", _blocking_open):
         task = asyncio.ensure_future(routes_utils._write_upload_to_disk_async(_NeverReadUpload(), target))
         await asyncio.to_thread(entered_open.wait, 10)
-        # Cancelled twice: a cleanup that awaited the open could be interrupted by the
-        # second cancellation and unlink ahead of the worker.
+        # Cancelled twice, with the task allowed to process the first while the worker is
+        # still parked inside `open`. Sending both back to back would deliver the second
+        # before cleanup had even started, so a cleanup that awaited the open -- the
+        # regression this guards -- would never be interrupted by it.
         task.cancel()
+        for _ in range(10):
+            await asyncio.sleep(0)
         task.cancel()
         release_open.set()
         with pytest.raises(asyncio.CancelledError):
