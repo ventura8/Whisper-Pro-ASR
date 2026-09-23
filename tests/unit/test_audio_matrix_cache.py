@@ -41,12 +41,18 @@ def test_cache_root_expands_a_user_path(monkeypatch):
     assert "~" not in str(cache.cache_root())
 
 
-def test_spec_digest_is_stable_for_the_same_input():
-    """Re-running the generator with nothing changed must produce no work."""
-    spec = {"id": "en_core", "text": "hello"}
-    tools = {"ffmpeg": "6.1", "piper": "1.8.0"}
+def test_spec_digest_is_stable_across_separately_built_inputs():
+    """Re-running the generator with nothing changed must produce no work.
 
-    assert cache.spec_digest(spec, tools) == cache.spec_digest(spec, tools)
+    The two inputs are constructed independently rather than reusing one object: a
+    generator run builds its spec afresh from the manifest each time, so equal-by-value is
+    the property that makes the cache idempotent. Passing the same object twice would hold
+    for any function at all.
+    """
+    first = cache.spec_digest({"id": "en_core", "text": "hello"}, {"ffmpeg": "6.1", "piper": "1.8.0"})
+    second = cache.spec_digest({"id": "en_core", "text": "hello"}, {"ffmpeg": "6.1", "piper": "1.8.0"})
+
+    assert first == second
 
 
 def test_spec_digest_ignores_tool_ordering():
