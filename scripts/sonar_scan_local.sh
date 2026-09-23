@@ -44,6 +44,13 @@ if [ -z "${SONAR_TOKEN:-}" ]; then
 fi
 
 if [ "${WITH_COVERAGE}" = "1" ]; then
+	# These two containers stay root: the suite writes its reports inside the image's
+	# root-owned /app and the tool cache is a root-owned volume, so running them as the
+	# host user fails outright rather than fixing ownership. Instead the exported files
+	# are handed back afterwards -- without this, `coverage-js/` lands root-owned and the
+	# next JS run on the host cannot write into it.
+	HOST_UID="$(id -u)"
+	HOST_GID="$(id -g)"
 	# Same invocation the CI python-tests / js-unit-tests stages use, so the reports
 	# land where sonar-project.properties expects them.
 	# No chmod 0777 here, unlike the CI stage this mirrors: that one runs the container
@@ -59,7 +66,8 @@ if [ "${WITH_COVERAGE}" = "1" ]; then
 		-v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
 		whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; \
 			[ -f coverage.xml ] && cp coverage.xml /out/coverage.xml || true; \
-			[ -f pytest.xml ] && cp pytest.xml /out/pytest.xml || true"
+			[ -f pytest.xml ] && cp pytest.xml /out/pytest.xml || true; \
+			chown ${HOST_UID}:${HOST_GID} /out/coverage.xml /out/pytest.xml 2>/dev/null || true"
 	docker run --rm \
 		-e CI=true \
 		-e PIPELINE_STAGE=js-unit-tests \
@@ -67,7 +75,8 @@ if [ "${WITH_COVERAGE}" = "1" ]; then
 		-v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
 		whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; \
 			mkdir -p /out/coverage-js; \
-			[ -f coverage-js/lcov.info ] && cp coverage-js/lcov.info /out/coverage-js/lcov.info || true"
+			[ -f coverage-js/lcov.info ] && cp coverage-js/lcov.info /out/coverage-js/lcov.info || true; \
+			chown -R ${HOST_UID}:${HOST_GID} /out/coverage-js 2>/dev/null || true"
 fi
 
 # Blame drives new-code detection, so the scanner needs the real .git directory, not

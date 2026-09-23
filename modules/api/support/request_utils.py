@@ -112,18 +112,30 @@ async def _write_upload_to_disk_async(upload_file, tmp_path: str) -> bool:
         # Only the blocking calls move to a worker thread -- the reads stay awaited,
         # because `upload_file.read` is a coroutine and the whole loop cannot be handed
         # to a thread. No aiofiles dependency is added for one copy loop.
-        handle = await asyncio.to_thread(open, tmp_path, "wb")
+        handle = None
         try:
+            handle = await asyncio.to_thread(open, tmp_path, "wb")
             while True:
                 chunk = await upload_file.read(1024 * 1024)
                 if not chunk:
                     break
                 await asyncio.to_thread(handle.write, chunk)
         finally:
-            await asyncio.to_thread(handle.close)
+            # `handle` is bound before the try so that a cancellation anywhere in the loop
+            # still closes it. The close is shielded because a cancelled task cannot await
+            # an unshielded coroutine. If cancellation lands inside the `open` itself the
+            # handle never reaches this scope, and CPython closes the orphaned file object
+            # when it is collected -- the one window this cannot cover.
+            if handle is not None:
+                await asyncio.shield(asyncio.to_thread(handle.close))
         return True
     except (AttributeError, TypeError, OSError, ValueError, RuntimeError):
         return False
+    except asyncio.CancelledError:
+        # A cancelled upload leaves a partial file behind: the caller's cleanup only runs
+        # for the returns above, and CancelledError is a BaseException that passes it by.
+        _remove_path_if_exists(tmp_path)
+        raise
 
 
 def _write_upload_to_disk_sync_fallback(upload_file, tmp_path: str) -> bool:

@@ -49,9 +49,15 @@ And it is not new:
 | v1.4.1 (bumped) | 2 failed, 28 passed |
 | pristine `f6699bb` | **2 failed, 28 passed** -- same two tests |
 
-Same configuration, same clip, only the dependency set differs. The defect predates this
-release and is not attributable to it. It remains **open and unexplained**: nothing here
-diagnosed why the English leg is empty, only that v1.4.1 did not cause it.
+Both NUC runs were made before the security fixes in this pull request existed, so the
+v1.4.1 side of that table is the dependency sweep and the version bump and nothing else.
+What the comparison establishes is one-directional and worth stating exactly: the failure
+is present on a tree that contains **none** of this release, so nothing in this release
+introduced it. It does not attribute the failure to any particular cause, and it is not a
+controlled A/B of the dependency set against everything else.
+
+The defect remains **open and unexplained**: nothing here diagnosed why the English leg is
+empty, only that v1.4.1 did not cause it.
 
 ## The TigerLake crash: pre-existing, and a real defect
 
@@ -83,7 +89,8 @@ Measured against pristine `f6699bb`, same host, same image target, same suite:
 | v1.4.1 (bumped) | 8 failed, 1 passed | 42 | 1 |
 | pristine `f6699bb` | **8 failed, 1 passed** | **42** | **1** |
 
-Identical. OpenVINO 2026.4.0 is exonerated; the defect is in v1.4.0 and older.
+Identical, and the same one-directional reading applies: the crash is present without any
+of this release, so nothing here introduced it. The defect is in v1.4.0 and older.
 
 ## What was NOT proven
 
