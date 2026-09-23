@@ -51,8 +51,10 @@ def test_build_parser_defaults_to_building_everything():
 
 def test_build_parser_rejects_an_unknown_command():
     """A typo must not fall through to the default."""
+    parser = cli.build_parser()
+
     with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(["nonsense"])
+        parser.parse_args(["nonsense"])
 
 
 @pytest.mark.parametrize(
@@ -102,8 +104,10 @@ def test_film_takes_the_line_role_and_the_others_do_not():
 def test_a_language_with_no_eligible_clip_is_an_error():
     """Silently dropped, the clip would still carry the variant's name and every number
     stated against the fixture would describe audio lacking a language it claims."""
+    sources = [_clip("en_core", "en")]
+
     with pytest.raises(ValueError, match="no eligible rendered clip"):
-        cli._require_every_language(["en", "de"], [_clip("en_core", "en")])
+        cli._require_every_language(["en", "de"], sources)
 
 
 def test_rendered_clips_only_include_what_exists_on_disk(tmp_path):
