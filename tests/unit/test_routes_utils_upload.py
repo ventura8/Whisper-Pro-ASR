@@ -319,15 +319,22 @@ async def test_write_upload_to_disk_async_closes_handle_when_cancelled_mid_write
     real_open = open
 
     def _tracking_open(*args, **kwargs):
-        handle = real_open(*args, **kwargs)
+        """Record every handle so the assertions can prove one was opened and closed."""
+        # Not a `with`: this stands in for `open` itself and has to hand the caller a live
+        # handle. Closing it here would destroy the very thing the test asserts about.
+        handle = real_open(*args, **kwargs)  # pylint: disable=consider-using-with
         opened.append(handle)
         return handle
 
     class _CancellingUpload:
+        """An upload whose first chunk read is cancelled."""
+
         async def seek(self, _offset):
+            """Accept the rewind the helper performs before copying."""
             return None
 
         async def read(self, _size):
+            """Cancel the task at the point the copy loop asks for data."""
             raise asyncio.CancelledError
 
     with mock.patch("builtins.open", _tracking_open):
@@ -345,7 +352,10 @@ async def test_write_upload_to_disk_async_cleans_up_when_cancelled_before_any_ch
     target = str(tmp_path / "cancelled_early.wav")
 
     class _ImmediatelyCancellingUpload:
+        """An upload cancelled before the file is even opened."""
+
         async def seek(self, _offset):
+            """Cancel the task on the first await the helper makes."""
             raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
@@ -379,14 +389,19 @@ async def test_write_upload_to_disk_async_removes_file_created_by_a_racing_open(
     real_open = open
 
     def _slow_open(*args, **kwargs):
+        """Hold the worker thread inside `open` so cancellation lands in that window."""
         time.sleep(0.2)
         return real_open(*args, **kwargs)
 
     class _NeverReadUpload:
+        """An upload the copy loop never reaches, because the open is cancelled first."""
+
         async def seek(self, _offset):
+            """Accept the rewind the helper performs before copying."""
             return None
 
         async def read(self, _size):  # pragma: no cover - cancelled before it is reached
+            """Never called: the task is cancelled while `open` is still running."""
             return b""
 
     with mock.patch("builtins.open", _slow_open):
