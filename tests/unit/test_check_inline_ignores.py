@@ -1,7 +1,10 @@
 """Tests for scripts/ci/check-inline-ignores.py."""
 
 import importlib.util
+import logging
 from pathlib import Path
+
+import pytest
 
 
 def _load_module():
@@ -138,3 +141,173 @@ class TestMarkdownDistinguishesProseFromCode:
     def test_shell_files_are_still_scanned_whole(self, tmp_path):
         """The shell marker is the one this repo has had to reject most often."""
         assert self._violations(tmp_path, "script.sh", f'# {_SHELLCHECK_OFF}\necho "$x"\n')
+
+
+def test_the_checker_does_not_scan_itself():
+    """It carries every suppression pattern as a literal, so scanning itself always fails."""
+    module = _load_module()
+
+    assert module.should_scan_file("/repo/scripts/ci/check-inline-ignores.py") is False
+
+
+def test_special_filenames_are_scanned_despite_having_no_extension():
+    """Dockerfiles carry suppressions too and would be skipped by an extension check."""
+    module = _load_module()
+
+    assert module.should_scan_file("/repo/Dockerfile") is True
+    assert module.should_scan_file("/repo/Dockerfile.test") is True
+
+
+def test_only_known_extensions_are_scanned():
+    """Binary and unrelated files are not worth reading."""
+    module = _load_module()
+
+    assert module.should_scan_file("/repo/a.py") is True
+    assert module.should_scan_file("/repo/a.onnx") is False
+
+
+def test_the_internal_alias_matches_the_public_check():
+    """`_should_scan_file` exists for older callers and must not drift."""
+    module = _load_module()
+
+    assert module._should_scan_file("/repo/a.py") == module.should_scan_file("/repo/a.py")
+
+
+def test_iter_scan_targets_skips_excluded_directories(tmp_path):
+    """node_modules and the gitignored third-party caches hold upstream's suppressions.
+
+    A zero-suppression policy is about this repository's code, and those directories are
+    absent on a runner but present on a developer machine -- so scanning them failed the
+    gate locally only, on files nobody here wrote.
+    """
+    module = _load_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "b.py").write_text("x = 1\n", encoding="utf-8")
+
+    found = [Path(p).name for p in module._iter_scan_targets(str(tmp_path))]
+
+    assert found == ["a.py"]
+
+
+def test_scan_file_finds_a_suppression(tmp_path):
+    """The ordinary detection path."""
+    module = _load_module()
+    target = tmp_path / "a.py"
+    target.write_text("import os  # type: ignore\n", encoding="utf-8")
+
+    violations = module.scan_file(str(target))
+
+    assert [name for _, name, _ in violations] == ["type-ignore"]
+    assert violations[0][0] == 1
+
+
+def test_scan_file_reports_every_pattern_on_a_line(tmp_path):
+    """One line can carry two different suppressions."""
+    module = _load_module()
+    target = tmp_path / "a.py"
+    target.write_text("x = 1  # noqa  # pylint: disable=invalid-name\n", encoding="utf-8")
+
+    names = {name for _, name, _ in module.scan_file(str(target))}
+
+    assert {"noqa", "pylint-disable"} <= names
+
+
+def test_scan_file_raises_a_named_error_when_a_file_cannot_be_read(tmp_path):
+    """A directory handed in as a path must name the file it failed on."""
+    module = _load_module()
+
+    with pytest.raises(RuntimeError, match="Failed to scan file"):
+        module.scan_file(str(tmp_path))
+
+
+def test_markdown_prose_may_name_a_suppression(tmp_path):
+    """The policy is documented in README.md and several skill files.
+
+    A rule that cannot tell "never write `# noqa`" from an actual suppression makes its
+    own ban undocumentable.
+    """
+    module = _load_module()
+    target = tmp_path / "doc.md"
+    target.write_text("Never write `# noqa` in this repository.\n", encoding="utf-8")
+
+    assert module.scan_file(str(target)) == []
+
+
+def test_markdown_fenced_code_is_still_scanned(tmp_path):
+    """A fence is sample code, written to be copied -- a suppression there is one this
+    project is teaching someone to write."""
+    module = _load_module()
+    target = tmp_path / "doc.md"
+    target.write_text("Example:\n\n```python\nx = 1  # noqa\n```\n", encoding="utf-8")
+
+    violations = module.scan_file(str(target))
+
+    assert [name for _, name, _ in violations] == ["noqa"]
+    assert violations[0][0] == 4
+
+
+def test_tilde_fences_are_recognised(tmp_path):
+    """Markdown allows ~~~ as well as ```."""
+    module = _load_module()
+    target = tmp_path / "doc.md"
+    target.write_text("~~~\nx = 1  # noqa\n~~~\n", encoding="utf-8")
+
+    assert len(module.scan_file(str(target))) == 1
+
+
+def test_psscriptanalyzer_suppression_is_matched_in_both_spellings(tmp_path):
+    """The Attribute suffix is optional in PowerShell, and names resolve case-insensitively.
+
+    Four of these lived in scripts/*.ps1 for months under a policy that bans exactly this,
+    invisible rather than allowed, because the pattern was anchored on the long spelling.
+    """
+    module = _load_module()
+    long_form = tmp_path / "a.ps1"
+    long_form.write_text("[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]\n", encoding="utf-8")
+    short_lower = tmp_path / "b.ps1"
+    short_lower.write_text("[diagnostics.codeanalysis.suppressmessage('PSAvoidUsingWriteHost', '')]\n", encoding="utf-8")
+
+    assert len(module.scan_file(str(long_form))) == 1
+    assert len(module.scan_file(str(short_lower))) == 1
+
+
+def _rooted_at(tmp_path):
+    """Load the checker with its repo root pointed at `tmp_path`.
+
+    main() derives the root from its own __file__ (`<root>/scripts/ci/...`), so relocating
+    that is enough. Patching os.path.abspath instead also rewrites the abspath call inside
+    os.path.relpath, which collapsed every reported path to "." -- the report then named no
+    file, which is the one thing this gate's output has to do.
+    """
+    module = _load_module()
+    ci_dir = tmp_path / "scripts" / "ci"
+    ci_dir.mkdir(parents=True)
+    module.__file__ = str(ci_dir / "check-inline-ignores.py")
+    return module
+
+
+def test_main_exits_zero_on_a_clean_tree(tmp_path):
+    """The success path the CI stage depends on."""
+    module = _rooted_at(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exit_info:
+        module.main()
+
+    assert exit_info.value.code == 0
+
+
+def test_main_exits_one_and_names_the_file_on_a_violation(tmp_path, caplog):
+    """A failure has to name the file and line, or the gate is unactionable."""
+    module = _rooted_at(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1  # noqa\n", encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit) as exit_info:
+            module.main()
+
+    assert exit_info.value.code == 1
+    assert "a.py" in caplog.text
+    assert "Line 1" in caplog.text
