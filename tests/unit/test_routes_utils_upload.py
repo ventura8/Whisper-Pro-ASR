@@ -6,6 +6,7 @@ Split from test_routes_utils.py to stay under the file size limit.
 import asyncio
 import io
 import os
+import threading
 import time
 from unittest import mock
 
@@ -306,6 +307,13 @@ async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_when_encode_fal
         assert routes_utils.utils.THREAD_CONTEXT.input_flags == ["-f", "s16le", "-ar", "16000", "-ac", "1"]
 
 
+async def _wait_until_absent(path: str, timeout: float = 10.0) -> None:
+    """Wait for the cleanup done-callback to unlink `path`, rather than sleeping blindly."""
+    deadline = time.monotonic() + timeout
+    while os.path.exists(path) and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+
+
 @pytest.mark.anyio
 async def test_write_upload_to_disk_async_closes_handle_when_cancelled_mid_write(tmp_path):
     """A cancellation during the copy must still close the handle and clear the partial file.
@@ -340,6 +348,9 @@ async def test_write_upload_to_disk_async_closes_handle_when_cancelled_mid_write
     with mock.patch("builtins.open", _tracking_open):
         with pytest.raises(asyncio.CancelledError):
             await routes_utils._write_upload_to_disk_async(_CancellingUpload(), target)
+        # Removal happens from the open task's done-callback, so it lands on a later loop
+        # iteration than the CancelledError does.
+        await _wait_until_absent(target)
 
     assert opened, "the handle was never opened, so this asserts nothing about closing it"
     assert all(handle.closed for handle in opened), "a cancelled upload left its handle open"
@@ -361,6 +372,7 @@ async def test_write_upload_to_disk_async_cleans_up_when_cancelled_before_any_ch
     with pytest.raises(asyncio.CancelledError):
         await routes_utils._write_upload_to_disk_async(_ImmediatelyCancellingUpload(), target)
 
+    await _wait_until_absent(target)
     assert not os.path.exists(target)
 
 
@@ -368,7 +380,10 @@ async def test_write_upload_to_disk_async_cleans_up_when_cancelled_before_any_ch
 async def test_write_upload_to_disk_async_writes_every_chunk(tmp_path):
     """The threaded copy must still reproduce the upload byte for byte."""
     target = str(tmp_path / "copied.wav")
-    payload = b"chunk-one" * 2048
+    # Larger than the helper's 1 MiB read, so the copy must survive more than one
+    # iteration: an implementation that dropped everything after the first chunk would
+    # pass a single-chunk payload.
+    payload = b"chunk-one" * 200_000
 
     upload = UploadFile(file=io.BytesIO(payload), filename="copied.wav")
     assert await routes_utils._write_upload_to_disk_async(upload, target) is True
@@ -387,11 +402,23 @@ async def test_write_upload_to_disk_async_removes_file_created_by_a_racing_open(
     """
     target = str(tmp_path / "raced.wav")
     real_open = open
+    entered_open = threading.Event()
+    release_open = threading.Event()
+    finished_open = threading.Event()
 
-    def _slow_open(*args, **kwargs):
-        """Hold the worker thread inside `open` so cancellation lands in that window."""
-        time.sleep(0.2)
-        return real_open(*args, **kwargs)
+    def _blocking_open(*args, **kwargs):
+        """Park the worker inside `open` until the test releases it.
+
+        Events rather than a sleep: a fixed delay only lands inside the open window if
+        the loop resumes on time, and on a busy machine the open would finish before the
+        cancel, leaving the test asserting nothing.
+        """
+        entered_open.set()
+        release_open.wait(10)
+        try:
+            return real_open(*args, **kwargs)
+        finally:
+            finished_open.set()
 
     class _NeverReadUpload:
         """An upload the copy loop never reaches, because the open is cancelled first."""
@@ -404,13 +431,21 @@ async def test_write_upload_to_disk_async_removes_file_created_by_a_racing_open(
             """Never called: the task is cancelled while `open` is still running."""
             return b""
 
-    with mock.patch("builtins.open", _slow_open):
+    with mock.patch("builtins.open", _blocking_open):
         task = asyncio.ensure_future(routes_utils._write_upload_to_disk_async(_NeverReadUpload(), target))
-        await asyncio.sleep(0.05)
+        await asyncio.to_thread(entered_open.wait, 10)
+        # Cancelled twice: a cleanup that awaited the open could be interrupted by the
+        # second cancellation and unlink ahead of the worker.
         task.cancel()
+        task.cancel()
+        release_open.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-        # Give the worker thread time to finish its open and the cleanup to catch up.
-        await asyncio.sleep(0.5)
+        # Join the worker before asserting. Without this the file is merely not created
+        # YET, and the assertion passes against an implementation that unlinks ahead of
+        # the open -- which is precisely the regression under test.
+        await asyncio.to_thread(finished_open.wait, 10)
+        assert finished_open.is_set(), "the worker never completed its open"
+        await _wait_until_absent(target)
 
     assert not os.path.exists(target), "the racing open left its file behind"
