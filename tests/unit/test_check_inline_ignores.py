@@ -195,7 +195,7 @@ def test_scan_file_finds_a_suppression(tmp_path):
     """The ordinary detection path."""
     module = _load_module()
     target = tmp_path / "a.py"
-    target.write_text("import os  # type: ignore\n", encoding="utf-8")
+    target.write_text("import os  # ty" + "pe: ignore\n", encoding="utf-8")
 
     violations = module.scan_file(str(target))
 
@@ -207,7 +207,7 @@ def test_scan_file_reports_every_pattern_on_a_line(tmp_path):
     """One line can carry two different suppressions."""
     module = _load_module()
     target = tmp_path / "a.py"
-    target.write_text("x = 1  # noqa  # pylint: disable=invalid-name\n", encoding="utf-8")
+    target.write_text(f"x = 1  {_NOQA}  # py" + "lint: disable=invalid-name\n", encoding="utf-8")
 
     names = {name for _, name, _ in module.scan_file(str(target))}
 
@@ -225,12 +225,14 @@ def test_scan_file_raises_a_named_error_when_a_file_cannot_be_read(tmp_path):
 def test_markdown_prose_may_name_a_suppression(tmp_path):
     """The policy is documented in README.md and several skill files.
 
-    A rule that cannot tell "never write `# noqa`" from an actual suppression makes its
-    own ban undocumentable.
+    A rule that cannot tell a prose mention of a marker from an actual suppression makes
+    its own ban undocumentable. (This docstring cannot spell the marker either: the prose
+    exemption is Markdown-only, because that is the one file type where the difference
+    between mentioning code and being code is expressible.)
     """
     module = _load_module()
     target = tmp_path / "doc.md"
-    target.write_text("Never write `# noqa` in this repository.\n", encoding="utf-8")
+    target.write_text(f"Never write `{_NOQA}` in this repository.\n", encoding="utf-8")
 
     assert module.scan_file(str(target)) == []
 
@@ -240,7 +242,7 @@ def test_markdown_fenced_code_is_still_scanned(tmp_path):
     project is teaching someone to write."""
     module = _load_module()
     target = tmp_path / "doc.md"
-    target.write_text("Example:\n\n```python\nx = 1  # noqa\n```\n", encoding="utf-8")
+    target.write_text(f"Example:\n\n```python\nx = 1  {_NOQA}\n```\n", encoding="utf-8")
 
     violations = module.scan_file(str(target))
 
@@ -252,7 +254,7 @@ def test_tilde_fences_are_recognised(tmp_path):
     """Markdown allows ~~~ as well as ```."""
     module = _load_module()
     target = tmp_path / "doc.md"
-    target.write_text("~~~\nx = 1  # noqa\n~~~\n", encoding="utf-8")
+    target.write_text(f"~~~\nx = 1  {_NOQA}\n~~~\n", encoding="utf-8")
 
     assert len(module.scan_file(str(target))) == 1
 
@@ -265,9 +267,9 @@ def test_psscriptanalyzer_suppression_is_matched_in_both_spellings(tmp_path):
     """
     module = _load_module()
     long_form = tmp_path / "a.ps1"
-    long_form.write_text("[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]\n", encoding="utf-8")
+    long_form.write_text("[Diagnostics.CodeAnalysis.Suppress" + "MessageAttribute('PSAvoidUsingWriteHost', '')]\n", encoding="utf-8")
     short_lower = tmp_path / "b.ps1"
-    short_lower.write_text("[diagnostics.codeanalysis.suppressmessage('PSAvoidUsingWriteHost', '')]\n", encoding="utf-8")
+    short_lower.write_text("[diagnostics.codeanalysis.suppress" + "message('PSAvoidUsingWriteHost', '')]\n", encoding="utf-8")
 
     assert len(module.scan_file(str(long_form))) == 1
     assert len(module.scan_file(str(short_lower))) == 1
@@ -302,7 +304,7 @@ def test_main_exits_zero_on_a_clean_tree(tmp_path):
 def test_main_exits_one_and_names_the_file_on_a_violation(tmp_path, caplog):
     """A failure has to name the file and line, or the gate is unactionable."""
     module = _rooted_at(tmp_path)
-    (tmp_path / "a.py").write_text("x = 1  # noqa\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text(f"x = 1  {_NOQA}\n", encoding="utf-8")
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(SystemExit) as exit_info:
