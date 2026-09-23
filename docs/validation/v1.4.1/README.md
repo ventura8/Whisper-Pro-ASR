@@ -112,7 +112,14 @@ mattered most to this release.
 Two operational notes worth keeping. The 5090's first run failed 2 tests with
 `CUDA failed with error out of memory` and a SIGSEGV in `load_model`; that was VRAM still
 held by the image build running on the same card, and a rerun with the GPU free passed 19/19.
-Do not start a suite until its build has released the device. And the restored
-`.validation-matrix.conf` predated the runner's `separation` column, so every NUC row came up
-`uvr=off` -- a row naming a preprocess device with separation off names the NPU and then never
-touches it, which would have produced clean NPU passes proving nothing.
+Do not start a suite until its build has released the device.
+
+The second note is about a plan that was **never run**, and is recorded because of what it
+would have produced. `.validation-matrix.conf` had to be restored from a note after a
+`git clean -x`, and the restored copy predated the runner's `separation` column, so its
+`--dry-run` showed every NUC row as `uvr=off`. UVR is what executes on the preprocess
+device, so those rows named the NPU and would then never have touched it -- clean NPU
+passes proving nothing. It was caught at the dry run and replaced before anything
+executed. Every suite result in this document comes from the replacement plan, which sets
+`separation=on` and `device=GPU` explicitly, and the per-request `Intel(R) AI Boost` lines
+above are that plan running.

@@ -58,25 +58,53 @@ if [ "${WITH_COVERAGE}" = "1" ]; then
 	# run as root, which is not subject to the mode at all, so widening it to everyone on
 	# the developer's own checkout buys nothing.
 	mkdir -p assets reports
+	# Remove any report from a previous run FIRST. Otherwise a stage that fails, or an
+	# export that does not happen, leaves yesterday's coverage.xml in the checkout and the
+	# scanner uploads it as though it measured this tree -- a wrong number is worse than
+	# the missing one it replaces.
+	rm -f coverage.xml pytest.xml coverage-js/lcov.info
+
+	# `|| exit` on each: `set -uo pipefail` does not stop the script on a failing
+	# `docker run`, and the trailing `chown ... || true` inside the container would
+	# otherwise mask a failed suite as a success. The suite's own exit code is what
+	# propagates, so a red test run stops here instead of being scanned and reported as
+	# though it had passed.
 	docker run --rm \
 		-e CI=true \
 		-e PIPELINE_STAGE=python-tests \
 		-v "${PWD}/assets:/app/assets" \
 		-v "${PWD}:/out" \
 		-v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
-		whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; \
-			[ -f coverage.xml ] && cp coverage.xml /out/coverage.xml || true; \
-			[ -f pytest.xml ] && cp pytest.xml /out/pytest.xml || true; \
-			chown ${HOST_UID}:${HOST_GID} /out/coverage.xml /out/pytest.xml 2>/dev/null || true"
+		whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; SUITE=\$?; \
+			[ -f coverage.xml ] && cp coverage.xml /out/coverage.xml; \
+			[ -f pytest.xml ] && cp pytest.xml /out/pytest.xml; \
+			chown ${HOST_UID}:${HOST_GID} /out/coverage.xml /out/pytest.xml 2>/dev/null || true; \
+			exit \$SUITE" || {
+		echo "ERROR: the python-tests stage failed; not scanning a tree whose tests are red." >&2
+		exit 1
+	}
 	docker run --rm \
 		-e CI=true \
 		-e PIPELINE_STAGE=js-unit-tests \
 		-v "${PWD}:/out" \
 		-v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
-		whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; \
+		whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; SUITE=\$?; \
 			mkdir -p /out/coverage-js; \
-			[ -f coverage-js/lcov.info ] && cp coverage-js/lcov.info /out/coverage-js/lcov.info || true; \
-			chown -R ${HOST_UID}:${HOST_GID} /out/coverage-js 2>/dev/null || true"
+			[ -f coverage-js/lcov.info ] && cp coverage-js/lcov.info /out/coverage-js/lcov.info; \
+			chown -R ${HOST_UID}:${HOST_GID} /out/coverage-js 2>/dev/null || true; \
+			exit \$SUITE" || {
+		echo "ERROR: the js-unit-tests stage failed; not scanning a tree whose tests are red." >&2
+		exit 1
+	}
+
+	# An export that silently did not happen is the other way a stale or absent report
+	# reaches the scanner, so require what the properties file points at.
+	for report in coverage.xml coverage-js/lcov.info; do
+		[ -s "${report}" ] || {
+			echo "ERROR: ${report} was not produced; sonar-project.properties expects it." >&2
+			exit 1
+		}
+	done
 fi
 
 # Blame drives new-code detection, so the scanner needs the real .git directory, not
