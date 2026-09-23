@@ -472,6 +472,15 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - name: SonarQube Quality Gate
+        # Only when both coverage-producing stages actually ran. The scan above is
+        # deliberately `always()`, because findings matter most when something failed --
+        # but a stage that never ran uploads no coverage report, and the gate then reads
+        # the resulting absence as 0.0% coverage on new code and fails on that. That
+        # reported a coverage regression three times on this branch when the real failure
+        # was a lint error upstream, which is noise standing exactly where the signal
+        # should be. Skipping the gate here does not let anything through: every publish
+        # job already depends on python-tests in its own right.
+        if: needs.python-tests.result == 'success' && needs.js-unit-tests.result == 'success'
         # Its own repository, not a sub-action of sonarqube-scan-action: that path does
         # not exist and the step failed to load in 4s, taking the job -- and with it both
         # publish jobs -- down with it.
