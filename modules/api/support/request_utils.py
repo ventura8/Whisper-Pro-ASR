@@ -103,6 +103,19 @@ async def _write_upload_to_disk(upload_file, tmp_path: str) -> dict:
     return {"success": False, "used_sync": False, "error": "write_failed"}
 
 
+async def _stream_upload_to_handle(upload_file, handle) -> None:
+    """Copy the upload into an already-open handle, one chunk at a time.
+
+    Split out of the caller to keep it inside the rank-A complexity gate: the
+    cancellation handling there is branch-heavy enough on its own.
+    """
+    while True:
+        chunk = await upload_file.read(1024 * 1024)
+        if not chunk:
+            break
+        await asyncio.to_thread(handle.write, chunk)
+
+
 async def _write_upload_to_disk_async(upload_file, tmp_path: str) -> bool:
     try:
         await upload_file.seek(0)
@@ -115,11 +128,7 @@ async def _write_upload_to_disk_async(upload_file, tmp_path: str) -> bool:
         handle = None
         try:
             handle = await asyncio.to_thread(open, tmp_path, "wb")
-            while True:
-                chunk = await upload_file.read(1024 * 1024)
-                if not chunk:
-                    break
-                await asyncio.to_thread(handle.write, chunk)
+            await _stream_upload_to_handle(upload_file, handle)
         finally:
             # `handle` is bound before the try so that a cancellation anywhere in the loop
             # still closes it. The close is shielded because a cancelled task cannot await

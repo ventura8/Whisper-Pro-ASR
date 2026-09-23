@@ -3,6 +3,7 @@
 Split from test_routes_utils.py to stay under the file size limit.
 """
 
+import asyncio
 import io
 import os
 from unittest import mock
@@ -302,3 +303,64 @@ async def test_resolve_and_materialize_upload_sets_raw_pcm_flags_when_encode_fal
         assert upload is None
         mat_mock.assert_called_once()
         assert routes_utils.utils.THREAD_CONTEXT.input_flags == ["-f", "s16le", "-ar", "16000", "-ac", "1"]
+
+
+@pytest.mark.anyio
+async def test_write_upload_to_disk_async_closes_handle_when_cancelled_mid_write(tmp_path):
+    """A cancellation during the copy must still close the handle and clear the partial file.
+
+    The write side runs in a worker thread, so a naive implementation loses the handle when
+    the awaiting task is cancelled: the file stays open and the partial upload stays on
+    disk, one descriptor and one file per aborted request.
+    """
+    target = str(tmp_path / "cancelled.wav")
+    opened = []
+    real_open = open
+
+    def _tracking_open(*args, **kwargs):
+        handle = real_open(*args, **kwargs)
+        opened.append(handle)
+        return handle
+
+    class _CancellingUpload:
+        async def seek(self, _offset):
+            return None
+
+        async def read(self, _size):
+            raise asyncio.CancelledError
+
+    with mock.patch("builtins.open", _tracking_open):
+        with pytest.raises(asyncio.CancelledError):
+            await routes_utils._write_upload_to_disk_async(_CancellingUpload(), target)
+
+    assert opened, "the handle was never opened, so this asserts nothing about closing it"
+    assert all(handle.closed for handle in opened), "a cancelled upload left its handle open"
+    assert not os.path.exists(target), "a cancelled upload left its partial file behind"
+
+
+@pytest.mark.anyio
+async def test_write_upload_to_disk_async_cleans_up_when_cancelled_before_any_chunk(tmp_path):
+    """Cancellation between opening the file and the first chunk is the same contract."""
+    target = str(tmp_path / "cancelled_early.wav")
+
+    class _ImmediatelyCancellingUpload:
+        async def seek(self, _offset):
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await routes_utils._write_upload_to_disk_async(_ImmediatelyCancellingUpload(), target)
+
+    assert not os.path.exists(target)
+
+
+@pytest.mark.anyio
+async def test_write_upload_to_disk_async_writes_every_chunk(tmp_path):
+    """The threaded copy must still reproduce the upload byte for byte."""
+    target = str(tmp_path / "copied.wav")
+    payload = b"chunk-one" * 2048
+
+    upload = UploadFile(file=io.BytesIO(payload), filename="copied.wav")
+    assert await routes_utils._write_upload_to_disk_async(upload, target) is True
+
+    with open(target, "rb") as written:
+        assert written.read() == payload
