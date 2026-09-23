@@ -345,9 +345,11 @@ async def test_write_upload_to_disk_async_closes_handle_when_cancelled_mid_write
             """Cancel the task at the point the copy loop asks for data."""
             raise asyncio.CancelledError
 
+    upload = _CancellingUpload()
+
     with mock.patch("builtins.open", _tracking_open):
         with pytest.raises(asyncio.CancelledError):
-            await routes_utils._write_upload_to_disk_async(_CancellingUpload(), target)
+            await routes_utils._write_upload_to_disk_async(upload, target)
         # Removal happens from the open task's done-callback, so it lands on a later loop
         # iteration than the CancelledError does.
         await _wait_until_absent(target)
@@ -369,8 +371,10 @@ async def test_write_upload_to_disk_async_cleans_up_when_cancelled_before_any_ch
             """Cancel the task on the first await the helper makes."""
             raise asyncio.CancelledError
 
+    upload = _ImmediatelyCancellingUpload()
+
     with pytest.raises(asyncio.CancelledError):
-        await routes_utils._write_upload_to_disk_async(_ImmediatelyCancellingUpload(), target)
+        await routes_utils._write_upload_to_disk_async(upload, target)
 
     await _wait_until_absent(target)
     assert not os.path.exists(target)
