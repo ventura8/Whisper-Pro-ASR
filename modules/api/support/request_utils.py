@@ -2,6 +2,7 @@
 Private utilities and helpers for API routes.
 """
 
+import asyncio
 import logging
 import os
 import traceback
@@ -105,12 +106,21 @@ async def _write_upload_to_disk(upload_file, tmp_path: str) -> dict:
 async def _write_upload_to_disk_async(upload_file, tmp_path: str) -> bool:
     try:
         await upload_file.seek(0)
-        with open(tmp_path, "wb") as f:
+        # The read side is awaited but the write side was not: `open` and `f.write` are
+        # blocking calls on the event loop, and an upload arrives here in 1 MiB chunks,
+        # so a large file stalled every other request for the duration of the copy.
+        # Only the blocking calls move to a worker thread -- the reads stay awaited,
+        # because `upload_file.read` is a coroutine and the whole loop cannot be handed
+        # to a thread. No aiofiles dependency is added for one copy loop.
+        handle = await asyncio.to_thread(open, tmp_path, "wb")
+        try:
             while True:
                 chunk = await upload_file.read(1024 * 1024)
                 if not chunk:
                     break
-                f.write(chunk)
+                await asyncio.to_thread(handle.write, chunk)
+        finally:
+            await asyncio.to_thread(handle.close)
         return True
     except (AttributeError, TypeError, OSError, ValueError, RuntimeError):
         return False

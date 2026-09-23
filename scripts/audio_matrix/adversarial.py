@@ -22,8 +22,20 @@ TRUNCATED_HEADER_BYTES = 20
 
 
 def _source(params: dict, context: dict) -> Path:
-    """Return the rendered clip an entry derives from."""
-    return context["root"] / f"{params['source']}.wav"
+    """Return the rendered clip an entry derives from.
+
+    ``source`` is manifest data, and it is confined to ``root`` here rather than at each
+    call site because it reaches nine builders -- several of which read the file outright
+    or hand it to ffmpeg. A ``source`` of ``../../etc/passwd`` would escape the fixture
+    tree from any one of them, so the check belongs at the single point they share.
+    Every manifest entry names a flat sibling clip (``en_core``), so requiring the
+    resolved path to sit directly in ``root`` costs nothing and rejects traversal.
+    """
+    root = context["root"].resolve()
+    clip = (root / f"{params['source']}.wav").resolve()
+    if clip.parent != root:
+        raise ValueError(f"fixture source {params['source']!r} resolves outside the audio matrix root")
+    return clip
 
 
 def build_silence(dest: Path, params: dict, context: dict) -> None:

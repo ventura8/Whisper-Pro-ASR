@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import types
 from pathlib import Path
 
@@ -85,13 +86,18 @@ def warmup_uvr():
     model_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        separator = Separator(model_file_dir=str(model_dir), output_dir="/tmp", output_format="WAV")
+        # A private directory rather than /tmp itself: /tmp is world-writable, so another
+        # user on the build host could pre-create or swap the separator's output files.
+        # Nothing here reads that output back -- the call exists to trigger the model
+        # download and .onnx export into model_dir -- so it costs nothing to contain it.
+        with tempfile.TemporaryDirectory(prefix="uvr-warmup-") as separator_output:
+            separator = Separator(model_file_dir=str(model_dir), output_dir=separator_output, output_format="WAV")
 
-        # This will download the .ckpt and export to .onnx if needed
-        model_name = os.environ.get("VOCAL_SEPARATION_MODEL", "UVR-MDX-NET-Inst_HQ_3.onnx")
-        logger.info(f"Downloading/Loading {model_name}...")
-        separator.load_model(model_name)
-        logger.info("UVR/MDX-NET pre-cache successful.")
+            # This will download the .ckpt and export to .onnx if needed
+            model_name = os.environ.get("VOCAL_SEPARATION_MODEL", "UVR-MDX-NET-Inst_HQ_3.onnx")
+            logger.info(f"Downloading/Loading {model_name}...")
+            separator.load_model(model_name)
+            logger.info("UVR/MDX-NET pre-cache successful.")
     except Exception as e:
         logger.error(f"UVR/MDX-NET pre-cache failed: {e}")
         # Not exiting as the build can still proceed and download at runtime

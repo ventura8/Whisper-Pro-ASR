@@ -279,6 +279,12 @@ def _bed_segment(scene: dict, seconds: float, dest: Path, rate: int, seed: int) 
         sources.extend(BED_CHORDS[seed % len(BED_CHORDS)])
     if scene["bed"] in ("room", "both"):
         sources.append(f"{BED_NOISE.format(seed=seed)},volume={NOISE_RELATIVE}")
+    # Every shape in film_shapes names "music", "room" or "both", so an empty `sources`
+    # is unreachable today -- but the next bed kind added there (a silent scene, say)
+    # would reach this as a ZeroDivisionError from inside an ffmpeg render, several
+    # frames from the manifest entry that caused it. Name the value instead.
+    if not sources:
+        raise ValueError(f"scene bed {scene['bed']!r} selects no bed source; expected 'music', 'room' or 'both'")
     # amix sums without normalising, so the level is set per source: three full-scale tones
     # would otherwise peak at 3.0 before the volume stage. The limiter is the backstop for
     # the scenes whose bed sits above the dialogue.
