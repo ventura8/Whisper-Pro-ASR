@@ -469,6 +469,22 @@ jobs:
           name: js-coverage
           path: coverage-js
 
+      - name: Normalize Coverage Paths
+        # coverage.py records the roots it measured from, and the suite runs inside the
+        # container at /app -- so the report arrives saying <source>/app</source>. The
+        # scanner resolves each filename against those roots, none of which exist in the
+        # runner workspace, so every file silently fails to match and the analysis reports
+        # 0.0% coverage on a report that actually measured 96.6%. Rewriting the roots to
+        # the project base dir is what makes the numbers land on the files.
+        run: |
+          if [ -f coverage.xml ]; then
+            sed -i 's#<source>/app#<source>.#g' coverage.xml
+            echo "coverage.xml source roots:"
+            grep -o '<source>[^<]*</source>' coverage.xml
+          else
+            echo "coverage.xml absent; nothing to normalize"
+          fi
+
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4  # v8.2.2
         env:

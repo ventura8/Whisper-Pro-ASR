@@ -97,6 +97,11 @@ if [ "${WITH_COVERAGE}" = "1" ]; then
 		exit 1
 	}
 
+	# Same container-path problem the CI job fixes: the suite runs at /app, so coverage.py
+	# writes <source>/app</source> and the scanner -- rooted at the repository -- matches
+	# none of it, reporting 0.0% from a report that measured the tree correctly.
+	sed -i 's#<source>/app#<source>.#g' coverage.xml
+
 	# An export that silently did not happen is the other way a stale or absent report
 	# reaches the scanner, so require every report the properties file points at --
 	# pytest.xml included, which sonar.python.xunit.reportPath consumes and which the
