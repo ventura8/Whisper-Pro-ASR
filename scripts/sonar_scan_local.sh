@@ -98,8 +98,10 @@ if [ "${WITH_COVERAGE}" = "1" ]; then
 	}
 
 	# An export that silently did not happen is the other way a stale or absent report
-	# reaches the scanner, so require what the properties file points at.
-	for report in coverage.xml coverage-js/lcov.info; do
+	# reaches the scanner, so require every report the properties file points at --
+	# pytest.xml included, which sonar.python.xunit.reportPath consumes and which the
+	# python-tests stage produces by merging its bulk and serial JUnit files.
+	for report in coverage.xml pytest.xml coverage-js/lcov.info; do
 		[ -s "${report}" ] || {
 			echo "ERROR: ${report} was not produced; sonar-project.properties expects it." >&2
 			exit 1
