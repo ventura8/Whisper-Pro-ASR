@@ -101,7 +101,7 @@ function renderAnalytics(data) {
     _updateCumulativeBreakdown(cumulative);
     const sortedDates = Object.keys(daily)
         .filter((key) => !key.startsWith("__"))
-        .sort();
+        .sort((left, right) => left.localeCompare(right));
 
     _renderDailyBreakdownTable(sortedDates, daily);
     renderCharts(sortedDates, daily);

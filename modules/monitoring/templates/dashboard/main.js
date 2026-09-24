@@ -1,3 +1,13 @@
+function activateTabOnKey(event, tab) {
+    // The tabs are divs, so they get none of a button's built-in keyboard behaviour.
+    // Enter and Space are what a button responds to; without this the dashboard's whole
+    // navigation is unreachable without a mouse.
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        showTab(tab);
+    }
+}
+
 function showTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));

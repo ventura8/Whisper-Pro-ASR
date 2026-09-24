@@ -124,7 +124,7 @@ function renderHistory() {
 
     const orderedHistory = filteredHistory.sort(_compareHistoryItems);
 
-    hList.innerHTML = orderedHistory.map(_renderHistoryCardByIndex).join('');
+    hList.innerHTML = orderedHistory.map((item, index) => _renderHistoryCardByIndex(item, index)).join('');
 }
 
 function _historyMatchesSelectedFilter(item) {
