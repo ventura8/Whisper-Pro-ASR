@@ -122,6 +122,18 @@ needs into `./model_cache` and reuses them on every subsequent start.
 
 Keep `./model_cache` on a persistent volume; deleting it forces a fresh download.
 
+## Static Analysis
+
+SonarQube Cloud analyses every pull request, and both publish jobs depend on its quality gate, so a failed gate stops a release. `sonar-project.properties` holds the configuration and is shared with the local scanner, so a scan run before pushing applies the same rules to the same files:
+
+```bash
+read -rsp 'SonarQube token: ' SONAR_TOKEN && export SONAR_TOKEN && echo
+scripts/sonar_scan_local.sh                  # findings only
+scripts/sonar_scan_local.sh --with-coverage  # runs the test stages first
+```
+
+Coverage measures `modules/`, `whisper_pro_asr.py` and `scripts/`. The last was omitted from `.coveragerc` until v1.4.1 — the fixture generator, audio catalog and model preloader were unmeasured, and three security fixes landed there untested as a result.
+
 ## Frontend Quality Gates
 
 Dashboard UI quality is validated with ESLint, Stylelint, Vitest coverage gates, and mandatory Playwright E2E tests. All of these run exclusively inside the Docker test image via the repository's Docker quality wrapper — never directly on the host:
@@ -142,7 +154,7 @@ By default `tests/run_suite.sh` always runs this real-backend project (`npm run 
 
 ### CI Parallelization & Caching
 
-`tests/run_suite.sh` is stage-selectable via the `PIPELINE_STAGE` environment variable (`all` by default — used by the local wrappers above — or one of `lint`, `python-tests`, `js-unit-tests`, `e2e-fixture`, `e2e-real`). `.github/workflows/ci.yml` uses this to run each stage as its own parallel job (all depending on a `build-image` job that populates a shared `type=gha` BuildKit cache), instead of one long sequential job — a `publish` job then gates release/production-image steps on every stage job succeeding, same as before. The `lint` stage's ~24 independent tools also run concurrently against each other (not just across jobs) via background shell jobs. A named Docker volume (`whisper-pro-asr-tool-cache`) persists ESLint/Stylelint/ruff/pytest run-time caches across separate local runs; local Docker builds use `docker buildx build --cache-from/--cache-to=type=local` (mirroring CI's `type=gha` cache) so repeat local builds are fast too.
+`tests/run_suite.sh` is stage-selectable via the `PIPELINE_STAGE` environment variable (`all` by default — used by the local wrappers above — or one of `lint`, `python-tests`, `js-unit-tests`, `e2e-fixture`, `e2e-real`). `.github/workflows/ci.yml` uses this to run each stage as its own parallel job (all depending on a `build-image` job that populates a shared `type=gha` BuildKit cache), instead of one long sequential job — a `sonarqube` job then analyses the tree with the coverage both test stages produce, and a `publish` job gates release/production-image steps on every stage job succeeding, including that one. The `lint` stage's ~24 independent tools also run concurrently against each other (not just across jobs) via background shell jobs. A named Docker volume (`whisper-pro-asr-tool-cache`) persists ESLint/Stylelint/ruff/pytest run-time caches across separate local runs; local Docker builds use `docker buildx build --cache-from/--cache-to=type=local` (mirroring CI's `type=gha` cache) so repeat local builds are fast too.
 
 ## Local Hardware Validation
 
