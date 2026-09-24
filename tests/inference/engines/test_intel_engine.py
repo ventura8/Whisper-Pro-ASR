@@ -297,6 +297,57 @@ def test_intel_detect_language_branches():
         assert lang == "en"
 
 
+class TestDetectLanguageUsesOneWindow:
+    """detect_language must never hand WhisperPipeline more than one 30s window.
+
+    With max_new_tokens=1, OpenVINO GenAI's generate() on audio longer than 30s never
+    returns -- 30.0s answered in seconds, 31s spun indefinitely, on CPU and an Arc A310.
+    The full-file detection fallback passed whole files, so it hung the hardware unit and
+    every queued request behind it.
+    """
+
+    def _engine(self):
+        with mock.patch("importlib.import_module"):
+            engine = intel_engine.IntelWhisperEngine("path", "GPU")
+        engine.pipeline = mock.MagicMock()
+        engine.pipeline.generate.return_value = Namespace(language="es")
+        return engine
+
+    def _sent_audio(self, engine):
+        return engine.pipeline.generate.call_args.args[0]
+
+    def test_long_audio_is_cut_to_the_first_window(self):
+        """A 31s input reaches generate() as exactly its first 30s."""
+        engine = self._engine()
+        audio = np.arange(31 * 16000, dtype=np.float32)
+
+        lang, _, _ = engine.detect_language(audio)
+
+        sent = self._sent_audio(engine)
+        assert lang == "es"
+        assert len(sent) == 30 * 16000
+        assert np.array_equal(sent, audio[: 30 * 16000]), "the first window, not any other"
+
+    def test_short_audio_is_passed_through_unchanged(self):
+        """Input already inside one window is not padded or altered."""
+        engine = self._engine()
+        audio = np.ones(8000, dtype=np.float32)
+
+        engine.detect_language(audio)
+
+        assert np.array_equal(self._sent_audio(engine), audio)
+
+    def test_decoded_path_is_cut_too(self):
+        """A path is decoded first, then cut -- the gap-fill route."""
+        engine = self._engine()
+        decoded = np.zeros(120 * 16000, dtype=np.float32)
+
+        with mock.patch.object(intel_engine.vad, "decode_audio", return_value=decoded):
+            engine.detect_language("/tmp/long.wav")
+
+        assert len(self._sent_audio(engine)) == 30 * 16000
+
+
 class TestRepetitionPenaltyIsScopedToGreedy:
     """OpenVINO GenAI rejects repetition_penalty under beam search, as a hard error.
 

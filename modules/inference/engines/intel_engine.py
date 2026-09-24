@@ -20,6 +20,10 @@ from modules.inference.pipeline import vad
 logger = logging.getLogger(__name__)
 _VAD_FAILURE_SENTINEL = object()
 
+# One Whisper encoder window. Language ID reads the language token from a single window,
+# which is also what the faster-whisper and openai-whisper engines see.
+_LANGUAGE_ID_WINDOW_SAMPLES = 30 * 16000
+
 
 def find_split_points(audio_len_sec: float, speech_ts: List[dict], target_chunk_len: float = 300.0) -> List[float]:
     """
@@ -527,6 +531,13 @@ class IntelWhisperEngine:
 
         # Ensure sanitized numpy array
         audio_data = self.sanitize_audio(audio_data)
+
+        # Only the first 30s window. With max_new_tokens=1, WhisperPipeline.generate() on
+        # anything longer never returns (reproduced on CPU and an Arc A310 GPU with
+        # openvino-genai 2026.3.1: 30.0s answers in seconds, 31s spins indefinitely). Every
+        # full-file detection fallback therefore hung the unit and starved the queue behind it.
+        # The first window is what faster-whisper and openai-whisper (pad_or_trim) detect on.
+        audio_data = audio_data[:_LANGUAGE_ID_WINDOW_SAMPLES]
 
         # Detect language using the pipeline
         # OpenVINO GenAI WhisperPipeline.generate with a specific config can be used
