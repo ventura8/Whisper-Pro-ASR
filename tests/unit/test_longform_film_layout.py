@@ -13,6 +13,7 @@ durations real lines and recordings have.
 
 import random
 import statistics
+from unittest import mock
 
 import pytest
 
@@ -267,3 +268,172 @@ class TestBedsWithoutScenes:
         """A plan that laid out nothing used to reach ``scenes[-1]`` and raise IndexError."""
         with pytest.raises(ValueError, match="no scenes to render a bed from"):
             longform_film.beds([], 12.0, {"root": tmp_path, "rate": 16000}, [])
+
+
+class _FixedRandom:
+    """A random.Random whose uniform() returns a scripted sequence.
+
+    The weighted pickers walk a cumulative distribution, so driving `uniform` directly is
+    what selects a specific band rather than relying on a seed to land there.
+    """
+
+    def __init__(self, values):
+        self._values = list(values)
+
+    def uniform(self, low, high):
+        """Return the next scripted value, or the midpoint once they run out."""
+        if self._values:
+            return self._values.pop(0)
+        return (low + high) / 2
+
+
+def test_scene_length_picks_the_band_the_draw_lands_in():
+    """The first band is chosen when the draw falls inside its weight."""
+    first_count = longform_film.SCENE_LENGTH_WEIGHTS[0][0]
+
+    assert longform_film._scene_length(_FixedRandom([0.0])) == first_count
+
+
+def test_scene_length_falls_back_to_the_last_band():
+    """A draw at the very top of the range must still return a length, not None.
+
+    Floating-point accumulation can leave the running total a hair under the drawn value,
+    so the fallback is reachable in practice rather than defensive decoration.
+    """
+    total = sum(weight for _, weight in longform_film.SCENE_LENGTH_WEIGHTS)
+
+    assert longform_film._scene_length(_FixedRandom([total + 1])) == longform_film.SCENE_LENGTH_WEIGHTS[-1][0]
+
+
+def test_bed_level_picks_the_band_the_draw_lands_in():
+    """Bed levels are weighted the same way scene lengths are."""
+    first_level = longform_film.BED_LEVELS_DB[0][0]
+
+    assert longform_film._bed_level_db(_FixedRandom([0.0])) == first_level
+
+
+def test_bed_level_falls_back_to_the_last_band():
+    """Same top-of-range fallback as the other weighted pickers."""
+    total = sum(weight for _, weight in longform_film.BED_LEVELS_DB)
+
+    assert longform_film._bed_level_db(_FixedRandom([total + 1])) == longform_film.BED_LEVELS_DB[-1][0]
+
+
+def test_draw_band_returns_a_value_from_the_band_the_draw_lands_in():
+    """The shared (weight, low, high) picker, also used by the natural planner."""
+    bands = ((0.5, 0.2, 0.4), (0.5, 1.0, 2.0))
+
+    assert 0.2 <= longform_film.draw_band(_FixedRandom([0.0]), bands) <= 0.4
+
+
+def test_draw_band_falls_back_to_the_last_band():
+    """A draw above the accumulated total must still yield a value, not None.
+
+    Floating-point accumulation can leave the running total a hair under the drawn value,
+    so this is reachable in practice rather than defensive decoration.
+    """
+    bands = ((0.5, 0.2, 0.4), (0.5, 1.0, 2.0))
+    total = sum(band[0] for band in bands)
+
+    assert 1.0 <= longform_film.draw_band(_FixedRandom([total + 1]), bands) <= 2.0
+
+
+def _bed_context(tmp_path):
+    """Context for the bed builders."""
+    return {"root": tmp_path, "rate": 16000}
+
+
+def test_bed_segment_scales_volume_by_the_source_count(tmp_path):
+    """amix sums without normalising, so three full-scale tones would peak at 3.0."""
+    scene = {"bed": "both", "bed_db": 0.0}
+
+    with mock.patch.object(longform_film.render, "mix") as mix:
+        longform_film._bed_segment(scene, 5.0, tmp_path / "bed.wav", 16000, 0)
+
+    tail = mix.call_args.kwargs["tail"]
+    sources = mix.call_args[0][0]
+    assert f"volume={longform_film.BED_REFERENCE_VOLUME / len(sources):.4f}" in tail
+    assert "alimiter=limit=0.95" in tail
+
+
+def test_bed_segment_uses_only_music_sources_for_a_music_scene(tmp_path):
+    """A music bed carries chords and no room noise."""
+    with mock.patch.object(longform_film.render, "mix") as mix:
+        longform_film._bed_segment({"bed": "music", "bed_db": 1.0}, 5.0, tmp_path / "b.wav", 16000, 0)
+
+    assert not any("anoisesrc" in source for source in mix.call_args[0][0])
+
+
+def test_bed_segment_uses_only_room_noise_for_a_room_scene(tmp_path):
+    """A room bed is noise alone."""
+    with mock.patch.object(longform_film.render, "mix") as mix:
+        longform_film._bed_segment({"bed": "room", "bed_db": 1.0}, 5.0, tmp_path / "b.wav", 16000, 0)
+
+    assert all("anoisesrc" in source for source in mix.call_args[0][0])
+
+
+def test_bed_segment_names_a_bed_kind_that_selects_nothing(tmp_path):
+    """Unreachable from today's shapes, but the next bed kind added would hit it.
+
+    Without the guard it surfaces as a ZeroDivisionError from inside an ffmpeg render,
+    several frames from the manifest entry that caused it.
+    """
+    with pytest.raises(ValueError, match="selects no bed source"):
+        longform_film._bed_segment({"bed": "silent", "bed_db": 0.0}, 5.0, tmp_path / "b.wav", 16000, 0)
+
+
+def test_beds_renders_one_segment_per_scene(tmp_path):
+    """Each scene's bed runs for exactly that scene."""
+    scenes = [{"bed": "music", "bed_db": 0.0, "end": 10.0}, {"bed": "room", "bed_db": 1.0, "end": 20.0}]
+    temporaries = []
+
+    with mock.patch.object(longform_film.render, "mix"):
+        with mock.patch.object(longform_film.render, "concat") as concat:
+            result = longform_film.beds(scenes, 20.0, _bed_context(tmp_path), temporaries)
+
+    assert len(concat.call_args[0][0]) == 2
+    assert result == [tmp_path / "_lf_bed.wav"]
+    assert all(path in temporaries for path in concat.call_args[0][0])
+
+
+def test_beds_skips_a_scene_that_covers_no_time(tmp_path):
+    """Scenes past the clip's end contribute nothing rather than a zero-length render."""
+    scenes = [{"bed": "music", "bed_db": 0.0, "end": 30.0}, {"bed": "room", "bed_db": 0.0, "end": 40.0}]
+
+    with mock.patch.object(longform_film.render, "mix"):
+        with mock.patch.object(longform_film.render, "concat") as concat:
+            longform_film.beds(scenes, 20.0, _bed_context(tmp_path), [])
+
+    assert len(concat.call_args[0][0]) == 1
+
+
+def test_beds_extends_the_last_scene_to_cover_the_remainder(tmp_path):
+    """The bed must reach the end of the audio, not stop where the scenes do."""
+    scenes = [{"bed": "music", "bed_db": 0.0, "end": 10.0}]
+
+    with mock.patch.object(longform_film.render, "mix"):
+        with mock.patch.object(longform_film.render, "concat") as concat:
+            longform_film.beds(scenes, 25.0, _bed_context(tmp_path), [])
+
+    assert [p.name for p in concat.call_args[0][0]][-1] == "_lf_bed_tail.wav"
+
+
+def test_beds_refuses_to_cover_audio_with_no_scenes(tmp_path):
+    """Silence would be a plausible-looking bed for a clip that has none."""
+    context = _bed_context(tmp_path)
+
+    with pytest.raises(ValueError, match="no scenes to render a bed from"):
+        longform_film.beds([], 20.0, context, [])
+
+
+def test_beds_registers_every_temporary_before_rendering_it(tmp_path):
+    """Registration before render is what makes a part-way failure leave nothing behind."""
+    scenes = [{"bed": "music", "bed_db": 0.0, "end": 10.0}]
+    temporaries = []
+    context = _bed_context(tmp_path)
+
+    with mock.patch.object(longform_film.render, "mix", side_effect=RuntimeError("ffmpeg exploded")):
+        with pytest.raises(RuntimeError):
+            longform_film.beds(scenes, 10.0, context, temporaries)
+
+    assert temporaries == [tmp_path / "_lf_bed_0000.wav"]

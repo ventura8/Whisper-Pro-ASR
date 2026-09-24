@@ -107,3 +107,7 @@ state/
 # excerpts of copyrighted library audio and subtitle text, helper scripts, saved payloads.
 # Never source, and never to be committed.
 /_*
+
+# SonarQube scanner working directory and local scanner cache.
+.scannerwork/
+.sonar/

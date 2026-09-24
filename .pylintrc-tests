@@ -26,11 +26,16 @@ unsafe-load-any-extension=no
 #   included, even for parameters it ignores -- production calls
 #   `iter_content(chunk_size=...)` and `Separator(output_dir=...)` by keyword, so renaming
 #   them to `_chunk_size` to satisfy the check is not a cosmetic change, it breaks the call.
+# consider-using-with: a test double that stands in for `open` has to RETURN a live handle
+#   to its caller. Wrapping it in `with` would close the handle before the code under test
+#   ever sees it, which in the upload-cancellation suite is precisely the thing being
+#   asserted about -- that the helper, not the test, closes it.
 disable=protected-access,
         attribute-defined-outside-init,
         too-few-public-methods,
         duplicate-code,
-        unused-argument
+        unused-argument,
+        consider-using-with
 
 [REPORTS]
 output-format=text

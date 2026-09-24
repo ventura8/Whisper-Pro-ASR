@@ -275,6 +275,17 @@ jobs:
               [ -f pytest.xml ] && cp pytest.xml /reports/pytest.xml || true; \
               exit \$TEST_EXIT_CODE"
 
+      - name: Upload Coverage Report (SonarQube)
+        if: success() || failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: python-coverage
+          path: |
+            reports/coverage.xml
+            reports/pytest.xml
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Export Coverage Summary
         if: success() || failure()
         run: |
@@ -334,11 +345,25 @@ jobs:
 
       - name: Run JS Unit Tests Stage
         run: |
+          mkdir -p reports
+          chmod 0777 reports
           docker run --rm \
             -e CI=true \
             -e PIPELINE_STAGE=js-unit-tests \
+            -v "$PWD/reports:/reports" \
             -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
-            whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh"
+            whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh; TEST_EXIT_CODE=\$?; \
+              [ -f coverage-js/lcov.info ] && cp coverage-js/lcov.info /reports/lcov.info || true; \
+              exit \$TEST_EXIT_CODE"
+
+      - name: Upload JS Coverage Report (SonarQube)
+        if: success() || failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: js-coverage
+          path: reports/lcov.info
+          if-no-files-found: error
+          retention-days: 1
 
   e2e-fixture:
     name: E2E (Fixture Backend)
@@ -403,6 +428,104 @@ jobs:
             -e PIPELINE_STAGE=e2e-real \
             -v whisper-pro-asr-tool-cache:/var/cache/whisper-pro-asr-tools \
             whisper-pro-asr-test /bin/bash -c "tests/run_suite.sh"
+
+  sonarqube:
+    name: SonarQube Cloud Analysis
+    # Runs after the two coverage-producing stages so the analysis carries real coverage
+    # rather than reporting every line as uncovered. `always()` so that a failing test
+    # stage still gets analysed -- that is when the findings matter most; the download
+    # steps tolerate a missing report from a stage that never produced one.
+    needs: [python-tests, js-unit-tests]
+    # Two conditions beyond the test-stage guard:
+    #
+    # A fork pull request cannot read SONAR_TOKEN, so the scan could only ever fail there
+    # and block the gate on a contribution nobody can fix from the fork side.
+    #
+    # And every commit fires this workflow twice -- once for `pull_request`, once for the
+    # branch `push`. The PR run analyses the pull request; the push run analyses the branch,
+    # and analysing a non-main branch is not available on this plan, so that job failed on
+    # every push with no gate to report while the PR run beside it passed. Restricted to the
+    # pull request and to the refs whose branch analysis does exist. Nothing is lost: both
+    # publish jobs run only on main, a release branch or a tag, where this still runs.
+    if: >-
+      always() && needs.python-tests.result != 'cancelled' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name == 'pull_request' ||
+       github.ref == 'refs/heads/main' ||
+       startsWith(github.ref, 'refs/heads/release/') ||
+       startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          # A shallow clone leaves SonarQube unable to assign blame, which is what
+          # drives new-code detection and the quality gate on a pull request.
+          fetch-depth: 0
+
+      - name: Download Python Coverage Report
+        # Tolerated only when the producer did not succeed. A blanket `true` would also
+        # swallow a failed download after a green python-tests, and the scan would then
+        # report 0% coverage as though that were the measurement.
+        continue-on-error: ${{ needs.python-tests.result != 'success' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: python-coverage
+
+      - name: Download JS Coverage Report
+        continue-on-error: ${{ needs.js-unit-tests.result != 'success' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: js-coverage
+          path: coverage-js
+
+      - name: Normalize Coverage Paths
+        # coverage.py records the roots it measured from, and the suite runs inside the
+        # container at /app -- so the report arrives saying <source>/app</source>. The
+        # scanner resolves each filename against those roots, none of which exist in the
+        # runner workspace, so every file silently fails to match and the analysis reports
+        # 0.0% coverage on a report that actually measured 96.9%.
+        #
+        # Rewritten to the workspace as an ABSOLUTE path, not ".". A relative root worked
+        # for modules/ -- whose entries resolve through the "/app/modules" root, rewritten
+        # to "./modules" -- and silently failed for scripts/, whose filenames are relative
+        # to the bare "/app" root and so depended on "." resolving. The result was a
+        # scripts/ tree the scanner reported at 0% coverage while the report it was reading
+        # recorded 100%. An absolute root removes the ambiguity for every entry at once.
+        run: |
+          if [ -f coverage.xml ]; then
+            sed -i "s#<source>/app#<source>${GITHUB_WORKSPACE}#g" coverage.xml
+            echo "coverage.xml source roots:"
+            grep -o '<source>[^<]*</source>' coverage.xml
+          else
+            echo "coverage.xml absent; nothing to normalize"
+          fi
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4  # v8.2.2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: SonarQube Quality Gate
+        # Only when both coverage-producing stages actually ran. The scan above is
+        # deliberately `always()`, because findings matter most when something failed --
+        # but a stage that never ran uploads no coverage report, and the gate then reads
+        # the resulting absence as 0.0% coverage on new code and fails on that. That
+        # reported a coverage regression three times on this branch when the real failure
+        # was a lint error upstream, which is noise standing exactly where the signal
+        # should be. Skipping the gate here does not let anything through: every publish
+        # job already depends on python-tests in its own right.
+        if: needs.python-tests.result == 'success' && needs.js-unit-tests.result == 'success'
+        # Its own repository, not a sub-action of sonarqube-scan-action: that path does
+        # not exist and the step failed to load in 4s, taking the job -- and with it both
+        # publish jobs -- down with it.
+        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa  # v1.2.1
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   release-description-validation:
     name: Validate Release Metadata
@@ -473,6 +596,7 @@ jobs:
       - js-unit-tests
       - e2e-fixture
       - e2e-real
+      - sonarqube
       - release-description-validation
     if: >
       github.ref == 'refs/heads/main' ||
@@ -606,6 +730,7 @@ jobs:
       - js-unit-tests
       - e2e-fixture
       - e2e-real
+      - sonarqube
       - release-description-validation
       # The GitHub Release and the Docker Hub description must not go out ahead of the
       # images they describe: a release announcing tags that are still being pushed sends

@@ -55,3 +55,10 @@ test-results-real
 .validation-matrix.conf
 .validation-logs/
 .validation-logs-*/
+
+# Local SonarQube scanner working directory and cache. A developer who has run
+# scripts/sonar_scan_local.sh would otherwise bake ~136MB of provisioned JRE into the
+# test image -- where every linter then walks it, because they walk the filesystem
+# rather than the git index.
+.scannerwork/
+.sonar/

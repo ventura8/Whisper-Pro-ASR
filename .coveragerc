@@ -7,7 +7,6 @@ omit =
     tests/*
     */tests/*
     */__pycache__/*
-    scripts/*
     # Scratch the real-media runners drop at the repository root (see .gitignore): coverage
     # runs with --cov=., so a probe in flight put its helper script in coverage.xml at 0%
     # and failed the per-file threshold on a file that is not source. Anchored to the root:

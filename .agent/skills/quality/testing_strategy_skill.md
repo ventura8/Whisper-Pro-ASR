@@ -309,9 +309,14 @@ Rules when working in this area:
   manifest pins `noise_scale`/`noise_w_scale` to zero to make rendering bit-identical, and
   voice models are verified against upstream MD5 digests. Do not "improve" prosody by
   raising those pins without accepting that committed fixtures then churn on every rebuild.
-- **The generator lives in `scripts/`** because that path is Radon rank-A gated
-  (complexity <= 5) but coverage-exempt. Keep functions decomposed; use dispatch tables
-  rather than `if`/`elif` chains.
+- **The generator lives in `scripts/`**, which is Radon rank-A gated (complexity <= 5)
+  and, as of v1.4.1, covered like every other source tree. It was coverage-exempt until
+  then: `.coveragerc` omitted `scripts/*`, so 1,532 statements sat unmeasured at 37% with
+  17 of 18 files below the threshold the rest of the project is held to -- including the
+  path-traversal guard, the division-by-zero guard and the private-temp-directory fix that
+  release added. The omit is gone and every file in `scripts/` now passes the same
+  per-file 90% check `modules/` does. Keep functions decomposed and use dispatch tables
+  rather than `if`/`elif` chains; that style is what makes this tree testable at all.
 - **Markers**: `real_asr`, `real_audio`, `smoke`, `gpu`, `slow` (registered in
   `pytest.ini`). The long-form test carries `gpu` + `slow` and requires
   `RUN_GPU_LONG_ASR=1` plus `nvidia-smi`.

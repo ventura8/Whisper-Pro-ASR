@@ -74,12 +74,12 @@
 
     <div class="dashboard-main">
         <div class="section">
-            <div class="tabs">
-                <div class="tab active" id="tab-active" onclick="showTab('active')">Active</div>
-                <div class="tab" id="tab-history" onclick="showTab('history')">History</div>
-                <div class="tab" id="tab-charts" onclick="showTab('charts')">Charts</div>
-                <div class="tab" id="tab-analytics" onclick="showTab('analytics')">Analytics</div>
-                <div class="tab" id="tab-settings" onclick="showTab('settings')">Settings</div>
+            <div class="tabs" role="tablist">
+                <div class="tab active" id="tab-active" role="tab" tabindex="0" aria-controls="active-section" onclick="showTab('active')" onkeydown="activateTabOnKey(event, 'active')">Active</div>
+                <div class="tab" id="tab-history" role="tab" tabindex="0" aria-controls="history-section" onclick="showTab('history')" onkeydown="activateTabOnKey(event, 'history')">History</div>
+                <div class="tab" id="tab-charts" role="tab" tabindex="0" aria-controls="charts-section" onclick="showTab('charts')" onkeydown="activateTabOnKey(event, 'charts')">Charts</div>
+                <div class="tab" id="tab-analytics" role="tab" tabindex="0" aria-controls="analytics-section" onclick="showTab('analytics')" onkeydown="activateTabOnKey(event, 'analytics')">Analytics</div>
+                <div class="tab" id="tab-settings" role="tab" tabindex="0" aria-controls="settings-section" onclick="showTab('settings')" onkeydown="activateTabOnKey(event, 'settings')">Settings</div>
             </div>
 
             <div id="active-section">
@@ -189,17 +189,17 @@
                     <div class="section-title"><span class="material-icons-sharp">settings</span> Service Configuration</div>
                     <div style="display:flex; flex-direction:column; gap:24px; padding: 10px;">
                         <div>
-                            <label style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">Telemetry History Retention (Hours)</label>
+                            <label for="retention-range" style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">Telemetry History Retention (Hours)</label>
                             <div style="display:flex; align-items:center; gap:16px;">
                                 <input type="range" id="retention-range" min="1" max="720" value="24" style="flex:1;" oninput="this.dataset.userEdited = '1'; document.getElementById('retention-label').innerText = this.value + 'h'">
-                                <span id="retention-label" style="font-family:'Roboto Mono'; font-weight:700; color:var(--md-sys-color-primary); width:40px;">24h</span>
+                                <span id="retention-label" style="font-family:'Roboto Mono', monospace; font-weight:700; color:var(--md-sys-color-primary); width:40px;">24h</span>
                             </div>
                         </div>
                         <div>
-                            <label style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">System Log Retention (Days)</label>
+                            <label for="log-retention-range" style="font-size:14px; font-weight:600; display:block; margin-bottom:8px;">System Log Retention (Days)</label>
                             <div style="display:flex; align-items:center; gap:16px;">
                                 <input type="range" id="log-retention-range" min="1" max="90" value="7" style="flex:1;" oninput="this.dataset.userEdited = '1'; document.getElementById('log-retention-label').innerText = this.value + 'd'">
-                                <span id="log-retention-label" style="font-family:'Roboto Mono'; font-weight:700; color:var(--md-sys-color-primary); width:40px;">7d</span>
+                                <span id="log-retention-label" style="font-family:'Roboto Mono', monospace; font-weight:700; color:var(--md-sys-color-primary); width:40px;">7d</span>
                             </div>
                         </div>
                         <div>
