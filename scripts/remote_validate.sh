@@ -78,7 +78,7 @@ WSL_DISTRO="Ubuntu"
 # "Sync source" header, with nothing printed to say why.
 rsync_path_args() {
 	RSYNC_PATH_ARGS=()
-	if [ "$WSL" = true ]; then
+	if [[ "$WSL" = true ]]; then
 		RSYNC_PATH_ARGS=("--rsync-path=wsl -d ${WSL_DISTRO} rsync")
 	fi
 }
@@ -102,14 +102,14 @@ EXTRA_ENV=()
 # unset variable takes the default.
 REAL_ASR_TIMEOUT="${REAL_ASR_TIMEOUT-900}"
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	# Validated here, beside --suite and for the same reason: these reach the remote as
 	# compose/env values, so a typo surfaced as a build of a target that does not exist or a
 	# silent CPU run, twenty minutes and one image build into the session.
 	--target)
 		TARGET="${2:?--target needs a value}"
-		if [ ! -f "${REPO_ROOT}/docker-compose.${TARGET}.yml" ]; then
+		if [[ ! -f "${REPO_ROOT}/docker-compose.${TARGET}.yml" ]]; then
 			echo "unknown --target '${TARGET}': no docker-compose.${TARGET}.yml in ${REPO_ROOT}" >&2
 			exit 2
 		fi
@@ -117,7 +117,7 @@ while [ $# -gt 0 ]; do
 		;;
 	--compose)
 		COMPOSE="${2:?--compose needs a value}"
-		if [ ! -f "${REPO_ROOT}/docker-compose.${COMPOSE}.yml" ]; then
+		if [[ ! -f "${REPO_ROOT}/docker-compose.${COMPOSE}.yml" ]]; then
 			echo "unknown --compose '${COMPOSE}': no docker-compose.${COMPOSE}.yml in ${REPO_ROOT}" >&2
 			exit 2
 		fi
@@ -196,7 +196,7 @@ while [ $# -gt 0 ]; do
 	# echo + exit 2, not die: die is defined after this loop, so a bad value here used to fail
 	# as "die: command not found" -- the right outcome by accident, with the wrong message.
 	--timeout)
-		if [ $# -lt 2 ]; then
+		if [[ $# -lt 2 ]]; then
 			echo "--timeout needs a value in seconds" >&2
 			exit 2
 		fi
@@ -207,12 +207,15 @@ while [ $# -gt 0 ]; do
 			echo "--timeout expects a whole number of seconds greater than zero, got: $2" >&2
 			exit 2
 			;;
+		*)
+			# A positive whole number: accepted as-is below.
+			;;
 		esac
 		REAL_ASR_TIMEOUT="$2"
 		shift 2
 		;;
 	--env)
-		if [ $# -lt 2 ]; then
+		if [[ $# -lt 2 ]]; then
 			echo "--env needs a KEY=VALUE argument" >&2
 			exit 2
 		fi
@@ -257,6 +260,9 @@ case "$REAL_ASR_TIMEOUT" in
 	echo "REAL_ASR_TIMEOUT expects a whole number of seconds greater than zero, got: $REAL_ASR_TIMEOUT" >&2
 	exit 2
 	;;
+*)
+	# A positive whole number: forwarded to the test client unchanged.
+	;;
 esac
 
 hdr() { printf '\n=== %s ===\n' "$*"; }
@@ -268,7 +274,7 @@ die() {
 
 # The username is asked for rather than assumed: assuming the local one produces a
 # "Permission denied" that looks like broken key auth but is just the wrong account.
-if [ -z "$REMOTE" ]; then
+if [[ -z "$REMOTE" ]]; then
 	read -r -p "Remote user@host: " REMOTE
 fi
 case "$REMOTE" in
@@ -294,12 +300,15 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-
 # command is written to a file, copied over, and executed by path inside WSL. The Windows
 # SSH home is resolved from the host by init_win_profile rather than assumed.
 LOCAL=false
-case "$REMOTE" in local | localhost | local@*) LOCAL=true ;; esac
+case "$REMOTE" in
+local | localhost | local@*) LOCAL=true ;;
+*) LOCAL=false ;;
+esac
 
 # The stages below all cd into the checkout. Remotely that is the synced copy; locally it
 # is the working tree itself, and hardcoding the remote path made every local stage cd
 # into a directory that does not exist.
-if [ "$LOCAL" = true ]; then WORK_DIR="$REPO_ROOT"; else WORK_DIR="~/whisper-pro-asr"; fi
+if [[ "$LOCAL" = true ]]; then WORK_DIR="$REPO_ROOT"; else WORK_DIR="~/whisper-pro-asr"; fi
 # rsync's remote destination is NOT expanded by a login shell. In --wsl mode the remote half
 # runs as `wsl -d <distro> rsync`, with no shell in between, so a literal "~/whisper-pro-asr/"
 # was created as a directory actually NAMED "~" in the distro's working directory -- while
@@ -319,13 +328,13 @@ REMOTE_HOME=""
 WIN_PROFILE_WSL=""
 
 init_win_profile() {
-	[ "$WSL" = true ] || return 0
-	[ -z "$WIN_PROFILE_WSL" ] || return 0
+	[[ "$WSL" = true ]] || return 0
+	[[ -z "$WIN_PROFILE_WSL" ]] || return 0
 	# PowerShell, because that is the one shell on a Windows SSH target whose quoting is
 	# predictable; `wsl -e wslpath` through cmd came back with the quotes taken literally.
 	local win_path
 	win_path="$(ssh_raw 'powershell -NoProfile -Command "$env:USERPROFILE"' 2>/dev/null | tr -d '\r' | tail -1)"
-	[ -n "$win_path" ] || die "could not resolve USERPROFILE on ${REMOTE_HOST}"
+	[[ -n "$win_path" ]] || die "could not resolve USERPROFILE on ${REMOTE_HOST}"
 	# C:\Users\name -> /mnt/c/Users/name, done here rather than with wslpath for the same
 	# quoting reason.
 	# Parameter expansion rather than cut/tr: a backslash argument to tr has to survive two
@@ -338,14 +347,14 @@ init_win_profile() {
 }
 
 init_remote_home() {
-	[ "$WSL" = true ] || return 0
-	[ -z "$REMOTE_HOME" ] || return 0
+	[[ "$WSL" = true ]] || return 0
+	[[ -z "$REMOTE_HOME" ]] || return 0
 	REMOTE_HOME="$(ssh_run 'printf %s "$HOME"' | tr -d '\r')"
-	[ -n "$REMOTE_HOME" ] || die "could not resolve the remote HOME inside WSL distro '${WSL_DISTRO}'"
+	[[ -n "$REMOTE_HOME" ]] || die "could not resolve the remote HOME inside WSL distro '${WSL_DISTRO}'"
 }
 
 remote_dest() {
-	if [ "$WSL" != true ]; then
+	if [[ "$WSL" != true ]]; then
 		printf '%s' "~/whisper-pro-asr"
 		return
 	fi
@@ -353,16 +362,16 @@ remote_dest() {
 }
 
 ssh_raw() {
-	if [ "$LOCAL" = true ]; then bash -c "$*"; else ssh -i "$KEY" "${SSH_OPTS[@]}" "$REMOTE" "$@"; fi
+	if [[ "$LOCAL" = true ]]; then bash -c "$*"; else ssh -i "$KEY" "${SSH_OPTS[@]}" "$REMOTE" "$@"; fi
 }
 
 ssh_run() {
 	# The local machine is just another target: same stages, same evidence, no transport.
-	if [ "$LOCAL" = true ]; then
+	if [[ "$LOCAL" = true ]]; then
 		(cd "$REPO_ROOT" && bash -c "$*")
 		return
 	fi
-	if [ "$WSL" != true ]; then
+	if [[ "$WSL" != true ]]; then
 		ssh -i "$KEY" "${SSH_OPTS[@]}" "$REMOTE" "$@"
 		return
 	fi
@@ -399,7 +408,7 @@ ssh_run() {
 
 hdr "Preflight: $REMOTE"
 
-if [ ! -f "$KEY" ]; then
+if [[ ! -f "$KEY" ]]; then
 	note "No identity at $KEY -- generating a dedicated one (revocable on its own)."
 	# ssh-keygen does not create intermediate directories, so a --key under a path that
 	# does not exist yet fails with a bare "No such file or directory" naming neither.
@@ -422,7 +431,7 @@ Then re-run this script. If it still fails, the username is probably wrong, or t
 EOF
 	exit 2
 fi
-if [ "$WSL" = true ]; then
+if [[ "$WSL" = true ]]; then
 	note "ssh: OK (Windows host, running inside WSL distro '${WSL_DISTRO}')"
 	note "wsl: $(ssh_run 'echo "$(whoami)@$(hostname) kernel=$(uname -r)"')"
 else
@@ -430,7 +439,7 @@ else
 fi
 
 if ! ssh_run 'docker info >/dev/null 2>&1'; then
-	if [ "$WSL" = true ]; then
+	if [[ "$WSL" = true ]]; then
 		cat <<EOF
 
 Docker is not reachable inside the WSL distro '${WSL_DISTRO}' on ${REMOTE_HOST}.
@@ -466,7 +475,7 @@ note "docker: usable without sudo ($(ssh_run 'docker --version'))"
 #
 # which arrives long after preflight has declared everything fine. Check where the binary
 # actually lives, so the failure is named here instead.
-if [ "$WSL" = true ]; then
+if [[ "$WSL" = true ]]; then
 	DOCKER_BIN="$(ssh_run 'command -v docker 2>/dev/null || true' | tr -d '\r')"
 	case "$DOCKER_BIN" in
 	/mnt/*)
@@ -486,6 +495,9 @@ Then re-run this script. Verify with:
     wsl -d ${WSL_DISTRO} -e bash -lc 'command -v docker'   # expect /usr/bin/docker
 EOF
 		exit 3
+		;;
+	*)
+		# A distro-native path (e.g. /usr/bin/docker): the WSL integration is working.
 		;;
 	esac
 	note "docker binary: ${DOCKER_BIN} (native to the distro)"
@@ -510,10 +522,10 @@ EOF
 	# the clock as fine.
 	WIN_UTC="$(ssh_raw 'powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString(\"yyyy-MM-dd HH:mm:ss\")"' 2>/dev/null | tr -d '\r' | tail -1)"
 	WIN_EPOCH="$(date -u -d "$WIN_UTC" +%s 2>/dev/null || true)"
-	if [ -n "$WIN_EPOCH" ]; then
+	if [[ -n "$WIN_EPOCH" ]]; then
 		WIN_SKEW=$((LOCAL_EPOCH - WIN_EPOCH))
-		[ "$WIN_SKEW" -lt 0 ] && WIN_SKEW=$((-WIN_SKEW))
-		if [ "$WIN_SKEW" -gt 120 ]; then
+		[[ "$WIN_SKEW" -lt 0 ]] && WIN_SKEW=$((-WIN_SKEW))
+		if [[ "$WIN_SKEW" -gt 120 ]]; then
 			cat <<EOF
 
 The Windows clock on ${REMOTE_HOST} is ${WIN_SKEW}s out from this machine.
@@ -543,10 +555,10 @@ EOF
 	fi
 
 	WSL_EPOCH="$(ssh_run 'date -u +%s' | tr -dc '0-9')"
-	if [ -n "$WSL_EPOCH" ]; then
+	if [[ -n "$WSL_EPOCH" ]]; then
 		SKEW=$((LOCAL_EPOCH - WSL_EPOCH))
-		[ "$SKEW" -lt 0 ] && SKEW=$((-SKEW))
-		if [ "$SKEW" -gt 120 ]; then
+		[[ "$SKEW" -lt 0 ]] && SKEW=$((-SKEW))
+		if [[ "$SKEW" -gt 120 ]]; then
 			note "clock: WSL is ${SKEW}s out from this machine; correcting (builds fail on skew)"
 			if ssh_run "sudo -n date -u -s '$(date -u '+%Y-%m-%d %H:%M:%S')' >/dev/null 2>&1"; then
 				note "clock: corrected ($(ssh_run 'date -u "+%Y-%m-%d %H:%M:%S UTC"' | tr -d '\r'))"
@@ -582,10 +594,10 @@ EOF
 	# twenty minutes into a build, naming neither the clock nor Docker Desktop. Checked here
 	# so the failure is immediate and says what to do.
 	CONTAINER_EPOCH="$(ssh_run 'docker run --rm alpine date -u +%s 2>/dev/null' | tr -dc '0-9')"
-	if [ -n "$CONTAINER_EPOCH" ]; then
+	if [[ -n "$CONTAINER_EPOCH" ]]; then
 		CSKEW=$(($(date -u +%s) - CONTAINER_EPOCH))
-		[ "$CSKEW" -lt 0 ] && CSKEW=$((-CSKEW))
-		if [ "$CSKEW" -gt 120 ]; then
+		[[ "$CSKEW" -lt 0 ]] && CSKEW=$((-CSKEW))
+		if [[ "$CSKEW" -gt 120 ]]; then
 			cat <<EOF
 
 Docker build containers on ${REMOTE_HOST} are ${CSKEW}s out from this machine.
@@ -612,7 +624,7 @@ fi
 note "disk: $(ssh_run 'df -BG --output=avail / | tail -1 | tr -d " "') free"
 
 hdr "Hardware audit (vendor-agnostic)"
-if [ "$WSL" = true ]; then
+if [[ "$WSL" = true ]]; then
 	# Copied and run by path for the same reason ssh_run does it: nothing survives cmd.exe
 	# quoting reliably, and -EncodedCommand's UTF-16 base64 overruns cmd's 8191-char limit.
 	AUDIT_REMOTE_NAME="wpa_audit_$$_${RANDOM}.ps1"
@@ -624,9 +636,9 @@ if [ "$WSL" = true ]; then
 	# remote audit failed, which is exactly the case the message exists for.
 	AUDIT="$(ssh_raw "powershell -NoProfile -ExecutionPolicy Bypass -File ${AUDIT_REMOTE_NAME}" 2>/dev/null | tr -d '\r' | grep '^{' | tail -1 || true)"
 	ssh_raw "powershell -NoProfile -Command \"Remove-Item -Force -ErrorAction SilentlyContinue '${AUDIT_REMOTE_NAME}'\"" >/dev/null 2>&1 || true
-	[ -n "$AUDIT" ] || die "the Windows audit returned nothing"
+	[[ -n "$AUDIT" ]] || die "the Windows audit returned nothing"
 	note "$AUDIT"
-	if [ -z "$TARGET" ]; then
+	if [[ -z "$TARGET" ]]; then
 		TARGET="$(printf '%s' "$AUDIT" | sed -n 's/.*"recommended_target":"\([^"]*\)".*/\1/p')"
 		note "target: $TARGET (from Windows audit)"
 	fi
@@ -641,20 +653,23 @@ else
 	AUDIT="$(ssh_run 'bash -s -- --json' <"${REPO_ROOT}/scripts/audit_hardware.sh")"
 	note "$AUDIT"
 
-	json_field() { printf '%s' "$AUDIT" | sed -n "s/.*\"$1\":\"\{0,1\}\([^,\"}]*\)\"\{0,1\}.*/\1/p"; }
+	json_field() {
+		local field="$1"
+		printf '%s' "$AUDIT" | sed -n "s/.*\"${field}\":\"\{0,1\}\([^,\"}]*\)\"\{0,1\}.*/\1/p"
+	}
 	RECOMMENDED="$(json_field recommended_target)"
 	RENDER_GID="$(json_field render_gid)"
-	[ -n "$TARGET" ] || TARGET="$RECOMMENDED"
-	note "target: ${TARGET}$([ "$TARGET" = "$RECOMMENDED" ] && echo ' (from audit)' || echo " (overridden; audit said ${RECOMMENDED})")"
+	[[ -n "$TARGET" ]] || TARGET="$RECOMMENDED"
+	note "target: ${TARGET}$([[ "$TARGET" = "$RECOMMENDED" ]] && echo ' (from audit)' || echo " (overridden; audit said ${RECOMMENDED})")"
 fi
 
-[ -n "$TARGET" ] || die "hardware audit did not produce a build target; fix the audit result or pass --target explicitly."
+[[ -n "$TARGET" ]] || die "hardware audit did not produce a build target; fix the audit result or pass --target explicitly."
 
 # Only the Intel override consumes this, and only on Linux; WSL never reaches an Intel
 # GPU, so the default keeps the variable defined without implying a device is there.
 RENDER_GID="${RENDER_GID:-990}"
 
-if [ "$FULL" != true ]; then
+if [[ "$FULL" != true ]]; then
 	cat <<EOF
 
 Audit complete. Re-run with --full to sync, build and validate:
@@ -664,7 +679,7 @@ EOF
 	exit 0
 fi
 
-if [ "$LOCAL" = true ]; then
+if [[ "$LOCAL" = true ]]; then
 	note "local run: no sync needed (working tree is the source)"
 else
 	hdr "Sync source -> ${REMOTE_HOST}"
@@ -687,11 +702,11 @@ else
 	note "synced commit: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 fi
 
-if [ "$FIXTURES" = true ] && [ "$LOCAL" != true ]; then
+if [[ "$FIXTURES" = true ]] && [[ "$LOCAL" != true ]]; then
 	# Only the core tier is committed; the long tail, code-switched, adversarial and
 	# long-form clips are generated locally. Copying them beats regenerating on each remote,
 	# which would mean installing the TTS toolchain and downloading voices per machine.
-	if [ -d "${REPO_ROOT}/test_data/audio_matrix" ]; then
+	if [[ -d "${REPO_ROOT}/test_data/audio_matrix" ]]; then
 		hdr "Sync audio fixtures -> ${REMOTE_HOST}"
 		ssh_run "mkdir -p ${WORK_DIR}/test_data/audio_matrix"
 		rsync_path_args
@@ -709,7 +724,7 @@ fi
 # "CPU, GPU" and an ASR_DEVICE=NPU request runs on the iGPU while every log line still
 # says NPU -- a false pass that looks exactly like a real one.
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.${COMPOSE:-$TARGET}.yml"
-[ -z "$COMPOSE" ] || note "starting the ${TARGET} image with the ${COMPOSE} compose override"
+[[ -z "$COMPOSE" ]] || note "starting the ${TARGET} image with the ${COMPOSE} compose override"
 # Pass the NPU through whenever the host has one, not only when --device NPU is given.
 # Tying this to --device was wrong: that flag selects the *ASR* device, and the NPU cannot
 # run ASR at all -- its working use is UVR preprocessing. Gating on it left the NPU
@@ -719,12 +734,12 @@ intel* | nvidia-intel | full)
 	if ssh_run 'test -e /dev/accel'; then
 		COMPOSE_FILES="${COMPOSE_FILES} -f docker-compose.intel-npu.yml"
 		note "Intel NPU passthrough enabled (/dev/accel present)"
-	elif [ "$DEVICE" = "NPU" ]; then
+	elif [[ "$DEVICE" = "NPU" ]]; then
 		die "--device NPU requested but the host has no /dev/accel. Load the intel_vpu module, or drop --device NPU."
 	fi
 	;;
 *)
-	[ "$DEVICE" != "NPU" ] || die "--device NPU needs an Intel target, not ${TARGET}."
+	[[ "$DEVICE" != "NPU" ]] || die "--device NPU needs an Intel target, not ${TARGET}."
 	;;
 esac
 
@@ -860,7 +875,7 @@ ssh_run "cd ${WORK_DIR} && docker run --rm --network host ${GPU_FLAG} -v \$PWD:/
   whisper-pro-asr-test:latest /bin/bash -c 'set -o pipefail; python3 -m pytest ${SUITE_ARGS} -ra --no-cov --tb=short 2>&1 | tail -80'" ||
 	SUITE_FAILED=true
 
-if [ "$SUITE" = "stress" ]; then
+if [[ "$SUITE" = "stress" ]]; then
 	hdr "Long-form stress (20 minutes of audio)"
 	ssh_run "cd ${WORK_DIR} && docker run --rm --network host ${GPU_FLAG} -v \$PWD:/app -w /app -u \$(id -u):\$(id -g) \
     -e WHISPER_PRO_ASR_TEST_IMAGE=1 -e RUN_REAL_ASR=1 -e RUN_GPU_LONG_ASR=1 -e HOME=/tmp \
@@ -888,13 +903,13 @@ ssh_run 'curl -s --max-time 20 http://127.0.0.1:9000/status' |
 # down underneath it. `tail -15` used to cut the tracebacks off too, leaving a list of
 # test names with no reason attached -- which is how an NPU run looked identical whether
 # it failed on timeouts or on wrong output.
-if [ "${SUITE_FAILED:-false}" = true ]; then
+if [[ "${SUITE_FAILED:-false}" = true ]]; then
 	note "the suite reported failures -- keeping the stack up so the logs survive"
 	note "  ssh ${REMOTE} 'docker logs whisper-pro-asr 2>&1 | tail -60'"
 	KEEP=true
 fi
 
-if [ "$KEEP" != true ]; then
+if [[ "$KEEP" != true ]]; then
 	hdr "Teardown"
 	ssh_run "cd ${WORK_DIR} && docker compose ${COMPOSE_FILES} down" >/dev/null 2>&1 || true
 	note "stack stopped (use --keep to leave it running)"
@@ -909,7 +924,7 @@ note "it during a transcription -- see docs/REMOTE_VALIDATION.md."
 # The exit status is the whole result as far as a caller is concerned. Without this the
 # script always exited 0, so validation_matrix.sh aggregated a matrix of failures into a
 # clean pass no matter what the suites did.
-if [ "${SUITE_FAILED:-false}" = true ]; then
+if [[ "${SUITE_FAILED:-false}" = true ]]; then
 	note "result: FAILED (see the suite output above)"
 	exit 1
 fi

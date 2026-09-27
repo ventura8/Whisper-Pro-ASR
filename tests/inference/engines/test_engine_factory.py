@@ -315,7 +315,7 @@ def test_faster_whisper_engine_recovery_failure_raises(tmp_path):
     assert model_bin.stat().st_size == 11 * 1024 * 1024, "the size check the purge decision reads must still see a large model"
 
 
-def test_openai_whisper_engine():
+def test_openai_whisper_engine(monkeypatch):
     mock_whisper = mock.MagicMock()
     mock_model = mock_whisper.load_model.return_value
     mock_model.transcribe.return_value = {
@@ -323,26 +323,21 @@ def test_openai_whisper_engine():
         "segments": [{"start": 0.0, "end": 2.0, "text": "bonjour"}],
     }
 
-    orig_duration = engine_factory.utils.get_audio_duration
-
-    engine_factory.utils.get_audio_duration = mock.MagicMock(return_value=5.0)
-    try:
-        with mock.patch("importlib.import_module", return_value=mock_whisper):
-            engine = engine_factory.OpenaiWhisperEngine(model_id="test-model", device="cpu")
-            loaded_model = engine.model
-            segs, info = engine.transcribe("dummy.wav", language="fr", beam_size=5, unknown_param="ignored")
-            seg_list = list(segs)
-            engine.unload()
-            assert (
-                loaded_model is mock_model,
-                info.language,
-                info.duration,
-                len(seg_list),
-                seg_list[0].text,
-                hasattr(engine, "model"),
-            ) == (True, "fr", 5.0, 1, "bonjour", False)
-    finally:
-        engine_factory.utils.get_audio_duration = orig_duration
+    monkeypatch.setattr(engine_factory.utils, "get_audio_duration", mock.MagicMock(return_value=5.0))
+    with mock.patch("importlib.import_module", return_value=mock_whisper):
+        engine = engine_factory.OpenaiWhisperEngine(model_id="test-model", device="cpu")
+        loaded_model = engine.model
+        segs, info = engine.transcribe("dummy.wav", language="fr", beam_size=5, unknown_param="ignored")
+        seg_list = list(segs)
+        engine.unload()
+        assert (
+            loaded_model is mock_model,
+            info.language,
+            info.duration,
+            len(seg_list),
+            seg_list[0].text,
+            hasattr(engine, "model"),
+        ) == (True, "fr", 5.0, 1, "bonjour", False)
 
 
 def test_openai_whisper_detect_language_path_and_probs():

@@ -88,158 +88,119 @@ def test_vad_exception_handling(mock_vad_components):
     assert results == []
 
 
-def testlazy_import_vad_monkeypatching():
-    """Test that lazy_import_vad properly monkeypatches get_speech_timestamps."""
-    # Reset VAD state to simulate first load
+@pytest.fixture
+def fresh_vad_state():
+    """Reset the VAD wrap state to simulate a first load, and reset it again afterwards.
+
+    The state is reset to the unwrapped defaults (rather than restored) on teardown so the
+    next real ``lazy_import_vad`` call re-wraps the genuine ``fw_get_ts``.
+    """
+    vad._VAD_STATE["wrapped"] = False
+    vad._VAD_STATE["wrapped_func"] = None
+    yield
     vad._VAD_STATE["wrapped"] = False
     vad._VAD_STATE["wrapped_func"] = None
 
+
+@pytest.mark.usefixtures("fresh_vad_state")
+def testlazy_import_vad_monkeypatching(monkeypatch):
+    """Test that lazy_import_vad properly monkeypatches get_speech_timestamps."""
     # Mock fw_get_ts
     mock_orig_get_ts = mock.MagicMock()
     mock_orig_get_ts.return_value = [{"start": 16000, "end": 32000}]
 
-    # Backup original fw_get_ts
-    orig_fw_get_ts = vad.fw_get_ts
-    vad.fw_get_ts = mock_orig_get_ts
+    # monkeypatch restores the original fw_get_ts on teardown
+    monkeypatch.setattr(vad, "fw_get_ts", mock_orig_get_ts)
 
-    try:
-        # Run lazy_import_vad
-        fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
+    # Run lazy_import_vad
+    fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
 
-        # Test calling the wrapped function with mock logger
-        audio = np.zeros(48000)
-        with mock.patch("modules.inference.pipeline.vad.logger") as mock_logger:
-            res = fw_get_ts_wrapped(audio)
-            log_arg = mock_logger.info.call_args[0][0]
-            assert all(
-                [
-                    vad._VAD_STATE["wrapped"] is True,
-                    vad._VAD_STATE["wrapped_func"] is not None,
-                    fw_get_ts_wrapped is not mock_orig_get_ts,
-                    res == [{"start": 16000, "end": 32000}],
-                    mock_orig_get_ts.call_args == mock.call(audio),
-                    mock_logger.info.call_count == 1,
-                    "[VAD] Speech detection complete" in log_arg,
-                ]
-            )
-
-    finally:
-        # Restore original state
-        vad.fw_get_ts = orig_fw_get_ts
-        vad._VAD_STATE["wrapped"] = False
-        vad._VAD_STATE["wrapped_func"] = None
+    # Test calling the wrapped function with mock logger
+    audio = np.zeros(48000)
+    with mock.patch("modules.inference.pipeline.vad.logger") as mock_logger:
+        res = fw_get_ts_wrapped(audio)
+        log_arg = mock_logger.info.call_args[0][0]
+        assert all(
+            [
+                vad._VAD_STATE["wrapped"] is True,
+                vad._VAD_STATE["wrapped_func"] is not None,
+                fw_get_ts_wrapped is not mock_orig_get_ts,
+                res == [{"start": 16000, "end": 32000}],
+                mock_orig_get_ts.call_args == mock.call(audio),
+                mock_logger.info.call_count == 1,
+                "[VAD] Speech detection complete" in log_arg,
+            ]
+        )
 
 
-def testlazy_import_vad_sys_modules_patching():
+@pytest.mark.usefixtures("fresh_vad_state")
+def testlazy_import_vad_sys_modules_patching(monkeypatch):
     """Test that lazy_import_vad patches sys.modules['faster_whisper.vad']."""
-    vad._VAD_STATE["wrapped"] = False
-    vad._VAD_STATE["wrapped_func"] = None
-
-    mock_orig_get_ts = mock.MagicMock()
-    orig_fw_get_ts = vad.fw_get_ts
-    vad.fw_get_ts = mock_orig_get_ts
+    monkeypatch.setattr(vad, "fw_get_ts", mock.MagicMock())
 
     mock_module = mock.MagicMock()
 
     with mock.patch.dict("sys.modules", {"faster_whisper.vad": mock_module}):
-        try:
-            vad.lazy_import_vad()
-            assert mock_module.get_speech_timestamps == vad._VAD_STATE["wrapped_func"]
-        finally:
-            vad.fw_get_ts = orig_fw_get_ts
-            vad._VAD_STATE["wrapped"] = False
-            vad._VAD_STATE["wrapped_func"] = None
+        vad.lazy_import_vad()
+        assert mock_module.get_speech_timestamps == vad._VAD_STATE["wrapped_func"]
 
 
-def testlazy_import_vad_none():
+@pytest.mark.usefixtures("fresh_vad_state")
+def testlazy_import_vad_none(monkeypatch):
     """Test lazy_import_vad behavior when fw_get_ts is None."""
-    vad._VAD_STATE["wrapped"] = False
-    vad._VAD_STATE["wrapped_func"] = None
+    monkeypatch.setattr(vad, "fw_get_ts", None)
 
-    orig_fw_get_ts = vad.fw_get_ts
-    vad.fw_get_ts = None
-
-    try:
-        fw_get_ts_ret, _, _ = vad.lazy_import_vad()
-        assert fw_get_ts_ret is None
-        assert vad._VAD_STATE["wrapped"] is False
-    finally:
-        vad.fw_get_ts = orig_fw_get_ts
+    fw_get_ts_ret, _, _ = vad.lazy_import_vad()
+    assert fw_get_ts_ret is None
+    assert vad._VAD_STATE["wrapped"] is False
 
 
-def test_get_speech_timestamps_wrapped_exceptions():
+@pytest.mark.usefixtures("fresh_vad_state")
+def test_get_speech_timestamps_wrapped_exceptions(monkeypatch):
     """Test that get_speech_timestamps_wrapped handles exceptions gracefully."""
-    vad._VAD_STATE["wrapped"] = False
-    vad._VAD_STATE["wrapped_func"] = None
-
     # Mock fw_get_ts to return non-iterable to trigger exception in speech_sec sum
     mock_orig_get_ts = mock.MagicMock()
     mock_orig_get_ts.return_value = 123  # Non-iterable
+    monkeypatch.setattr(vad, "fw_get_ts", mock_orig_get_ts)
 
-    orig_fw_get_ts = vad.fw_get_ts
-    vad.fw_get_ts = mock_orig_get_ts
+    fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
 
-    try:
-        fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
-
-        # Call with mock logger
-        audio = np.zeros(16000)
-        with mock.patch("modules.inference.pipeline.vad.logger") as mock_logger:
-            res = fw_get_ts_wrapped(audio)
-            assert res == 123
-            # Verify no warning/error crashed the function, and it logged debug info
-            mock_logger.debug.assert_not_called()  # since it returned 123, which is not list/tuple, it skipped sum
-    finally:
-        vad.fw_get_ts = orig_fw_get_ts
-        vad._VAD_STATE["wrapped"] = False
-        vad._VAD_STATE["wrapped_func"] = None
+    # Call with mock logger
+    audio = np.zeros(16000)
+    with mock.patch("modules.inference.pipeline.vad.logger") as mock_logger:
+        res = fw_get_ts_wrapped(audio)
+        assert res == 123
+        # Verify no warning/error crashed the function, and it logged debug info
+        mock_logger.debug.assert_not_called()  # since it returned 123, which is not list/tuple, it skipped sum
 
 
-def test_get_speech_timestamps_wrapped_exception():
+@pytest.mark.usefixtures("fresh_vad_state")
+def test_get_speech_timestamps_wrapped_exception(monkeypatch):
     """Test exception path inside get_speech_timestamps_wrapped."""
-    vad._VAD_STATE["wrapped"] = False
-    vad._VAD_STATE["wrapped_func"] = None
-
     # Return list of dicts that misses 'end'/'start' keys to raise KeyError during sum
     mock_orig_get_ts = mock.MagicMock()
     mock_orig_get_ts.return_value = [{"invalid_key": 100}]
+    monkeypatch.setattr(vad, "fw_get_ts", mock_orig_get_ts)
 
-    orig_fw_get_ts = vad.fw_get_ts
-    vad.fw_get_ts = mock_orig_get_ts
+    fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
+    audio = np.zeros(16000)
 
-    try:
-        fw_get_ts_wrapped, _, _ = vad.lazy_import_vad()
-        audio = np.zeros(16000)
-
-        with mock.patch("modules.inference.pipeline.vad.logger") as mock_logger:
-            res = fw_get_ts_wrapped(audio)
-            # Should catch exception and log debug message
-            mock_logger.debug.assert_called_once()
-            assert res == [{"invalid_key": 100}]
-    finally:
-        vad.fw_get_ts = orig_fw_get_ts
-        vad._VAD_STATE["wrapped"] = False
-        vad._VAD_STATE["wrapped_func"] = None
+    with mock.patch("modules.inference.pipeline.vad.logger") as mock_logger:
+        res = fw_get_ts_wrapped(audio)
+        # Should catch exception and log debug message
+        mock_logger.debug.assert_called_once()
+        assert res == [{"invalid_key": 100}]
 
 
-def testlazy_import_vad_sys_modules_exception():
+@pytest.mark.usefixtures("fresh_vad_state")
+def testlazy_import_vad_sys_modules_exception(monkeypatch):
     """Test exception path inside lazy_import_vad's sys.modules loop."""
-    vad._VAD_STATE["wrapped"] = False
-    vad._VAD_STATE["wrapped_func"] = None
-
-    mock_orig_get_ts = mock.MagicMock()
-    orig_fw_get_ts = vad.fw_get_ts
-    vad.fw_get_ts = mock_orig_get_ts
+    monkeypatch.setattr(vad, "fw_get_ts", mock.MagicMock())
 
     # Mock sys.modules.items to raise an exception
     with mock.patch("sys.modules", mock.MagicMock(items=mock.Mock(side_effect=RuntimeError("sys.modules mock error")))):
-        try:
-            # Should catch exception gracefully and not crash
-            vad.lazy_import_vad()
-        finally:
-            vad.fw_get_ts = orig_fw_get_ts
-            vad._VAD_STATE["wrapped"] = False
-            vad._VAD_STATE["wrapped_func"] = None
+        # Should catch exception gracefully and not crash
+        vad.lazy_import_vad()
 
 
 def test_get_speech_timestamps_from_path_exception():

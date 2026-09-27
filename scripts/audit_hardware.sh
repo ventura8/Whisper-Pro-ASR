@@ -27,9 +27,19 @@ case "${1:-}" in
 	;;
 esac
 
-have() { command -v "$1" >/dev/null 2>&1; }
-note() { [ "$MODE" = "report" ] && printf '%s\n' "$*" || true; }
-hdr() { [ "$MODE" = "report" ] && printf '\n=== %s ===\n' "$*" || true; }
+have() {
+	local cmd="$1"
+	command -v "$cmd" >/dev/null 2>&1
+	return $?
+}
+note() {
+	[[ "$MODE" = "report" ]] && printf '%s\n' "$*" || true
+	return 0
+}
+hdr() {
+	[[ "$MODE" = "report" ]] && printf '\n=== %s ===\n' "$*" || true
+	return 0
+}
 
 has_nvidia=false
 has_nvidia_toolkit=false
@@ -58,9 +68,9 @@ if have nvidia-smi && nvidia-smi >/dev/null 2>&1; then
 	else
 		gpu_probe_status=127
 	fi
-	if [ "$gpu_probe_status" -eq 124 ]; then
+	if [[ "$gpu_probe_status" -eq 124 ]]; then
 		note "Docker GPU probe timed out after 120s; the daemon is not answering. Not treated as a working toolkit."
-	elif [ "$gpu_probe_status" -eq 0 ]; then
+	elif [[ "$gpu_probe_status" -eq 0 ]]; then
 		has_nvidia_toolkit=true
 		note "Docker GPU probe succeeded"
 	else
@@ -71,16 +81,16 @@ else
 fi
 
 hdr "Render nodes (Intel iGPU / Arc, AMD)"
-if [ -d /dev/dri ]; then
+if [[ -d /dev/dri ]]; then
 	note "$(ls -l /dev/dri/ 2>/dev/null)"
 	for n in /dev/dri/renderD*; do
-		[ -e "$n" ] || continue
+		[[ -e "$n" ]] || continue
 		g=$(stat -c '%g' "$n" 2>/dev/null)
-		[ -n "$render_gid" ] || render_gid="$g"
+		[[ -n "$render_gid" ]] || render_gid="$g"
 		vendor=$(cat "/sys/class/drm/$(basename "$n")/device/vendor" 2>/dev/null || true)
 		case "$vendor" in
 		0x8086)
-			[ -n "$intel_render_gid" ] || intel_render_gid="$g"
+			[[ -n "$intel_render_gid" ]] || intel_render_gid="$g"
 			note "  $n -> GID $g  vendor=$vendor (Intel; HOST_INTEL_RENDER_GID)"
 			;;
 		"") note "  $n -> GID $g  (vendor unreadable)" ;;
@@ -103,11 +113,11 @@ else
 	# Only an Intel-vendor render node counts. Inferring Intel from any render node made an
 	# NVIDIA+AMD host look hybrid and selected the nvidia-intel image, whose Intel half then
 	# has no device to reach.
-	[ -n "$intel_render_gid" ] && has_intel_gpu=true
+	[[ -n "$intel_render_gid" ]] && has_intel_gpu=true
 fi
 
 hdr "Intel NPU (/dev/accel)"
-if [ -e /dev/accel ] || ls /dev/accel* >/dev/null 2>&1; then
+if [[ -e /dev/accel ]] || ls /dev/accel* >/dev/null 2>&1; then
 	has_intel_npu=true
 	note "$(ls -l /dev/accel* 2>/dev/null)"
 else
@@ -115,7 +125,7 @@ else
 fi
 
 hdr "AMD ROCm (/dev/kfd)"
-if [ -e /dev/kfd ]; then
+if [[ -e /dev/kfd ]]; then
 	has_amd=true
 	note "/dev/kfd present"
 	have rocm-smi && note "$(rocm-smi --showproductname 2>/dev/null | grep -i 'card' || true)"
@@ -146,9 +156,9 @@ target="cpu"
 # this script exists to prevent. has_intel_gpu / has_amd stay as reported inventory in the
 # JSON; only these two gate the recommendation.
 has_intel_device=false
-if [ -n "$intel_render_gid" ] || $has_intel_npu; then has_intel_device=true; fi
+if [[ -n "$intel_render_gid" ]] || $has_intel_npu; then has_intel_device=true; fi
 has_amd_device=false
-if [ -e /dev/kfd ]; then has_amd_device=true; fi
+if [[ -e /dev/kfd ]]; then has_amd_device=true; fi
 
 if $has_nvidia && $has_nvidia_toolkit && $has_intel_device; then
 	target="nvidia-intel"
@@ -179,7 +189,7 @@ fi
 # the audit printed a HOST_INTEL_RENDER_GID line that looked like working Intel wiring.
 render_gid="${intel_render_gid:-}"
 
-if [ "$MODE" = "json" ]; then
+if [[ "$MODE" = "json" ]]; then
 	printf '{"nvidia":%s,"nvidia_toolkit":%s,"intel_gpu":%s,"intel_npu":%s,"amd":%s,"render_gid":"%s","intel_gpu_top":%s,"disk_free":"%s","recommended_target":"%s"}\n' \
 		"$has_nvidia" "$has_nvidia_toolkit" "$has_intel_gpu" "$has_intel_npu" "$has_amd" \
 		"${render_gid}" "$intel_gpu_top" "${disk_free}" "$target"
@@ -189,7 +199,7 @@ fi
 hdr "Recommendation"
 note "BUILD_TARGET=$target"
 note "docker compose -f docker-compose.yml -f docker-compose.${target}.yml up -d --build"
-if { [ "$target" = "intel" ] || [ "$target" = "nvidia-intel" ]; } && [ -n "$render_gid" ]; then
+if { [[ "$target" = "intel" ]] || [[ "$target" = "nvidia-intel" ]]; } && [[ -n "$render_gid" ]]; then
 	note "HOST_INTEL_RENDER_GID=$render_gid"
 fi
 $has_intel_npu || note "Intel NPU absent: do NOT claim NPU validation on this host."
@@ -200,7 +210,7 @@ note "  RUN_REAL_ASR=1 python3 -m pytest tests/integration/test_transcription_ac
 note "A correct transcript proves decoding, not acceleration -- pair with nvidia-smi"
 note "--query-compute-apps (CUDA) or intel_gpu_top (Intel) evidence."
 
-if [ "$MODE" = "env" ]; then
+if [[ "$MODE" = "env" ]]; then
 	touch .env
 	# Rewritten by filtering the file rather than with `sed -i`, whose in-place form is a GNU
 	# extension: on macOS/BSD `sed -i "s/.../"` reads the next argument as a backup suffix and
@@ -212,10 +222,11 @@ if [ "$MODE" = "env" ]; then
 		tmp="$(mktemp)"
 		grep -v "^${key}=" .env >"$tmp" || true
 		printf '%s=%s\n' "$key" "$value" >>"$tmp"
-		mv "$tmp" .env
+		mv "$tmp" .env || return 1
+		return 0
 	}
 	set_env_key BUILD_TARGET "$target"
-	if { [ "$target" = "intel" ] || [ "$target" = "nvidia-intel" ]; } && [ -n "$render_gid" ]; then
+	if { [[ "$target" = "intel" ]] || [[ "$target" = "nvidia-intel" ]]; } && [[ -n "$render_gid" ]]; then
 		set_env_key HOST_INTEL_RENDER_GID "$render_gid"
 	fi
 	echo

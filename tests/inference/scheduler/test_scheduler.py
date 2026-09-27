@@ -43,10 +43,10 @@ def simulate_confirmation():
     return t
 
 
-def test_wait_for_priority_sets_flags():
+def test_wait_for_priority_sets_flags(monkeypatch):
     """Test that wait_for_priority sets the correct flags."""
-    scheduler.STATE.active_sessions = 2
-    scheduler.STATE.accel_limit = 1
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 2)
+    monkeypatch.setattr(scheduler.STATE, "accel_limit", 1)
 
     # Run simulation in background
     with mock.patch("modules.inference.scheduler.logger"):
@@ -75,13 +75,13 @@ def test_wait_for_priority_sets_flags():
         t.join()
 
 
-def test_release_priority_clears_flags():
+def test_release_priority_clears_flags(monkeypatch):
     """Test that release_priority clears flags when counter reaches 0."""
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
-    utils.THREAD_CONTEXT.is_priority = True
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
     scheduler.release_priority()
 
     assert scheduler.STATE.priority_requests == 0
@@ -89,9 +89,9 @@ def test_release_priority_clears_flags():
     assert scheduler.STATE.resume_event.is_set()
 
 
-def test_release_priority_resumes_single_unit_when_no_queued_priority_remains():
+def test_release_priority_resumes_single_unit_when_no_queued_priority_remains(monkeypatch):
     """Single-unit deployments must resume ASR immediately when detect-language backlog is empty."""
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
@@ -100,8 +100,8 @@ def test_release_priority_resumes_single_unit_when_no_queued_priority_remains():
     u_sync["resume_event"].clear()
     scheduler.STATE.targeted_units.add("CPU")
 
-    utils.THREAD_CONTEXT.is_priority = True
-    utils.THREAD_CONTEXT.target_unit_id = "CPU"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", "CPU", raising=False)
 
     scheduler.release_priority()
 
@@ -114,7 +114,7 @@ def test_release_priority_resumes_single_unit_when_no_queued_priority_remains():
     assert u_sync["resume_event"].is_set()
 
 
-def test_wait_for_pause_confirmation_returns_when_target_has_no_active_standard():
+def test_wait_for_pause_confirmation_returns_when_target_has_no_active_standard(monkeypatch):
     """Targeted confirmation should not block on unrelated active standard tasks."""
     from modules.inference.scheduler import SchedulerState
 
@@ -125,7 +125,7 @@ def test_wait_for_pause_confirmation_returns_when_target_has_no_active_standard(
             {"id": "NPU.0", "type": "NPU", "name": "Intel NPU"},
         ],
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
     scheduler.STATE.task_registry["other_active"] = {
         "task_id": "other_active",
@@ -139,9 +139,9 @@ def test_wait_for_pause_confirmation_returns_when_target_has_no_active_standard(
     assert time.time() - start < 0.2
 
 
-def test_release_priority_keeps_pause_asserted_when_priority_tasks_queued():
+def test_release_priority_keeps_pause_asserted_when_priority_tasks_queued(monkeypatch):
     """Queued detect-language backlog should keep pause asserted."""
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
@@ -152,7 +152,7 @@ def test_release_priority_keeps_pause_asserted_when_priority_tasks_queued():
         "unit_id": None,
     }
 
-    utils.THREAD_CONTEXT.is_priority = True
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
     scheduler.release_priority()
 
     assert scheduler.STATE.priority_requests == 0
@@ -160,9 +160,9 @@ def test_release_priority_keeps_pause_asserted_when_priority_tasks_queued():
     assert not scheduler.STATE.resume_event.is_set()
 
 
-def test_release_priority_ignores_coalesced_priority_followers_for_pause():
+def test_release_priority_ignores_coalesced_priority_followers_for_pause(monkeypatch):
     """Coalesced queued followers must not block ASR resume when active priority work is done."""
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
@@ -174,7 +174,7 @@ def test_release_priority_ignores_coalesced_priority_followers_for_pause():
         "coalesced": True,
     }
 
-    utils.THREAD_CONTEXT.is_priority = True
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
     scheduler.release_priority()
 
     assert scheduler.STATE.priority_requests == 0
@@ -182,14 +182,14 @@ def test_release_priority_ignores_coalesced_priority_followers_for_pause():
     assert scheduler.STATE.resume_event.is_set()
 
 
-def test_release_priority_ignores_duplicate_queued_priority_same_source():
+def test_release_priority_ignores_duplicate_queued_priority_same_source(monkeypatch):
     """Queued detect-language retries for the same source must keep the system paused."""
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
     current_task_id = "active_priority_ld"
-    utils.THREAD_CONTEXT.task_id = current_task_id
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", current_task_id, raising=False)
 
     scheduler.STATE.task_registry[current_task_id] = {
         "task_id": current_task_id,
@@ -206,7 +206,7 @@ def test_release_priority_ignores_duplicate_queued_priority_same_source():
         "request_json": {"video_file": "/tv/American Dad!/Specials/American Dad! - S00E05 - I Love Patrick Stewart SDTV.mp4"},
     }
 
-    utils.THREAD_CONTEXT.is_priority = True
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
     scheduler.release_priority()
 
     assert scheduler.STATE.priority_requests == 0
@@ -214,7 +214,7 @@ def test_release_priority_ignores_duplicate_queued_priority_same_source():
     assert not scheduler.STATE.resume_event.is_set()
 
 
-def test_release_priority_resumes_when_backlog_below_capacity_on_two_units():
+def test_release_priority_resumes_when_backlog_below_capacity_on_two_units(monkeypatch):
     """On two units, one queued priority task should not keep ASR paused."""
     from modules.inference.scheduler import SchedulerState
 
@@ -225,9 +225,9 @@ def test_release_priority_resumes_when_backlog_below_capacity_on_two_units():
             {"id": "NPU.0", "type": "NPU", "name": "Intel NPU"},
         ],
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
@@ -238,7 +238,7 @@ def test_release_priority_resumes_when_backlog_below_capacity_on_two_units():
         "unit_id": None,
     }
 
-    utils.THREAD_CONTEXT.is_priority = True
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
     scheduler.release_priority()
 
     assert scheduler.STATE.priority_requests == 0
@@ -246,7 +246,7 @@ def test_release_priority_resumes_when_backlog_below_capacity_on_two_units():
     assert scheduler.STATE.resume_event.is_set()
 
 
-def test_release_priority_resumes_only_released_unit_when_other_unit_priority_is_active():
+def test_release_priority_resumes_only_released_unit_when_other_unit_priority_is_active(monkeypatch):
     """Releasing priority on one unit must not keep that unit paused due to requests on another unit."""
     from modules.inference.scheduler import SchedulerState
 
@@ -257,9 +257,9 @@ def test_release_priority_resumes_only_released_unit_when_other_unit_priority_is
             {"id": "NPU.0", "type": "NPU", "name": "Intel NPU"},
         ],
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
-    scheduler.STATE.priority_requests = 2
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 2)
     scheduler.STATE.unit_priority_requests["GPU.0"] = 1
     scheduler.STATE.unit_priority_requests["NPU.0"] = 1
 
@@ -270,8 +270,8 @@ def test_release_priority_resumes_only_released_unit_when_other_unit_priority_is
     npu_sync["pause_requested"].set()
     npu_sync["resume_event"].clear()
 
-    utils.THREAD_CONTEXT.is_priority = True
-    utils.THREAD_CONTEXT.target_unit_id = "NPU.0"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", "NPU.0", raising=False)
     scheduler.release_priority()
 
     assert (
@@ -297,16 +297,16 @@ def test_release_priority_resumes_only_released_unit_when_other_unit_priority_is
         (4, 4, True),
     ],
 )
-def test_release_priority_respects_capacity_threshold(unit_count, queued_priority_count, expect_paused):
+def test_release_priority_respects_capacity_threshold(unit_count, queued_priority_count, expect_paused, monkeypatch):
     """Pause should remain only when queued priority backlog saturates unit capacity."""
     from modules.inference.scheduler import SchedulerState
 
     hardware_units = [{"id": f"U{i}", "type": "CPU", "name": f"Unit {i}"} for i in range(unit_count)]
 
     with mock.patch("modules.core.config.HARDWARE_UNITS", hardware_units):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
 
@@ -322,7 +322,7 @@ def test_release_priority_respects_capacity_threshold(unit_count, queued_priorit
         }
     )
 
-    utils.THREAD_CONTEXT.is_priority = True
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
     scheduler.release_priority()
 
     assert (
@@ -332,10 +332,10 @@ def test_release_priority_respects_capacity_threshold(unit_count, queued_priorit
     ) == (0, expect_paused, not expect_paused)
 
 
-def test_multiple_priority_requests_tracked():
+def test_multiple_priority_requests_tracked(monkeypatch):
     """Test that multiple priority requests are tracked correctly."""
-    scheduler.STATE.active_sessions = 2
-    scheduler.STATE.accel_limit = 1
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 2)
+    monkeypatch.setattr(scheduler.STATE, "accel_limit", 1)
 
     def p_task():
         scheduler.wait_for_priority()
@@ -371,10 +371,10 @@ def test_multiple_priority_requests_tracked():
     assert not scheduler.STATE.pause_requested.is_set()
 
 
-def test_release_priority_doesnt_go_negative():
+def test_release_priority_doesnt_go_negative(monkeypatch):
     """Test that release_priority doesn't make counter negative."""
-    scheduler.STATE.priority_requests = 0
-    utils.THREAD_CONTEXT.is_priority = True
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 0)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
     scheduler.release_priority()
     assert scheduler.STATE.priority_requests == 0
 
@@ -451,12 +451,24 @@ def test_archive_registry_task_normalizes_history_hardware_fields():
     ) == ("CPU", "CPU", "CPU", "CPU", "CPU", "CPU")
 
 
+def _raise_boom_inside(registration, record_failure_first=False):
+    """Raise ``RuntimeError("boom")`` inside the given task-registration context.
+
+    With ``record_failure_first`` the worker records an explicit failure before re-raising,
+    mirroring the init-failure path that must not be overwritten by the uncaught exception.
+    """
+    with registration:
+        if record_failure_first:
+            scheduler.record_task_failure("init failed", 400, context="ASR")
+        raise RuntimeError("boom")
+
+
 def test_early_task_registration_exception_records_failure_payload():
     """Uncaught worker exceptions should archive error payloads and logs."""
+    registration = scheduler.early_task_registration(task_type="Language Detection", filename="test.mkv", is_priority=True)
     with mock.patch("modules.inference.scheduler.history_manager.log_completed_task") as log_mock:
         with pytest.raises(RuntimeError, match="boom"):
-            with scheduler.early_task_registration(task_type="Language Detection", filename="test.mkv", is_priority=True):
-                raise RuntimeError("boom")
+            _raise_boom_inside(registration)
 
     log_mock.assert_called_once()
     task = log_mock.call_args.args[0]
@@ -468,11 +480,10 @@ def test_early_task_registration_exception_records_failure_payload():
 
 def test_early_task_registration_skips_duplicate_failure_recording():
     """Explicit record_task_failure before re-raise must not overwrite the first failure."""
+    registration = scheduler.early_task_registration(task_type="ASR", filename="test.mkv")
     with mock.patch("modules.inference.scheduler.history_manager.log_completed_task") as log_mock:
         with pytest.raises(RuntimeError, match="boom"):
-            with scheduler.early_task_registration(task_type="ASR", filename="test.mkv"):
-                scheduler.record_task_failure("init failed", 400, context="ASR")
-                raise RuntimeError("boom")
+            _raise_boom_inside(registration, record_failure_first=True)
 
     log_mock.assert_called_once()
     task = log_mock.call_args.args[0]
@@ -529,10 +540,10 @@ def test_priority_skips_ffmpeg_drain_when_idle_unit_available():
             t.join(timeout=2.0)
 
 
-def test_priority_does_not_wait_for_ffmpeg_drain_when_preemption_is_needed():
+def test_priority_does_not_wait_for_ffmpeg_drain_when_preemption_is_needed(monkeypatch):
     """At capacity, priority should not be blocked by unrelated standard FFmpeg."""
     # Force at-capacity state so preemption is triggered
-    scheduler.STATE.active_sessions = 2  # > accel_limit=1
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 2)  # > accel_limit=1
 
     with utils.STANDARD_FFMPEG_COND:
         utils.STANDARD_FFMPEG_STATE["count"] = 1

@@ -15,9 +15,9 @@ git config --global --add safe.directory "$(pwd)" || true
 # any gate runs -- so a non-Docker invocation fails fast instead of only after
 # minutes of unrelated work. SKIP_REAL_E2E stays scoped to skipping only the
 # real-backend E2E phase further below; it must never bypass this Docker requirement.
-if [ "${WHISPER_PRO_ASR_TEST_IMAGE:-}" != "1" ]; then
-	echo "Error: quality gates require WHISPER_PRO_ASR_TEST_IMAGE=1 (Dockerfile.test target test)."
-	echo "Use scripts/ci/build-and-test.sh or scripts/ci/build-and-test.ps1."
+if [[ "${WHISPER_PRO_ASR_TEST_IMAGE:-}" != "1" ]]; then
+	echo "Error: quality gates require WHISPER_PRO_ASR_TEST_IMAGE=1 (Dockerfile.test target test)." >&2
+	echo "Use scripts/ci/build-and-test.sh or scripts/ci/build-and-test.ps1." >&2
 	exit 1
 fi
 
@@ -32,12 +32,13 @@ STAGE="${PIPELINE_STAGE:-all}"
 case "$STAGE" in
 all | lint | python-tests | js-unit-tests | e2e-fixture | e2e-real | real-audio | real-audio-stress) ;;
 *)
-	echo "Error: unknown PIPELINE_STAGE '$STAGE'. Expected one of: all, lint, python-tests, js-unit-tests, e2e-fixture, e2e-real, real-audio, real-audio-stress."
+	echo "Error: unknown PIPELINE_STAGE '$STAGE'. Expected one of: all, lint, python-tests, js-unit-tests, e2e-fixture, e2e-real, real-audio, real-audio-stress." >&2
 	exit 1
 	;;
 esac
 stage_active() {
-	[ "$STAGE" = "all" ] || [ "$STAGE" = "$1" ]
+	local stage="$1"
+	[[ "$STAGE" = "all" ]] || [[ "$STAGE" = "$stage" ]]
 }
 
 # Persistent tool run-time cache root. Mounted as a named Docker volume by
@@ -66,13 +67,13 @@ ensure_hadolint() {
 	elif command -v curl >/dev/null 2>&1; then
 		curl -fsSL -o "$tmp_file" "$url"
 	else
-		echo "Error: hadolint is missing and neither wget nor curl is available to auto-install it."
+		echo "Error: hadolint is missing and neither wget nor curl is available to auto-install it." >&2
 		rm -f "$tmp_file"
 		exit 1
 	fi
 
 	if ! printf '%s  %s\n' "$HADOLINT_SHA256" "$tmp_file" | sha256sum -c - >/dev/null 2>&1; then
-		echo "Error: hadolint checksum verification failed."
+		echo "Error: hadolint checksum verification failed." >&2
 		rm -f "$tmp_file"
 		exit 1
 	fi
@@ -82,7 +83,7 @@ ensure_hadolint() {
 	export PATH="$target_dir:$PATH"
 
 	if ! command -v hadolint >/dev/null 2>&1; then
-		echo "Error: Failed to auto-install hadolint."
+		echo "Error: Failed to auto-install hadolint." >&2
 		exit 1
 	fi
 }
@@ -96,16 +97,14 @@ ensure_shellcheck() {
 	SHELLCHECK_SHA256="${SHELLCHECK_SHA256:-8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198}"
 
 	if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
-		if sudo -n apt-get update && sudo -n apt-get install -y shellcheck; then
-			if command -v shellcheck >/dev/null 2>&1; then
-				return 0
-			fi
+		if sudo -n apt-get update && sudo -n apt-get install -y shellcheck &&
+			command -v shellcheck >/dev/null 2>&1; then
+			return 0
 		fi
-	elif [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
-		if apt-get update && apt-get install -y shellcheck; then
-			if command -v shellcheck >/dev/null 2>&1; then
-				return 0
-			fi
+	elif [[ "$(id -u)" -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
+		if apt-get update && apt-get install -y shellcheck &&
+			command -v shellcheck >/dev/null 2>&1; then
+			return 0
 		fi
 	fi
 
@@ -120,26 +119,26 @@ ensure_shellcheck() {
 	elif command -v curl >/dev/null 2>&1; then
 		curl -fsSL -o "$archive_path" "$archive_url"
 	else
-		echo "Error: shellcheck is missing and neither wget nor curl is available to auto-install it."
+		echo "Error: shellcheck is missing and neither wget nor curl is available to auto-install it." >&2
 		rm -rf "$tmp_dir"
 		exit 1
 	fi
 
 	if ! printf '%s  %s\n' "$SHELLCHECK_SHA256" "$archive_path" | sha256sum -c - >/dev/null 2>&1; then
-		echo "Error: shellcheck checksum verification failed."
+		echo "Error: shellcheck checksum verification failed." >&2
 		rm -rf "$tmp_dir"
 		exit 1
 	fi
 
 	if ! tar -xJf "$archive_path" -C "$tmp_dir"; then
-		echo "Error: Failed to extract shellcheck archive."
+		echo "Error: Failed to extract shellcheck archive." >&2
 		rm -rf "$tmp_dir"
 		exit 1
 	fi
 
 	shellcheck_binary="${tmp_dir}/shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
-	if [ ! -f "$shellcheck_binary" ]; then
-		echo "Error: ShellCheck binary not found after extraction."
+	if [[ ! -f "$shellcheck_binary" ]]; then
+		echo "Error: ShellCheck binary not found after extraction." >&2
 		rm -rf "$tmp_dir"
 		exit 1
 	fi
@@ -150,7 +149,7 @@ ensure_shellcheck() {
 	rm -rf "$tmp_dir"
 
 	if ! command -v shellcheck >/dev/null 2>&1; then
-		echo "Error: Failed to auto-install shellcheck."
+		echo "Error: Failed to auto-install shellcheck." >&2
 		exit 1
 	fi
 }
@@ -185,26 +184,26 @@ run_radon_complexity_gate() {
 	local violations
 	violations="$(grep -E '^[[:space:]]+[FMCA][[:space:]]+.*[[:space:]][B-F][[:space:]]+\(' complexity_output.txt || true)"
 	rm -f "$source_list"
-	if [ -n "$violations" ]; then
-		echo "Error: The following blocks do not meet the rank-A complexity requirement (complexity <= 5):"
-		echo "$violations"
+	if [[ -n "$violations" ]]; then
+		echo "Error: The following blocks do not meet the rank-A complexity requirement (complexity <= 5):" >&2
+		echo "$violations" >&2
 		return 1
 	fi
 }
 
 # Activate virtual environment if running locally and it exists
-if [ "$CI" != "true" ]; then
-	if [ -d ".venv" ]; then
+if [[ "$CI" != "true" ]]; then
+	if [[ -d ".venv" ]]; then
 		VENV_BIN_PATH="$(pwd)/.venv/bin"
 		export PATH="${VENV_BIN_PATH}:$PATH"
-	elif [ -d "venv" ]; then
+	elif [[ -d "venv" ]]; then
 		VENV_BIN_PATH="$(pwd)/venv/bin"
 		export PATH="${VENV_BIN_PATH}:$PATH"
 	fi
 fi
 
 if stage_active lint; then
-	if [ "$SKIP_LINT" != "1" ]; then
+	if [[ "$SKIP_LINT" != "1" ]]; then
 		git init -q >/dev/null 2>&1
 
 		# One-time bootstrap (network-dependent, must complete before the tools
@@ -250,9 +249,9 @@ if stage_active lint; then
 		for candidate in "${shell_files[@]}"; do
 			skip=0
 			for remote in "${remote_shell_files[@]}"; do
-				[ "$candidate" = "$remote" ] && skip=1
+				[[ "$candidate" = "$remote" ]] && skip=1
 			done
-			[ "$skip" -eq 0 ] && strict_shell_files+=("$candidate")
+			[[ "$skip" -eq 0 ]] && strict_shell_files+=("$candidate")
 		done
 
 		# The independent lint/security tools below share no inter-tool ordering
@@ -320,10 +319,10 @@ if stage_active lint; then
 				FAIL=1
 			fi
 		done
-		if [ -d /reports ] && [ -f complexity_output.txt ]; then
+		if [[ -d /reports ]] && [[ -f complexity_output.txt ]]; then
 			cp complexity_output.txt /reports/complexity_output.txt
 		fi
-		if [ "$FAIL" -ne 0 ]; then
+		if [[ "$FAIL" -ne 0 ]]; then
 			exit 1
 		fi
 		echo "--- Lint/Security Suite Completed Successfully ---"
@@ -413,8 +412,8 @@ for junit_file in ("pytest-bulk.xml", "pytest-serial.xml"):
 ET.ElementTree(merged).write("pytest.xml", encoding="unicode")
 PYEOF
 
-	if [ "$BULK_EXIT" -ne 0 ] || [ "$SERIAL_EXIT" -ne 0 ] || [ "$COMBINE_EXIT" -ne 0 ]; then
-		echo "Error: pytest stage failed (bulk=$BULK_EXIT serial=$SERIAL_EXIT coverage-gate=$COMBINE_EXIT)"
+	if [[ "$BULK_EXIT" -ne 0 ]] || [[ "$SERIAL_EXIT" -ne 0 ]] || [[ "$COMBINE_EXIT" -ne 0 ]]; then
+		echo "Error: pytest stage failed (bulk=$BULK_EXIT serial=$SERIAL_EXIT coverage-gate=$COMBINE_EXIT)" >&2
 		exit 1
 	fi
 
@@ -426,18 +425,18 @@ PYEOF
 	mkdir -p assets
 	genbadge coverage -i coverage.xml -o assets/coverage.svg
 
-	if [ ! -s assets/coverage.svg ]; then
-		echo "Error: Coverage badge was not generated or is empty at assets/coverage.svg"
+	if [[ ! -s assets/coverage.svg ]]; then
+		echo "Error: Coverage badge was not generated or is empty at assets/coverage.svg" >&2
 		exit 1
 	fi
 
 	# Copy reports to /reports if mounted (before final checks so reports are available even on failure)
-	if [ -d /reports ]; then
+	if [[ -d /reports ]]; then
 		echo "--- Copying reports to /reports volume ---"
 		cp coverage.xml /reports/coverage.xml
 		cp coverage_output.txt /reports/coverage_output.txt
 		cp pytest.xml /reports/pytest.xml
-		if [ -f complexity_output.txt ]; then
+		if [[ -f complexity_output.txt ]]; then
 			cp complexity_output.txt /reports/complexity_output.txt
 		fi
 	fi
@@ -450,7 +449,7 @@ if stage_active e2e-fixture; then
 fi
 
 if stage_active e2e-real; then
-	if [ "${SKIP_REAL_E2E:-0}" != "1" ]; then
+	if [[ "${SKIP_REAL_E2E:-0}" != "1" ]]; then
 		echo ""
 		echo "--- Running Real-Backend E2E Tests (Playwright against the real FastAPI app) ---"
 		# WHISPER_PRO_ASR_TEST_IMAGE is already validated at script startup, before any
@@ -487,27 +486,27 @@ run_real_audio() {
 	else
 		exit_code=$?
 	fi
-	if [ "$exit_code" -eq 5 ]; then
+	if [[ "$exit_code" -eq 5 ]]; then
 		# pytest's "no tests collected". Distinct from a real failure and worth naming: it
 		# means the marker expression selected nothing -- a renamed marker, or a manifest
 		# whose smoke entries all vanished -- and the stage would otherwise read as an
 		# ordinary failure with no clue which of the two happened.
-		echo "Error: real-audio stage collected no tests (pytest exit 5); the marker expression selected nothing."
+		echo "Error: real-audio stage collected no tests (pytest exit 5); the marker expression selected nothing." >&2
 		exit 5
 	fi
-	if [ "$exit_code" -ne 0 ]; then
-		echo "Error: real-audio stage failed (exit=$exit_code)"
+	if [[ "$exit_code" -ne 0 ]]; then
+		echo "Error: real-audio stage failed (exit=$exit_code)" >&2
 		exit "$exit_code"
 	fi
 }
 
-if [ "$STAGE" = "real-audio" ]; then
+if [[ "$STAGE" = "real-audio" ]]; then
 	echo ""
 	echo "--- Running Real-Audio Smoke Set (live service, target <20min) ---"
 	run_real_audio -m "real_audio and smoke"
 fi
 
-if [ "$STAGE" = "real-audio-stress" ]; then
+if [[ "$STAGE" = "real-audio-stress" ]]; then
 	echo ""
 	echo "--- Running Full Real-Audio Matrix (live service, ~2h) ---"
 	run_real_audio -m "real_audio and not slow"

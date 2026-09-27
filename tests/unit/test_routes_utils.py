@@ -246,7 +246,7 @@ def test_extract_uploaded_file():
     assert routes_utils.extract_uploaded_file(None, None, {"some_random_key": dummy_file}) == dummy_file
 
 
-def test_resolve_local_path_dynamic_approved_roots(tmp_path):
+def test_resolve_local_path_dynamic_approved_roots(tmp_path, monkeypatch):
     """Verify resolve_local_path with configuration of APPROVED_ROOTS environment variable."""
     # 1. Path outside approved roots returns None (graceful fallback to upload)
     outside_path = "/some/random/unapproved/path/outside_file.wav"
@@ -256,37 +256,36 @@ def test_resolve_local_path_dynamic_approved_roots(tmp_path):
     test_file = tmp_path / "test_file.wav"
     test_file.write_text("audio data")
 
-    original_roots = config.APPROVED_ROOTS
-    config.APPROVED_ROOTS = [str(tmp_path)]
-    try:
-        res = routes_utils.resolve_local_path(str(test_file))
-        assert res == os.path.realpath(str(test_file))
-    finally:
-        config.APPROVED_ROOTS = original_roots
+    monkeypatch.setattr(config, "APPROVED_ROOTS", [str(tmp_path)])
+    res = routes_utils.resolve_local_path(str(test_file))
+    assert res == os.path.realpath(str(test_file))
 
 
-def test_resolve_local_path_logs_once_per_request(tmp_path):
+def test_resolve_local_path_logs_once_per_request(tmp_path, monkeypatch):
     """The optimization log should appear on the first lookup."""
     test_file = tmp_path / "mapped_movie.mkv"
     test_file.write_text("media")
 
     with _temporary_approved_roots(tmp_path):
-        routes_utils.utils.THREAD_CONTEXT.optimized_local_path_logged = None
+        # raising=False: the flag may not exist in this context yet; monkeypatch removes or
+        # restores it on teardown so the next request starts clean.
+        monkeypatch.setattr(routes_utils.utils.THREAD_CONTEXT, "optimized_local_path_logged", None, raising=False)
         with mock.patch("modules.api.support.source_resolution.logger.info") as info_mock:
             first = routes_utils.resolve_local_path(str(test_file))
 
             assert first == os.path.realpath(str(test_file))
             assert _count_optimization_logs(info_mock.call_args_list) == 1
-        routes_utils.utils.THREAD_CONTEXT.optimized_local_path_logged = None
 
 
-def test_resolve_local_path_suppresses_duplicate_optimization_log(tmp_path):
+def test_resolve_local_path_suppresses_duplicate_optimization_log(tmp_path, monkeypatch):
     """A second lookup in the same request should not log the optimization again."""
     test_file = tmp_path / "mapped_movie.mkv"
     test_file.write_text("media")
 
     with _temporary_approved_roots(tmp_path):
-        routes_utils.utils.THREAD_CONTEXT.optimized_local_path_logged = None
+        # raising=False: the flag may not exist in this context yet; monkeypatch removes or
+        # restores it on teardown so the next request starts clean.
+        monkeypatch.setattr(routes_utils.utils.THREAD_CONTEXT, "optimized_local_path_logged", None, raising=False)
         with mock.patch("modules.api.support.source_resolution.logger.info") as info_mock:
             first = routes_utils.resolve_local_path(str(test_file))
             second = routes_utils.resolve_local_path(str(test_file))
@@ -294,7 +293,6 @@ def test_resolve_local_path_suppresses_duplicate_optimization_log(tmp_path):
             assert first == os.path.realpath(str(test_file))
             assert second == os.path.realpath(str(test_file))
             assert _count_optimization_logs(info_mock.call_args_list) == 1
-        routes_utils.utils.THREAD_CONTEXT.optimized_local_path_logged = None
 
 
 def test_prepare_source_path_local_missing_raises():
@@ -399,7 +397,8 @@ def test_extract_ext_extensionless_original_with_local_path():
     extract_ext = routes_utils.extract_ext
     assert extract_ext("audio_file_no_ext", "/mnt/media/local_audio.mp3") == ".mp3"
     assert extract_ext("", "/mnt/media/local_audio.flac") == ".flac"
-    assert extract_ext("audio.wav", "/mnt/media/local_audio.mp3") == ".wav" and extract_ext("", "") == ".tmp"
+    assert extract_ext("audio.wav", "/mnt/media/local_audio.mp3") == ".wav"
+    assert extract_ext("", "") == ".tmp"
 
 
 def test_extract_ext_input_flags_and_candidates():

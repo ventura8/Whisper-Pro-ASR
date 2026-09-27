@@ -11,25 +11,23 @@ from modules.core import utils
 
 
 @pytest.mark.anyio
-async def test_resolve_and_materialize_upload_clears_raw_pcm_flags_for_local_path():
+async def test_resolve_and_materialize_upload_clears_raw_pcm_flags_for_local_path(monkeypatch):
     """Mapped media must not inherit raw-upload flags before its zero-copy return."""
-    original_flags = getattr(utils.THREAD_CONTEXT, "input_flags", None)
     mock_req = mock.MagicMock()
     mock_req.query_params = {"raw_pcm": "true"}
     dummy_file = UploadFile(file=io.BytesIO(b"audio"), filename="raw.pcm")
-    try:
-        utils.THREAD_CONTEXT.input_flags = None
-        with (
-            mock.patch("modules.api.support.request_utils.resolve_local_path", return_value="/mapped/raw.pcm"),
-            mock.patch("modules.api.support.request_utils.extract_uploaded_file", return_value=dummy_file),
-            mock.patch("modules.api.support.request_utils.materialize_upload_file") as materialize_mock,
-        ):
-            path, upload = await request_utils.resolve_and_materialize_upload("/raw.pcm", dummy_file, None, {}, mock_req)
-        assert path == "/mapped/raw.pcm" and upload is None
-        materialize_mock.assert_not_called()
-        assert utils.THREAD_CONTEXT.input_flags is None
-    finally:
-        utils.THREAD_CONTEXT.input_flags = original_flags
+    # monkeypatch puts the previous input flags back on teardown.
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "input_flags", None)
+    with (
+        mock.patch("modules.api.support.request_utils.resolve_local_path", return_value="/mapped/raw.pcm"),
+        mock.patch("modules.api.support.request_utils.extract_uploaded_file", return_value=dummy_file),
+        mock.patch("modules.api.support.request_utils.materialize_upload_file") as materialize_mock,
+    ):
+        path, upload = await request_utils.resolve_and_materialize_upload("/raw.pcm", dummy_file, None, {}, mock_req)
+    assert path == "/mapped/raw.pcm"
+    assert upload is None
+    materialize_mock.assert_not_called()
+    assert utils.THREAD_CONTEXT.input_flags is None
 
 
 def test_prepare_source_path_clears_input_flags_and_probes_natively():

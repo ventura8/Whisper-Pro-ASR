@@ -96,7 +96,7 @@ def test_concurrency_priority_non_preemptive():
     }
 
 
-def test_concurrency_fallback_no_deadlock():
+def test_concurrency_fallback_no_deadlock(monkeypatch):
     """Verify that language detection fallback does not trigger a re-entrancy deadlock."""
     from modules.inference.pipeline import language_detection
     from modules.inference.scheduler import SchedulerState
@@ -108,7 +108,7 @@ def test_concurrency_fallback_no_deadlock():
         mock.patch("modules.inference.runtime.model_manager.unload_models"),
         mock.patch("modules.inference.pipeline.language_detection.utils.get_audio_duration", return_value=30),
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
         model_manager.MODEL_POOL.clear()
         model_manager.PREPROCESSOR_POOL.clear()
@@ -130,7 +130,7 @@ def test_concurrency_fallback_no_deadlock():
             mock_core.assert_called_once()
 
 
-def test_concurrency_priority_task_failure_resumes_standard_task():
+def test_concurrency_priority_task_failure_resumes_standard_task(monkeypatch):
     """Verify that if a priority task fails/errors, any paused standard task resumes."""
     from modules.inference.scheduler import SchedulerState
 
@@ -140,14 +140,14 @@ def test_concurrency_priority_task_failure_resumes_standard_task():
         mock.patch("modules.core.config.HARDWARE_UNITS", hw_list),
         mock.patch("modules.inference.runtime.model_manager.unload_models"),
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
         model_manager.MODEL_POOL.clear()
         model_manager.PREPROCESSOR_POOL.clear()
         model_manager.MODEL_POOL["NPU.0"] = mock.MagicMock()
         model_manager.PREPROCESSOR_POOL["NPU.0"] = mock.MagicMock()
 
-        utils.THREAD_CONTEXT.is_priority = False
+        monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", False, raising=False)
         events = []
 
         t_trans = threading.Thread(target=helper_run_transcription, args=(events, "1", 3, 0.3))
@@ -180,7 +180,7 @@ def test_concurrency_priority_task_failure_resumes_standard_task():
         assert "transcription_1_done" in events
 
 
-def test_concurrency_multiple_priority_tasks_allow_parallel_registration():
+def test_concurrency_multiple_priority_tasks_allow_parallel_registration(monkeypatch):
     """Verify that priority task registration is not serialized."""
     from modules.inference.scheduler import SchedulerState
 
@@ -190,7 +190,7 @@ def test_concurrency_multiple_priority_tasks_allow_parallel_registration():
         mock.patch("modules.core.config.HARDWARE_UNITS", hw_list),
         mock.patch("modules.inference.runtime.model_manager.unload_models"),
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
         model_manager.MODEL_POOL.clear()
         model_manager.PREPROCESSOR_POOL.clear()
@@ -225,7 +225,7 @@ def test_concurrency_multiple_priority_tasks_allow_parallel_registration():
         assert events.index("prio_2_registered") < events.index("prio_1_done")
 
 
-def test_standard_task_not_blocked_by_queued_priority_registration():
+def test_standard_task_not_blocked_by_queued_priority_registration(monkeypatch):
     """Queued priority registration alone should not gate standard acquisition."""
     from modules.inference.scheduler import SchedulerState
 
@@ -234,14 +234,14 @@ def test_standard_task_not_blocked_by_queued_priority_registration():
         mock.patch("modules.core.config.HARDWARE_UNITS", hw_list),
         mock.patch("modules.inference.runtime.model_manager.unload_models"),
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
         model_manager.MODEL_POOL.clear()
         model_manager.PREPROCESSOR_POOL.clear()
         model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
         model_manager.PREPROCESSOR_POOL["CPU"] = mock.MagicMock()
 
         with scheduler.early_task_registration(is_priority=True):
-            utils.THREAD_CONTEXT.is_priority = False
+            monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", False, raising=False)
 
             acquired = []
 
@@ -258,11 +258,11 @@ def test_standard_task_not_blocked_by_queued_priority_registration():
         assert acquired == [True]
 
 
-def test_priority_does_not_preempt_itself():
+def test_priority_does_not_preempt_itself(monkeypatch):
     """Verify that priority tasks are bypass-ignored by the preemption check."""
     from modules.inference.scheduler import SchedulerState
 
-    scheduler.STATE = SchedulerState()
+    monkeypatch.setattr(scheduler, "STATE", SchedulerState())
     thread_id = threading.get_ident()
     scheduler.STATE.task_registry[thread_id] = {"status": "active", "is_priority": True, "unit_id": "CPU"}
 

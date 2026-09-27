@@ -173,8 +173,9 @@ def test_run_capture_async_timeout_raises_command_timeout():
         mock.patch("asyncio.wait_for", side_effect=asyncio.TimeoutError),
         mock.patch("modules.core.process_exec._terminate_process", new_callable=mock.AsyncMock) as mock_terminate,
     ):
+        capture = getattr(process_exec, "_run_capture_async")(["cmd"], timeout=0.01)
         with pytest.raises(process_exec.CommandTimeoutError):
-            asyncio.run(getattr(process_exec, "_run_capture_async")(["cmd"], timeout=0.01))
+            asyncio.run(capture)
 
     mock_terminate.assert_awaited_once_with(proc)
 
@@ -189,8 +190,9 @@ def test_run_stream_async_raises_when_stdout_unavailable():
     proc.wait = _wait
 
     with mock.patch("asyncio.create_subprocess_exec", return_value=proc):
+        stream = getattr(process_exec, "_run_stream_async")(["cmd"], timeout=1.0, on_line=_noop_line_callback)
         with pytest.raises(RuntimeError, match="stream is unavailable"):
-            asyncio.run(getattr(process_exec, "_run_stream_async")(["cmd"], timeout=1.0, on_line=_noop_line_callback))
+            asyncio.run(stream)
 
 
 def test_run_stream_async_streams_lines_and_returns_code():
@@ -234,8 +236,9 @@ def test_run_stream_async_timeout_raises_command_timeout():
         mock.patch("asyncio.wait_for", side_effect=asyncio.TimeoutError),
         mock.patch("modules.core.process_exec._terminate_process", new_callable=mock.AsyncMock) as mock_terminate,
     ):
+        stream = getattr(process_exec, "_run_stream_async")(["cmd"], timeout=0.01, on_line=_noop_line_callback)
         with pytest.raises(process_exec.CommandTimeoutError):
-            asyncio.run(getattr(process_exec, "_run_stream_async")(["cmd"], timeout=0.01, on_line=_noop_line_callback))
+            asyncio.run(stream)
 
     mock_terminate.assert_awaited_once_with(proc)
 

@@ -14,20 +14,16 @@ def _get_stage_updates(mock_update_stage):
     return [call.args[1] for call in mock_update_stage.call_args_list if len(call.args) >= 2]
 
 
-def test_convert_to_wav_success():
+def test_convert_to_wav_success(monkeypatch):
     """Test successful conversion to WAV."""
     with mock.patch("modules.core.utils._run_ffmpeg_standardization"):
         with mock.patch("os.path.exists", return_value=True):
             with mock.patch("os.path.getsize", return_value=1024):
-                original_get_audio_duration = utils.get_audio_duration
-                utils.get_audio_duration = mock.MagicMock(return_value=120.0)
-                try:
-                    with mock.patch("tempfile.NamedTemporaryFile") as mock_temp:
-                        mock_temp.return_value.__enter__.return_value.name = "temp.wav"
-                        res = utils.convert_to_wav("input.mp3")
-                        assert res == "temp.wav"
-                finally:
-                    utils.get_audio_duration = original_get_audio_duration
+                monkeypatch.setattr(utils, "get_audio_duration", mock.MagicMock(return_value=120.0))
+                with mock.patch("tempfile.NamedTemporaryFile") as mock_temp:
+                    mock_temp.return_value.__enter__.return_value.name = "temp.wav"
+                    res = utils.convert_to_wav("input.mp3")
+                    assert res == "temp.wav"
 
 
 def test_convert_to_wav_subprocess_error():
@@ -294,9 +290,10 @@ def test_generate_srt_highlight_words_handles_none_word_timestamps():
     assert "2\n00:00:01,000 --> 00:00:02,000" in srt
 
 
-def test_thread_context_reset():
+def test_thread_context_reset(monkeypatch):
     """Verify ContextVarProxy reset behavior."""
-    utils.THREAD_CONTEXT.filename = "initial_file.mp3"
+    # raising=False: filename may not be set yet; monkeypatch restores or removes it on teardown.
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "filename", "initial_file.mp3", raising=False)
     assert utils.THREAD_CONTEXT.filename == "initial_file.mp3"
 
     utils.THREAD_CONTEXT.reset()
@@ -360,43 +357,45 @@ def test_context_var_proxy_missing_source_path_raises():
         _ = utils.THREAD_CONTEXT.source_path
 
 
-def test_context_var_proxy_tracked_files_round_trip():
+def test_context_var_proxy_tracked_files_round_trip(monkeypatch):
     """Tracked files should support set and delete operations."""
-    utils.THREAD_CONTEXT.tracked_files = ["/tmp/fake.wav"]
+    # monkeypatch.setattr/delattr drive the proxy's own __setattr__/__delattr__ (the unit
+    # under test) and put the previous context back on teardown.
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "tracked_files", ["/tmp/fake.wav"])
     assert utils.THREAD_CONTEXT.tracked_files == ["/tmp/fake.wav"]
 
-    del utils.THREAD_CONTEXT.tracked_files
+    monkeypatch.delattr(utils.THREAD_CONTEXT, "tracked_files")
     assert not utils.THREAD_CONTEXT.tracked_files
 
 
-def test_context_var_proxy_source_path_round_trip():
+def test_context_var_proxy_source_path_round_trip(monkeypatch):
     """Source path should support set and delete operations."""
-    utils.THREAD_CONTEXT.source_path = "/tmp/fake.wav"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "source_path", "/tmp/fake.wav", raising=False)
     assert utils.THREAD_CONTEXT.source_path == "/tmp/fake.wav"
 
-    del utils.THREAD_CONTEXT.source_path
+    monkeypatch.delattr(utils.THREAD_CONTEXT, "source_path")
     with pytest.raises(AttributeError):
         _ = utils.THREAD_CONTEXT.source_path
 
 
-def test_context_var_proxy_filename_delete_raises():
+def test_context_var_proxy_filename_delete_raises(monkeypatch):
     """Deleting filename should reset the attribute to missing."""
-    utils.THREAD_CONTEXT.filename = "file.mp3"
-    del utils.THREAD_CONTEXT.filename
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "filename", "file.mp3", raising=False)
+    monkeypatch.delattr(utils.THREAD_CONTEXT, "filename")
     with pytest.raises(AttributeError):
         _ = utils.THREAD_CONTEXT.filename
 
 
-def test_context_var_proxy_dynamic_attribute_delete():
+def test_context_var_proxy_dynamic_attribute_delete(monkeypatch):
     """Dynamic attributes should be removed from the proxy dictionary."""
-    utils.THREAD_CONTEXT.custom_val = "custom"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "custom_val", "custom", raising=False)
     assert utils.THREAD_CONTEXT.custom_val == "custom"
-    del utils.THREAD_CONTEXT.custom_val
+    monkeypatch.delattr(utils.THREAD_CONTEXT, "custom_val")
     with pytest.raises(AttributeError):
         _ = utils.THREAD_CONTEXT.custom_val
 
 
-def test_get_tracked_files_falls_back_after_attribute_error():
+def test_get_tracked_files_falls_back_after_attribute_error(monkeypatch):
     """get_tracked_files should recover when tracked_files access initially fails."""
     original_getattr = utils.ContextVarProxy.__getattr__
     raise_err = True
@@ -408,8 +407,10 @@ def test_get_tracked_files_falls_back_after_attribute_error():
             raise AttributeError("mocked")
         return original_getattr(self, name)
 
+    # Deleted before the __getattr__ patch: monkeypatch.delattr reads the old value first, and
+    # that read must not consume the one mocked AttributeError meant for get_tracked_files().
+    monkeypatch.delattr(utils.THREAD_CONTEXT, "tracked_files")
     with mock.patch.object(utils.ContextVarProxy, "__getattr__", mock_getattr):
-        del utils.THREAD_CONTEXT.tracked_files
         files = utils.get_tracked_files()
         assert not files
 

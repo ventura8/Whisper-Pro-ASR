@@ -97,7 +97,7 @@ function _auditRequestJson(item) {
 }
 
 function _auditResponseJson(item) {
-    const responsePayload = item.result ? item.result : (item.response_json ? item.response_json : {});
+    const responsePayload = item.result || item.response_json || {};
     return escapeHtml(JSON.stringify(responsePayload, null, 2));
 }
 

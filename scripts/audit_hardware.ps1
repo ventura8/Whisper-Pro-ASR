@@ -35,8 +35,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Have($name) { $null -ne (Get-Command $name -ErrorAction SilentlyContinue) }
-function Report($msg) { if (-not $Json) { Write-Host $msg } }
-function Section($t) { if (-not $Json) { Write-Host "`n=== $t ===" } }
+function Show-Report($msg) { if (-not $Json) { Write-Host $msg } }
+function Show-Section($t) { if (-not $Json) { Write-Host "`n=== $t ===" } }
 
 $hasNvidia = $false
 $hasNvidiaToolkit = $false
@@ -48,11 +48,11 @@ $renderGid = ""
 $hasIntelRenderNode = $false
 $diskFree = ""
 
-Section "GPUs (Windows device inventory)"
+Show-Section "GPUs (Windows device inventory)"
 try {
     $vids = Get-CimInstance Win32_VideoController -ErrorAction Stop
     foreach ($v in $vids) {
-        Report ("  {0}  (driver {1})" -f $v.Name, $v.DriverVersion)
+        Show-Report ("  {0}  (driver {1})" -f $v.Name, $v.DriverVersion)
         switch -Regex ($v.Name) {
             'NVIDIA'        { $hasNvidia = $true }
             'Intel'         { $hasIntelGpu = $true }
@@ -60,15 +60,15 @@ try {
         }
     }
 } catch {
-    Report "  Win32_VideoController query failed: $($_.Exception.Message)"
+    Show-Report "  Win32_VideoController query failed: $($_.Exception.Message)"
 }
 
-Section "NVIDIA (CUDA)"
+Show-Section "NVIDIA (CUDA)"
 if (Have nvidia-smi) {
     $hasNvidia = $true
-    Report (& nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>$null | Out-String).Trim()
+    Show-Report (& nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>$null | Out-String).Trim()
 } else {
-    Report "nvidia-smi not on PATH"
+    Show-Report "nvidia-smi not on PATH"
 }
 
 # Both probes below start a container, and a stalled Docker Desktop, a WSL backend mid-restart
@@ -90,7 +90,11 @@ function Invoke-BoundedDocker {
         if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
             # Kill the tree where the runtime supports it; PowerShell 5.1's Process.Kill()
             # takes no argument and leaves grandchildren, which is better than leaving all of it.
-            try { $proc.Kill($true) } catch { try { $proc.Kill() } catch { } }
+            # Best effort: if even the plain Kill() fails (the process already exited), the
+            # timeout result below is still correct, so the failure is only traced.
+            try { $proc.Kill($true) } catch {
+                try { $proc.Kill() } catch { Write-Verbose "docker probe kill failed: $($_.Exception.Message)" }
+            }
             return [pscustomobject]@{ TimedOut = $true; ExitCode = -1; Output = @() }
         }
         $lines = @(Get-Content -Path $outFile -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() })
@@ -100,7 +104,7 @@ function Invoke-BoundedDocker {
     }
 }
 
-Section "Docker GPU wiring (WSL2 / Docker Desktop)"
+Show-Section "Docker GPU wiring (WSL2 / Docker Desktop)"
 if (Have docker) {
     try {
         $gpuProbe = Invoke-BoundedDocker -DockerArgs @('run', '--rm', '--gpus', 'all', 'nvidia/cuda:12.6.3-base-ubuntu24.04', 'nvidia-smi', '-L')
@@ -108,12 +112,12 @@ if (Have docker) {
             # Reported apart from a plain failure: "Docker cannot reach the GPU" and "Docker
             # never answered" have different causes and different fixes, and collapsing the
             # second into the first recommends a CPU target for a working GPU host.
-            Report "Docker GPU probe timed out -- Docker Desktop or the WSL backend may be stalled"
+            Show-Report "Docker GPU probe timed out -- Docker Desktop or the WSL backend may be stalled"
         } elseif ($gpuProbe.ExitCode -eq 0) {
             $hasNvidiaToolkit = $true
-            Report "Docker GPU probe succeeded"
+            Show-Report "Docker GPU probe succeeded"
         } else {
-            Report "Docker GPU probe failed -- enable GPU support in Docker Desktop / WSL2"
+            Show-Report "Docker GPU probe failed -- enable GPU support in Docker Desktop / WSL2"
         }
         # Every render node, not just renderD128. Numbering starts higher whenever another
         # DRM device enumerates first, so probing the fixed name reported "no render node"
@@ -127,37 +131,37 @@ if (Have docker) {
         # the mount there is nothing there to read -- so every host reported "no render
         # nodes" and no Intel target was ever recommended on Windows.
         $nodeProbe = Invoke-BoundedDocker -DockerArgs @('run', '--rm', '-v', '/dev/dri:/dev/dri:ro', 'alpine', 'sh', '-c', $probe)
-        if ($nodeProbe.TimedOut) { Report "  render-node probe timed out -- Docker Desktop or the WSL backend may be stalled" }
+        if ($nodeProbe.TimedOut) { Show-Report "  render-node probe timed out -- Docker Desktop or the WSL backend may be stalled" }
         $nodes = @($nodeProbe.Output)
         if ($nodes.Count) {
-            foreach ($line in $nodes) { Report "  $($line.Trim()) in the Docker VM" }
+            foreach ($line in $nodes) { Show-Report "  $($line.Trim()) in the Docker VM" }
             $intelLine = $nodes | Where-Object { $_ -match '\s0x8086\s*$' } | Select-Object -First 1
             if ($intelLine) {
                 $hasIntelRenderNode = $true
                 $renderGid = ($intelLine -split '\s+')[1]
-                Report "  selected Intel render node: $($intelLine.Trim())  (HOST_INTEL_RENDER_GID=$renderGid)"
+                Show-Report "  selected Intel render node: $($intelLine.Trim())  (HOST_INTEL_RENDER_GID=$renderGid)"
             } else {
                 # A GID is still reported for the first node so an operator can see one, but
                 # it does not make the host Intel and does not select an Intel target.
                 $renderGid = ($nodes[0] -split '\s+')[1]
-                Report "  no Intel (0x8086) render node in the Docker VM; not treated as Intel"
+                Show-Report "  no Intel (0x8086) render node in the Docker VM; not treated as Intel"
             }
         } else {
-            Report "  no /dev/dri render nodes inside the Docker VM (expected on WSL2 without GPU paravirt)"
+            Show-Report "  no /dev/dri render nodes inside the Docker VM (expected on WSL2 without GPU paravirt)"
         }
     } catch {
-        Report "docker probe failed: $($_.Exception.Message)"
+        Show-Report "docker probe failed: $($_.Exception.Message)"
     }
 } else {
-    Report "docker not on PATH"
+    Show-Report "docker not on PATH"
 }
 
-Section "Disk space"
+Show-Section "Disk space"
 try {
     $sys = Get-PSDrive -Name ($ENV:SystemDrive.TrimEnd(':')) -ErrorAction Stop
     $diskFree = "{0:N1} GB" -f ($sys.Free / 1GB)
-    Report "free on $($ENV:SystemDrive) : $diskFree"
-} catch { Report "could not determine free disk space" }
+    Show-Report "free on $($ENV:SystemDrive) : $diskFree"
+} catch { Show-Report "could not determine free disk space" }
 
 # --- Recommendation ----------------------------------------------------------
 $target = "cpu"
@@ -196,25 +200,25 @@ if ($Json) {
     return
 }
 
-Section "Recommendation"
-Report "BUILD_TARGET=$target"
-Report "docker compose -f docker-compose.yml -f docker-compose.$target.yml up -d --build"
+Show-Section "Recommendation"
+Show-Report "BUILD_TARGET=$target"
+Show-Report "docker compose -f docker-compose.yml -f docker-compose.$target.yml up -d --build"
 if (($target -eq "intel" -or $target -eq "nvidia-intel") -and $renderGid) {
-    Report "HOST_INTEL_RENDER_GID=$renderGid"
+    Show-Report "HOST_INTEL_RENDER_GID=$renderGid"
 }
-Report "Intel NPU (/dev/accel) is not exposed to WSL2 containers: do NOT claim NPU validation on this host."
+Show-Report "Intel NPU (/dev/accel) is not exposed to WSL2 containers: do NOT claim NPU validation on this host."
 if ($hasAmd) {
-    Report "An AMD GPU is present, but ROCm has no route into a Linux container on Windows;"
-    Report "the cpu target is what actually runs. Use a native Linux host to validate AMD."
+    Show-Report "An AMD GPU is present, but ROCm has no route into a Linux container on Windows;"
+    Show-Report "the cpu target is what actually runs. Use a native Linux host to validate AMD."
 }
 if ($hasNvidia -and -not $hasNvidiaToolkit) {
-    Report "Docker cannot currently access the NVIDIA GPU; do not claim CUDA validation."
+    Show-Report "Docker cannot currently access the NVIDIA GPU; do not claim CUDA validation."
 }
-Report ""
-Report "Validate for real (against a running stack):"
-Report "  RUN_REAL_ASR=1 python3 -m pytest tests/integration/test_transcription_accuracy.py"
-Report "A correct transcript proves decoding, not acceleration -- pair with nvidia-smi"
-Report "--query-compute-apps (CUDA) or intel_gpu_top (Intel) evidence."
+Show-Report ""
+Show-Report "Validate for real (against a running stack):"
+Show-Report "  RUN_REAL_ASR=1 python3 -m pytest tests/integration/test_transcription_accuracy.py"
+Show-Report "A correct transcript proves decoding, not acceleration -- pair with nvidia-smi"
+Show-Report "--query-compute-apps (CUDA) or intel_gpu_top (Intel) evidence."
 
 if ($WriteEnv) {
     if (-not (Test-Path .env)) { New-Item -ItemType File -Path .env | Out-Null }

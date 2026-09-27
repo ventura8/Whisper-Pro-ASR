@@ -431,7 +431,8 @@ class TestTheSwitchOff:
         monkeypatch.setattr(gap_filling.config, "ASR_SEGMENT_LANGUAGES", False)
         consumed = [{"start": 0.0, "end": 1.0, "text": "hola"}]
         (segments, _), _ = _fill(_model(), [], [], options, gaps=[{"start": 1.0, "end": 2.0}], consumed=consumed)
-        assert segments and all("language" not in seg for seg in segments)
+        assert segments
+        assert all("language" not in seg for seg in segments)
 
 
 class TestAGapSliceIsConsumedWhole:

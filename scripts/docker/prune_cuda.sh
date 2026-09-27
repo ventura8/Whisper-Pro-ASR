@@ -20,7 +20,7 @@ CUDA_LIB_DIR=/usr/local/cuda-13.3/targets/x86_64-linux/lib
 
 # Without this the script reports a cheerful "0MB -> 0MB" when the CUDA version is
 # bumped and this path moves, having pruned nothing at all.
-if [ ! -d "$CUDA_LIB_DIR" ]; then
+if [[ ! -d "$CUDA_LIB_DIR" ]]; then
 	echo "prune_cuda: ERROR CUDA library directory not found: $CUDA_LIB_DIR" >&2
 	exit 1
 fi

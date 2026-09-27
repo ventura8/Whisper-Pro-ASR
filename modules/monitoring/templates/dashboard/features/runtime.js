@@ -41,7 +41,7 @@ async function _fetchStatusData() {
 }
 
 function _hasValidStatusData(data) {
-    if (data && data.system) {
+    if (data?.system) {
         return true;
     }
     console.warn('Incomplete status data received');
@@ -68,14 +68,14 @@ function _renderQueueCounters(data) {
 }
 
 function _updateTelemetryState(data, nowSec) {
-    lastStatusData = data;
-    currentTelemetry = data.telemetry_history || [];
+    globalThis.lastStatusData = data;
+    globalThis.currentTelemetry = data.telemetry_history || [];
     rollingTelemetryBuffer.push({
         timestamp: nowSec,
         system: data.system,
         telemetry: data.telemetry
     });
-    rollingTelemetryBuffer = rollingTelemetryBuffer.filter((h) => h.timestamp >= nowSec - 600);
+    globalThis.rollingTelemetryBuffer = rollingTelemetryBuffer.filter((h) => h.timestamp >= nowSec - 600);
     _prepopulateTelemetryHistory(data, nowSec);
 }
 
@@ -87,11 +87,11 @@ function _prepopulateTelemetryHistory(data, nowSec) {
         return;
     }
     const serverHist = data.telemetry_history.filter((h) => h.timestamp >= nowSec - 600 && h.timestamp < nowSec);
-    rollingTelemetryBuffer = [...serverHist, ...rollingTelemetryBuffer];
+    globalThis.rollingTelemetryBuffer = [...serverHist, ...rollingTelemetryBuffer];
 }
 
 function _refreshHistoryAndTabs(data) {
-    fullTaskHistory = data.history || [];
+    globalThis.fullTaskHistory = data.history || [];
     const historicalSpeeds = calculateHistoricalSpeeds(data.history);
     if (currentTab === 'charts') {
         renderCharts();
@@ -152,7 +152,7 @@ const HW_STAGE_LABELS = { asr: 'Inference', uvr: 'Vocal Isolation' };
 
 function _executionChip(execution) {
     // Absent on an older payload; render nothing rather than an empty chip.
-    if (!execution || !execution.device) {
+    if (!execution?.device) {
         return '';
     }
     const fallback = execution.fallback === true;
@@ -212,7 +212,7 @@ function _isUnitUsedByActiveTask(unitId, tasks) {
 }
 
 function _applyHardwareUtil(isUsed, unitId, telemetry) {
-    if (telemetry.hardware_util && telemetry.hardware_util[unitId] !== undefined && !isUsed) {
+    if (telemetry.hardware_util?.[unitId] !== undefined && !isUsed) {
         return telemetry.hardware_util[unitId] > 0;
     }
     return isUsed;
@@ -270,13 +270,13 @@ function _npuVisual(isUsed, telemetry) {
 }
 
 function _cudaVisual(unit, isUsed, telemetry) {
-    const idx = parseInt(String(unit.id || '').split(':')[1] || 0, 10);
+    const idx = Number.parseInt(String(unit.id || '').split(':')[1] || 0, 10);
     const inferredUsed = !isUsed && telemetry.hardware_util === undefined ? _isCudaUtilUsed(telemetry, idx) : isUsed;
     return { icon: 'rocket_launch', isUsed: inferredUsed };
 }
 
 function _isCudaUtilUsed(telemetry, idx) {
-    if (!telemetry.nvidia || !telemetry.nvidia[idx]) {
+    if (!telemetry.nvidia?.[idx]) {
         return false;
     }
     return telemetry.nvidia[idx].util > 0;

@@ -35,7 +35,7 @@ for pkg in "${BUILD_ONLY_PACKAGES[@]}"; do
 		installed_build_packages+=("$pkg")
 	fi
 done
-if [ ${#installed_build_packages[@]} -gt 0 ]; then
+if [[ ${#installed_build_packages[@]} -gt 0 ]]; then
 	apt-get purge -y --auto-remove "${installed_build_packages[@]}"
 fi
 

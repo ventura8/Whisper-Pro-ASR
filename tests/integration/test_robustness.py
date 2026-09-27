@@ -247,15 +247,15 @@ def test_engine_resource_language_detection_fallbacks():
     assert (first["language"], second["language"]) == ("en", "en")
 
 
-def test_engine_resource_unload_and_cleanup_failures():
+def test_engine_resource_unload_and_cleanup_failures(monkeypatch):
     """Target unload failure paths and cleanup fallbacks."""
     model_mock = mock.MagicMock()
     model_mock_2 = mock.MagicMock(spec=["pipeline"])
     pm_mock = mock.MagicMock()
     pm_mock.unload_model.side_effect = Exception("UVR Fail")
 
-    model_manager.MODEL_POOL = {"CPU": model_mock, "GPU": model_mock_2}
-    model_manager.PREPROCESSOR_POOL = {"CPU": pm_mock}
+    monkeypatch.setattr(model_manager, "MODEL_POOL", {"CPU": model_mock, "GPU": model_mock_2})
+    monkeypatch.setattr(model_manager, "PREPROCESSOR_POOL", {"CPU": pm_mock})
     model_mock.unload.side_effect = Exception("Unload Fail")
 
     mock_ct2 = mock.MagicMock()
@@ -271,15 +271,15 @@ def test_engine_resource_unload_and_cleanup_failures():
     assert len(model_manager.MODEL_POOL) == 0
 
 
-def test_engine_resource_status_helpers():
+def test_engine_resource_status_helpers(monkeypatch):
     """Target scheduler metadata and engine state helpers."""
     with mock.patch("threading.get_ident", return_value=999999):
         scheduler.update_task_metadata(foo="bar")
 
     scheduler.STATE.preemptible_units.clear()
-    model_manager.MODEL_POOL = {"CPU": mock.MagicMock()}
+    monkeypatch.setattr(model_manager, "MODEL_POOL", {"CPU": mock.MagicMock()})
     loaded_true = model_manager.is_engine_actually_loaded()
-    model_manager.MODEL_POOL = {}
+    monkeypatch.setattr(model_manager, "MODEL_POOL", {})
 
     assert (scheduler.get_preemptible_unit(), loaded_true, model_manager.is_engine_actually_loaded()) == (None, True, False)
 

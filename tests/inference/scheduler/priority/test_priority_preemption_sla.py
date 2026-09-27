@@ -299,7 +299,7 @@ def _assert_all_three_ld_threads_finished(
     t2.join(timeout=10.0)
     t3.join(timeout=10.0)
 
-    assert not t1.is_alive() and not t2.is_alive() and not t3.is_alive()
+    assert [t.is_alive() for t in (t1, t2, t3)] == [False, False, False]
     _assert_no_worker_errors(errors)
     assert "ld_C_done" in events
     assert any(e.startswith("ld_C_running_on_") for e in events)

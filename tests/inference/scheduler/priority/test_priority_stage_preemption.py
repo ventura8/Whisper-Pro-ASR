@@ -364,7 +364,7 @@ def test_triple_unit_matrix_priority_liveness(hw_list, std_task_count):
     assert all(f"asr_s{idx}_done" in result["events"] for idx in range(result["std_task_count"]))
 
 
-def test_task_state_restoration_after_preemption_resume():
+def test_task_state_restoration_after_preemption_resume(monkeypatch):
     """Task status and stage must be properly restored after preemption completes.
 
     This test verifies the fix for the bug where ASR tasks showed as "queued" in the
@@ -389,8 +389,8 @@ def test_task_state_restoration_after_preemption_resume():
         }
 
     # Set thread context
-    utils.THREAD_CONTEXT.task_id = task_id
-    utils.THREAD_CONTEXT.is_priority = False
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", task_id, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", False, raising=False)
 
     # Simulate preemption by setting pause_requested
     scheduler.STATE.pause_requested.set()

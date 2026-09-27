@@ -36,10 +36,10 @@ apt-get install -y --no-install-recommends \
 # source is only a problem when the destination is absent too.
 shim_lib() {
 	local src="$1" dst="$2"
-	if [ -e "$dst" ]; then
+	if [[ -e "$dst" ]]; then
 		return 0
 	fi
-	if [ -f "$src" ]; then
+	if [[ -f "$src" ]]; then
 		ln -sf "$src" "$dst"
 	else
 		echo "install_rocm: WARNING $dst is absent and $src does not exist to shim it (onnxruntime-rocm may fall back to CPU)" >&2
@@ -50,9 +50,9 @@ shim_lib /usr/lib/x86_64-linux-gnu/libhipblas.so.0 /usr/lib/x86_64-linux-gnu/lib
 shim_lib /usr/lib/x86_64-linux-gnu/librocblas.so.0 /usr/lib/x86_64-linux-gnu/librocblas.so.3
 shim_lib /opt/rocm/lib/libamdhip64.so.6 /opt/rocm/lib/libamdhip64.so.7
 shim_lib /opt/rocm/lib/librocm_smi64.so.7 /opt/rocm/lib/librocm_smi64.so.1
-if [ -d /usr/lib/x86_64-linux-gnu/rocblas ]; then
+if [[ -d /usr/lib/x86_64-linux-gnu/rocblas ]]; then
 	for rocblas_dir in /usr/lib/x86_64-linux-gnu/rocblas/*; do
-		if [ -d "$rocblas_dir" ]; then
+		if [[ -d "$rocblas_dir" ]]; then
 			ln -sfn "$rocblas_dir" /usr/lib/x86_64-linux-gnu/rocblas/current
 			break
 		fi

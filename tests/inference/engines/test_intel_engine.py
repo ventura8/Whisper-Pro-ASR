@@ -24,7 +24,6 @@ def reset_mocks(monkeypatch):
     mock_genai.reset_mock()
     mock_genai.WhisperPipeline.side_effect = None
     mock_genai.WhisperPipeline.return_value = mock.MagicMock()
-    yield
 
 
 def test_find_split_points():
@@ -52,9 +51,9 @@ class TestIntelWhisperEngine:
         assert engine.pipeline is not None
         mock_genai.WhisperPipeline.assert_called_once_with("/path/to/model", "CPU")
 
-    def test_init_failure(self):
+    def test_init_failure(self, monkeypatch):
         """Test initialization failure handles exception."""
-        mock_genai.WhisperPipeline.side_effect = RuntimeError("OpenVINO Error")
+        monkeypatch.setattr(mock_genai.WhisperPipeline, "side_effect", RuntimeError("OpenVINO Error"))
         with mock.patch("os.path.exists", return_value=True):
             with mock.patch("os.listdir", return_value=[]):
                 with pytest.raises(RuntimeError):
@@ -277,7 +276,8 @@ def test_intel_engine_sanitize_audio_and_unload():
     res = engine.sanitize_audio([0.1, 0.2])
     engine.unload()
 
-    assert res.dtype == np.float32 and engine.pipeline is None
+    assert res.dtype == np.float32
+    assert engine.pipeline is None
 
 
 def test_intel_detect_language_branches():

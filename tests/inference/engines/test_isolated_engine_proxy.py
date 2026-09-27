@@ -217,15 +217,18 @@ class TestTranscribeStreamFraming:
         """Without this the caller unpacks None and fails somewhere far from the cause."""
         channel = FakeChannel(events=[{"event": "segment", "segment": {}}])
 
+        engine = _engine(channel)
+
         with pytest.raises(worker_channel.WorkerError, match="sent no info event"):
-            _engine(channel).transcribe("/clip.wav")
+            engine.transcribe("/clip.wav")
         assert channel.closed == 1, "the stream must be closed so the worker stops decoding"
 
     def test_an_empty_stream_is_also_a_named_worker_error(self):
         """An empty stream is also a named worker error."""
         channel = FakeChannel(events=[])
+        engine = _engine(channel)
         with pytest.raises(worker_channel.WorkerError, match="sent no info event"):
-            _engine(channel).transcribe("/clip.wav")
+            engine.transcribe("/clip.wav")
 
     def test_decode_params_reach_the_worker_as_one_params_payload(self):
         """Decode params reach the worker as one params payload."""
@@ -280,8 +283,9 @@ class TestDetectLanguage:
     def test_decoded_samples_are_refused_rather_than_copied_across_the_pipe(self):
         """Sending an array would copy the whole clip through the pipe, and the pipeline's
         batch detection already runs entirely worker-side."""
+        engine = _engine(FakeChannel())
         with pytest.raises(TypeError, match="requires an audio path"):
-            _engine(FakeChannel()).detect_language([0.0, 1.0])
+            engine.detect_language([0.0, 1.0])
 
     def test_batch_detection_yields_only_detection_events(self):
         """Batch detection yields only detection events."""

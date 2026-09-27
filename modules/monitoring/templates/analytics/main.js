@@ -6,11 +6,11 @@ const logger = globalThis.logger || console;
 function escapeHtml(value) {
     const str = String(value ?? "");
     return str
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
 }
 
 function formatDuration(sec) {
@@ -174,7 +174,7 @@ function _buildDailyBreakdownSafeView(date, info, asr, detectlang, aud) {
 }
 
 function renderCharts(dates, daily) {
-    const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const isDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
     const taskSeries = _buildTaskSeries(dates, daily);
     const durationSeries = _buildDurationSeries(dates, daily);
     const tasksOptions = _buildTasksChartOptions(dates, taskSeries, isDark);
@@ -185,22 +185,22 @@ function renderCharts(dates, daily) {
 
 function _buildTaskSeries(dates, daily) {
     return [
-        { name: '/asr', data: dates.map((d) => (daily[d].asr || {}).count || 0) },
+        { name: '/asr', data: dates.map((d) => daily[d].asr?.count || 0) },
         { name: '/detect-language', data: dates.map((d) => getDetectLangStat(daily[d]).count || 0) },
-        { name: '/v1/audio/...', data: dates.map((d) => (daily[d].audio || {}).count || 0) }
+        { name: '/v1/audio/...', data: dates.map((d) => daily[d].audio?.count || 0) }
     ];
 }
 
 function _buildDurationSeries(dates, daily) {
     return [
-        { name: '/asr', data: dates.map((d) => _toMinutes((daily[d].asr || {}).duration || 0)) },
+        { name: '/asr', data: dates.map((d) => _toMinutes(daily[d].asr?.duration || 0)) },
         { name: '/detect-language', data: dates.map((d) => _toMinutes(getDetectLangStat(daily[d]).duration || 0)) },
-        { name: '/v1/audio/...', data: dates.map((d) => _toMinutes((daily[d].audio || {}).duration || 0)) }
+        { name: '/v1/audio/...', data: dates.map((d) => _toMinutes(daily[d].audio?.duration || 0)) }
     ];
 }
 
 function _toMinutes(seconds) {
-    return parseFloat((seconds / 60).toFixed(2));
+    return Number.parseFloat((seconds / 60).toFixed(2));
 }
 
 function _buildTasksChartOptions(dates, series, isDark) {

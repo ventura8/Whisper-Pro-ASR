@@ -34,16 +34,19 @@ case "${1:-}" in
 	grep '^#' "$0" | sed 's/^# \{0,1\}//' | sed '1d'
 	exit 0
 	;;
+*)
+	# No option: a plain scan. A leading "--" separator is consumed just below.
+	;;
 esac
-[ "${1:-}" = "--" ] && shift
+[[ "${1:-}" = "--" ]] && shift
 
-if [ -z "${SONAR_TOKEN:-}" ]; then
+if [[ -z "${SONAR_TOKEN:-}" ]]; then
 	echo "ERROR: SONAR_TOKEN is not set." >&2
 	echo "  read -rsp 'SonarQube token: ' SONAR_TOKEN && export SONAR_TOKEN && echo" >&2
 	exit 1
 fi
 
-if [ "${WITH_COVERAGE}" = "1" ]; then
+if [[ "${WITH_COVERAGE}" = "1" ]]; then
 	# These two containers stay root: the suite writes its reports inside the image's
 	# root-owned /app and the tool cache is a root-owned volume, so running them as the
 	# host user fails outright rather than fixing ownership. Instead the exported files

@@ -40,7 +40,7 @@ while IFS= read -r provider; do
 	# so that pipeline's status is deliberately discarded rather than tripping pipefail.
 	unmet="$(printf '%s\n' "$ldd_output" | awk '/not found/ {print $1}' |
 		grep -Ev "$IGNORED_DEPS_RE" | sort -u | tr '\n' ' ' || true)"
-	if [ -n "$unmet" ]; then
+	if [[ -n "$unmet" ]]; then
 		echo "verify_ort_provider_links: ERROR ${provider}: unmet: ${unmet}" >&2
 		status=1
 	else
@@ -48,12 +48,12 @@ while IFS= read -r provider; do
 	fi
 done < <(find /app/libs -name 'libonnxruntime_providers_*.so' 2>/dev/null | sort)
 
-if [ "$found" -eq 0 ]; then
+if [[ "$found" -eq 0 ]]; then
 	echo "verify_ort_provider_links: no providers found under /app/libs" >&2
 	exit 1
 fi
 
-[ "$status" -eq 0 ] || {
+[[ "$status" -eq 0 ]] || {
 	echo "verify_ort_provider_links: a provider would dlopen-fail and fall back to CPU." >&2
 	exit 1
 }

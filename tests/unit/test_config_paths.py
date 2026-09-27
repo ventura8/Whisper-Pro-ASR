@@ -41,7 +41,8 @@ class TestAutoApprovingBindMounts:
             caplog.at_level("INFO"),
         ):
             config_paths._auto_approved_mount_roots()
-        assert "/media" in caplog.text and "/tv" in caplog.text
+        assert "/media" in caplog.text
+        assert "/tv" in caplog.text
 
     def test_nothing_is_logged_when_there_is_nothing_to_approve(self, caplog):
         """A container with no extra bind mounts should not emit a misleading grant line."""

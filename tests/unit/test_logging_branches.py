@@ -6,14 +6,16 @@ from unittest import mock
 from modules.core import logging_setup
 
 
-def test_contextual_filter_includes_step_info_when_present():
+def test_contextual_filter_includes_step_info_when_present(monkeypatch):
     """Contextual filter should include step info in task context when present."""
     filt = logging_setup.ContextualFilter()
     record = logging.LogRecord("test", logging.INFO, "p", 1, "msg", (), None)
 
     logging_setup.utils.THREAD_CONTEXT.reset()
-    logging_setup.utils.THREAD_CONTEXT.filename = "file.wav"
-    logging_setup.utils.THREAD_CONTEXT.step_info = "(1/3)"
+    # raising=False: after reset() neither attribute exists yet; monkeypatch deletes both again
+    # on teardown instead of leaving this test's task context behind.
+    monkeypatch.setattr(logging_setup.utils.THREAD_CONTEXT, "filename", "file.wav", raising=False)
+    monkeypatch.setattr(logging_setup.utils.THREAD_CONTEXT, "step_info", "(1/3)", raising=False)
 
     assert filt.filter(record) is True
     assert getattr(record, "task_ctx", "") == "[file.wav] (1/3)"
@@ -101,7 +103,8 @@ def test_openvino_device_and_probe_lines_error_paths():
         mock.patch("modules.core.logging_setup.importlib.import_module", return_value=ov_module),
     ):
         lines = get_openvino_probe_lines()
-        assert lines and "[OPENVINO TARGET PROBE]" in lines[0]
+        assert lines
+        assert "[OPENVINO TARGET PROBE]" in lines[0]
         assert any("unavailable" in line for line in lines[1:])
 
 

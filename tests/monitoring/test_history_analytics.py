@@ -18,6 +18,17 @@ from modules.monitoring import history_manager
 pytestmark = pytest.mark.usefixtures("reset_history_cache")
 
 
+def _loaded_analytics() -> dict:
+    """The analytics cache after a load, read through dict().
+
+    A load that left the cache None fails loudly here, and the copy gives the linter a
+    concrete type: the only value it can otherwise infer for the module global is its None
+    default, since the tests set it through monkeypatch. The copy is shallow, so nested day
+    entries are still the live ones.
+    """
+    return dict(history_manager.ANALYTICS_CACHE)
+
+
 @pytest.fixture(name="frozen_today")
 def _frozen_today():
     """Pin "today" for the whole test, fixture data and assertions alike.
@@ -86,7 +97,7 @@ def test_get_analytics_data_returns_daily_snapshot():
     data = history_manager.get_analytics_data()
     data["daily"]["2026-05-27"]["count"] = 999
 
-    assert history_manager.ANALYTICS_CACHE["2026-05-27"]["count"] == 1
+    assert _loaded_analytics()["2026-05-27"]["count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -108,29 +119,33 @@ def test_categorize_task(task_data, expected):
     assert history_manager.categorize_task(task_data) == expected
 
 
-def test_rebuild_analytics_from_history():
+def test_rebuild_analytics_from_history(monkeypatch):
     """Test rebuild_analytics_from_history correctly parses and structures task cache."""
     t_time = 1779930000.0
     expected_date = datetime.datetime.fromtimestamp(t_time).strftime("%Y-%m-%d")
-    history_manager.HISTORY_CACHE = [
-        {"status": "completed", "video_duration": 10.0, "completed_at": "2026-06-20 12:00:00", "endpoint": "/asr"},
-        {
-            "status": "completed",
-            "video_duration": 20.0,
-            "completed_at": "2026-06-20 13:00:00",
-            "endpoint": "/detect-language",
-        },
-        {"status": "completed", "video_duration": 30.0, "start_time": t_time, "endpoint": "/v1/audio/translations"},
-        {
-            "status": "failed",  # Non-completed task should be ignored
-            "video_duration": 40.0,
-            "completed_at": "2026-06-20 14:00:00",
-            "endpoint": "/asr",
-        },
-    ]
+    monkeypatch.setattr(
+        history_manager,
+        "HISTORY_CACHE",
+        [
+            {"status": "completed", "video_duration": 10.0, "completed_at": "2026-06-20 12:00:00", "endpoint": "/asr"},
+            {
+                "status": "completed",
+                "video_duration": 20.0,
+                "completed_at": "2026-06-20 13:00:00",
+                "endpoint": "/detect-language",
+            },
+            {"status": "completed", "video_duration": 30.0, "start_time": t_time, "endpoint": "/v1/audio/translations"},
+            {
+                "status": "failed",  # Non-completed task should be ignored
+                "video_duration": 40.0,
+                "completed_at": "2026-06-20 14:00:00",
+                "endpoint": "/asr",
+            },
+        ],
+    )
 
     history_manager.rebuild_analytics_from_history()
-    cache = history_manager.ANALYTICS_CACHE
+    cache = _loaded_analytics()
     assert set(cache) == {history_manager.ANALYTICS_SCHEMA_KEY, "2026-06-20", expected_date}
     assert cache[history_manager.ANALYTICS_SCHEMA_KEY] == history_manager.ANALYTICS_SCHEMA_VERSION
     assert cache["2026-06-20"] == {
@@ -149,7 +164,7 @@ def test_rebuild_analytics_from_history():
     }
 
 
-def test_ensure_analytics_loaded_backfill(tmp_path):
+def test_ensure_analytics_loaded_backfill(tmp_path, monkeypatch):
     """Test that ensure_analytics_loaded detects legacy format and triggers rebuild/save."""
     analytics_file = tmp_path / "analytics_stats.json"
     # Legacy data (lacks category structures like 'asr', etc.)
@@ -157,16 +172,18 @@ def test_ensure_analytics_loaded_backfill(tmp_path):
     analytics_file.write_text(json.dumps(legacy_data))
 
     # Populate history to rebuild from
-    history_manager.HISTORY_CACHE = [
-        {"status": "completed", "video_duration": 120.0, "completed_at": "2026-06-20 10:00:00", "endpoint": "/asr"}
-    ]
+    monkeypatch.setattr(
+        history_manager,
+        "HISTORY_CACHE",
+        [{"status": "completed", "video_duration": 120.0, "completed_at": "2026-06-20 10:00:00", "endpoint": "/asr"}],
+    )
 
     with mock.patch("modules.monitoring.history_manager.ANALYTICS_FILE", str(analytics_file)):
-        history_manager.ANALYTICS_CACHE = None
+        monkeypatch.setattr(history_manager, "ANALYTICS_CACHE", None)
         history_manager.ensure_analytics_loaded()
 
         # Check cache is updated and contains categories
-        cache = history_manager.ANALYTICS_CACHE
+        cache = _loaded_analytics()
         assert "2026-06-20" in cache
         assert "asr" in cache["2026-06-20"]
         assert cache["2026-06-20"]["asr"]["count"] == 5
@@ -177,7 +194,7 @@ def test_ensure_analytics_loaded_backfill(tmp_path):
         assert "asr" in written_data["2026-06-20"]
 
 
-def test_ensure_analytics_loaded_imports_legacy_when_primary_missing(tmp_path):
+def test_ensure_analytics_loaded_imports_legacy_when_primary_missing(tmp_path, monkeypatch):
     """Upgrade path should import analytics from legacy data location when new state file is absent."""
     new_analytics_file = tmp_path / "state" / "analytics_stats.json"
     legacy_analytics_file = tmp_path / "legacy" / "analytics_stats.json"
@@ -198,29 +215,31 @@ def test_ensure_analytics_loaded_imports_legacy_when_primary_missing(tmp_path):
         mock.patch("modules.monitoring.history_manager.ANALYTICS_FILE", str(new_analytics_file)),
         mock.patch("modules.monitoring.history_manager.LEGACY_ANALYTICS_FILES", [str(legacy_analytics_file)]),
     ):
-        history_manager.ANALYTICS_CACHE = None
+        monkeypatch.setattr(history_manager, "ANALYTICS_CACHE", None)
         history_manager.ensure_analytics_loaded()
 
-        assert history_manager.ANALYTICS_CACHE["2026-07-01"]["count"] == 2
+        assert _loaded_analytics()["2026-07-01"]["count"] == 2
         assert new_analytics_file.exists()
 
 
-def test_ensure_analytics_loaded_preserves_old_days(tmp_path):
+def test_ensure_analytics_loaded_preserves_old_days(tmp_path, monkeypatch):
     """Test that ensure_analytics_loaded preserves historical days not in task history."""
     analytics_file = tmp_path / "analytics_stats.json"
     legacy_data = {"2026-06-19": {"count": 10, "duration": 500.0}, "2026-06-20": {"count": 5, "duration": 120.0}}
     analytics_file.write_text(json.dumps(legacy_data), encoding="utf-8")
 
     # History only contains task for 2026-06-20
-    history_manager.HISTORY_CACHE = [
-        {"status": "completed", "video_duration": 120.0, "completed_at": "2026-06-20 10:00:00", "endpoint": "/asr"}
-    ]
+    monkeypatch.setattr(
+        history_manager,
+        "HISTORY_CACHE",
+        [{"status": "completed", "video_duration": 120.0, "completed_at": "2026-06-20 10:00:00", "endpoint": "/asr"}],
+    )
 
     with mock.patch("modules.monitoring.history_manager.ANALYTICS_FILE", str(analytics_file)):
-        history_manager.ANALYTICS_CACHE = None
+        monkeypatch.setattr(history_manager, "ANALYTICS_CACHE", None)
         history_manager.ensure_analytics_loaded()
 
-        cache = history_manager.ANALYTICS_CACHE
+        cache = _loaded_analytics()
         assert cache == {
             history_manager.ANALYTICS_SCHEMA_KEY: history_manager.ANALYTICS_SCHEMA_VERSION,
             "2026-06-19": {
@@ -240,7 +259,7 @@ def test_ensure_analytics_loaded_preserves_old_days(tmp_path):
         }
 
 
-def test_ensure_analytics_loaded_preserves_already_categorized_overlapping(tmp_path):
+def test_ensure_analytics_loaded_preserves_already_categorized_overlapping(tmp_path, monkeypatch):
     """Verify ensure_analytics_loaded preserves fully categorized old days even if they overlap with rebuilt history."""
     analytics_file = tmp_path / "analytics_stats.json"
     categorized_data = {
@@ -255,15 +274,17 @@ def test_ensure_analytics_loaded_preserves_already_categorized_overlapping(tmp_p
     analytics_file.write_text(json.dumps(categorized_data), encoding="utf-8")
 
     # History contains built task for 2026-06-20, which would normally overwrite it
-    history_manager.HISTORY_CACHE = [
-        {"status": "completed", "video_duration": 120.0, "completed_at": "2026-06-20 10:00:00", "endpoint": "/asr"}
-    ]
+    monkeypatch.setattr(
+        history_manager,
+        "HISTORY_CACHE",
+        [{"status": "completed", "video_duration": 120.0, "completed_at": "2026-06-20 10:00:00", "endpoint": "/asr"}],
+    )
 
     with mock.patch("modules.monitoring.history_manager.ANALYTICS_FILE", str(analytics_file)):
-        history_manager.ANALYTICS_CACHE = None
+        monkeypatch.setattr(history_manager, "ANALYTICS_CACHE", None)
         history_manager.ensure_analytics_loaded()
 
-        cache = history_manager.ANALYTICS_CACHE
+        cache = _loaded_analytics()
         assert "2026-06-20" in cache
         # The stored breakdown is the accumulated record; the rebuild only sees whatever
         # history rows survived the cap, so it must not overwrite the categories.
@@ -272,27 +293,31 @@ def test_ensure_analytics_loaded_preserves_already_categorized_overlapping(tmp_p
         assert cache["2026-06-20"]["detectlang"]["count"] == 10
 
 
-def test_ensure_analytics_loaded_merges_uncategorized_overlapping(tmp_path):
+def test_ensure_analytics_loaded_merges_uncategorized_overlapping(tmp_path, monkeypatch):
     """Verify ensure_analytics_loaded merges uncategorized legacy days overlapping with rebuilt history."""
     analytics_file = tmp_path / "analytics_stats.json"
     legacy_data = {"2026-06-20": {"count": 5, "duration": 500.0}}
     analytics_file.write_text(json.dumps(legacy_data), encoding="utf-8")
 
     # History has rebuilt tasks for 2026-06-20 with smaller total count
-    history_manager.HISTORY_CACHE = [
-        {
-            "status": "completed",
-            "video_duration": 100.0,
-            "completed_at": "2026-06-20 10:00:00",
-            "endpoint": "/detect-language",
-        }
-    ]
+    monkeypatch.setattr(
+        history_manager,
+        "HISTORY_CACHE",
+        [
+            {
+                "status": "completed",
+                "video_duration": 100.0,
+                "completed_at": "2026-06-20 10:00:00",
+                "endpoint": "/detect-language",
+            }
+        ],
+    )
 
     with mock.patch("modules.monitoring.history_manager.ANALYTICS_FILE", str(analytics_file)):
-        history_manager.ANALYTICS_CACHE = None
+        monkeypatch.setattr(history_manager, "ANALYTICS_CACHE", None)
         history_manager.ensure_analytics_loaded()
 
-        cache = history_manager.ANALYTICS_CACHE
+        cache = _loaded_analytics()
         assert cache == {
             history_manager.ANALYTICS_SCHEMA_KEY: history_manager.ANALYTICS_SCHEMA_VERSION,
             "2026-06-20": {
@@ -305,19 +330,23 @@ def test_ensure_analytics_loaded_merges_uncategorized_overlapping(tmp_path):
         }
 
 
-def test_history_manager_stats_aggregation(frozen_today):
+def test_history_manager_stats_aggregation(frozen_today, monkeypatch):
     """Cover history stats logic with actual aggregation."""
     today_str = frozen_today
-    history_manager.ANALYTICS_CACHE = {
-        today_str: {
-            "count": 2,
-            "duration": 30.0,
-            "asr": {"count": 1, "duration": 10.0},
-            "detectlang": {"count": 1, "duration": 20.0},
-            "audio": {"count": 0, "duration": 0.0},
-        }
-    }
-    history_manager.STATS_CACHE = None
+    monkeypatch.setattr(
+        history_manager,
+        "ANALYTICS_CACHE",
+        {
+            today_str: {
+                "count": 2,
+                "duration": 30.0,
+                "asr": {"count": 1, "duration": 10.0},
+                "detectlang": {"count": 1, "duration": 20.0},
+                "audio": {"count": 0, "duration": 0.0},
+            }
+        },
+    )
+    monkeypatch.setattr(history_manager, "STATS_CACHE", None)
     _, stats = history_manager.get_history_stats()
     assert stats == {
         "all_time": 30.0,

@@ -32,12 +32,12 @@ class TestResourceManagement:
         )
         assert delta == "RAM(RSS)=+0.75 GB, CUDA VRAM=+3270 MB"
 
-    def test_decrement_active_session_triggers_unload(self):
+    def test_decrement_active_session_triggers_unload(self, monkeypatch):
         """Test that idle state triggers unload when aggressive offload is on."""
         pm = mock.MagicMock()
         model_manager.PREPROCESSOR_POOL["CPU"] = pm
         model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
-        scheduler.STATE.active_sessions = 1
+        monkeypatch.setattr(scheduler.STATE, "active_sessions", 1)
 
         with (
             mock.patch("modules.core.config.AGGRESSIVE_OFFLOAD", True),
@@ -242,12 +242,12 @@ def _wait_until_empty(pool: dict, timeout: float) -> None:
         time.sleep(0.05)
 
 
-def test_model_idle_timeout_reclamation():
+def test_model_idle_timeout_reclamation(monkeypatch):
     """Verify that the background idle timeout thread successfully offloads models."""
     pm = mock.MagicMock()
     model_manager.PREPROCESSOR_POOL["CPU"] = pm
     model_manager.MODEL_POOL["CPU"] = mock.MagicMock()
-    scheduler.STATE.active_sessions = 1
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 1)
 
     # Configure timeout of 1 second
     with (

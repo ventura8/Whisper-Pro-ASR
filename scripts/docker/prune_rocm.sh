@@ -55,7 +55,7 @@ prune_arch_files() {
 # The rocFFT cache is one SQLite file holding each architecture's kernels as rows, so it is
 # pruned with a DELETE plus VACUUM rather than by removing files.
 prune_fft_cache() {
-	[ -f "$FFT_CACHE" ] || return 0
+	[[ -f "$FFT_CACHE" ]] || return 0
 	python3 - "$FFT_CACHE" "$KEEP_ARCHS" <<'PYEOF'
 import sqlite3
 import sys
@@ -99,13 +99,13 @@ verify_no_unmet_deps() {
 	# and surfaced at runtime as ONNX Runtime quietly falling back to the CPU.
 	local libs=()
 	for dir in "${ROCM_DIRS[@]}"; do
-		[ -d "$dir" ] || continue
+		[[ -d "$dir" ]] || continue
 		while IFS= read -r lib; do libs+=("$lib"); done < <(find "$dir" -maxdepth 2 -name '*.so*' -type f 2>/dev/null)
 	done
 	# The ONNX Runtime providers arrive in a later stage and are checked there by
 	# verify_ort_provider_links.sh.
 	for lib in ${libs[@]+"${libs[@]}"}; do
-		[ -f "$lib" ] || continue
+		[[ -f "$lib" ]] || continue
 		if ! ldd_output="$(ldd "$lib" 2>&1)"; then
 			echo "prune_rocm: ERROR ldd could not inspect $lib: $ldd_output" >&2
 			failed=1
@@ -114,12 +114,12 @@ verify_no_unmet_deps() {
 		# grep exits non-zero when it filters every line out, which is the healthy case.
 		unmet="$(printf '%s\n' "$ldd_output" | awk '/not found/ {print $1}' |
 			grep -Ev "$IGNORED_DEPS_RE" | sort -u | tr '\n' ' ' || true)"
-		if [ -n "$unmet" ]; then
+		if [[ -n "$unmet" ]]; then
 			echo "prune_rocm: ERROR $lib has unmet dependencies: $unmet" >&2
 			failed=1
 		fi
 	done
-	[ "$failed" -eq 0 ] || {
+	[[ "$failed" -eq 0 ]] || {
 		echo "prune_rocm: refusing to ship a ROCm stack with unmet dependencies." >&2
 		exit 1
 	}

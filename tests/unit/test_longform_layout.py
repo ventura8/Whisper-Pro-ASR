@@ -171,8 +171,9 @@ class TestBuildSelectsTheProfile:
         """A typo in a manifest spec used to render the stress grid under the variant's name --
         and stamp it as a valid cached artifact. It must fail before anything is planned."""
         monkeypatch.setattr(longform, "_render_blocks", mock.Mock(side_effect=AssertionError("must not plan")))
+        sources = _sources()
         with pytest.raises(ValueError, match="unknown long-form profile 'natrual'"):
-            longform.build(_sources(), None, {"root": None, "rate": 16000}, profile="natrual")
+            longform.build(sources, None, {"root": None, "rate": 16000}, profile="natrual")
 
     def test_the_stress_profile_is_the_stress_layout(self, monkeypatch):
         """Named explicitly now, "stress" must still select the stress plan and not merely *a*
@@ -184,7 +185,8 @@ class TestBuildSelectsTheProfile:
             raise RuntimeError("stop after planning")
 
         monkeypatch.setattr(longform, "_render_blocks", fake_render)
+        sources = _sources()
         with pytest.raises(RuntimeError, match="stop after planning"):
-            longform.build(_sources(), None, {"root": None, "rate": 16000}, profile="stress")
+            longform.build(sources, None, {"root": None, "rate": 16000}, profile="stress")
         stress = longform._plan(_sources(), random.Random(longform.LAYOUT_SEED))
         assert plans["built"] == [(b["kind"], b.get("language"), round(b["duration"], 4)) for b in stress]

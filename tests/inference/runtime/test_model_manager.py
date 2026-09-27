@@ -338,11 +338,11 @@ class TestLanguageDetection:
 class TestEdgeCases:
     """Tests for various edge cases and error handling."""
 
-    def test_is_engine_initialized(self):
+    def test_is_engine_initialized(self, monkeypatch):
         """Test engine initialization check."""
-        scheduler.STATE.engine_initialized = True
+        monkeypatch.setattr(scheduler.STATE, "engine_initialized", True)
         assert model_manager.is_engine_initialized() is True
-        scheduler.STATE.engine_initialized = False
+        monkeypatch.setattr(scheduler.STATE, "engine_initialized", False)
         assert model_manager.is_engine_initialized() is False
 
     def test_is_uvr_actually_loaded(self):

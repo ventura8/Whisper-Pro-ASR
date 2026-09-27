@@ -18,12 +18,12 @@ cd "${PROJECT_ROOT}"
 
 # Load shared dependencies
 DEPS_FILE="${SCRIPT_DIR}/dependencies.env"
-if [ -f "$DEPS_FILE" ]; then
+if [[ -f "$DEPS_FILE" ]]; then
 	# shellcheck source-path=SCRIPTDIR
 	# shellcheck source=dependencies.env
 	. "$DEPS_FILE"
 else
-	echo "Error: Dependencies configuration file not found at ${DEPS_FILE}"
+	echo "Error: Dependencies configuration file not found at ${DEPS_FILE}" >&2
 	exit 1
 fi
 
@@ -33,7 +33,7 @@ install_with_apt() {
 		return $?
 	fi
 
-	if [ "$(id -u)" -eq 0 ]; then
+	if [[ "$(id -u)" -eq 0 ]]; then
 		apt-get update && apt-get install -y "$@"
 		return $?
 	fi
@@ -51,14 +51,13 @@ ensure_command() {
 	fi
 
 	echo "Dependency '$cmd_name' is missing. Attempting auto-install..."
-	if command -v apt-get >/dev/null 2>&1 && install_with_apt "${apt_packages[@]}"; then
-		if command -v "$cmd_name" >/dev/null 2>&1; then
-			return 0
-		fi
+	if command -v apt-get >/dev/null 2>&1 && install_with_apt "${apt_packages[@]}" &&
+		command -v "$cmd_name" >/dev/null 2>&1; then
+		return 0
 	fi
 
-	echo "Error: '$cmd_name' is required and could not be auto-installed."
-	echo "Install it manually, then re-run this script."
+	echo "Error: '$cmd_name' is required and could not be auto-installed." >&2
+	echo "Install it manually, then re-run this script." >&2
 	exit 1
 }
 
@@ -70,8 +69,8 @@ if ! docker ps >/dev/null 2>&1; then
 	if command -v sudo >/dev/null 2>&1 && sudo docker ps >/dev/null 2>&1; then
 		DOCKER_CMD=(sudo docker)
 	else
-		echo "Error: Docker is installed but not accessible for the current user."
-		echo "Add your user to the docker group or enable sudo access to docker."
+		echo "Error: Docker is installed but not accessible for the current user." >&2
+		echo "Add your user to the docker group or enable sudo access to docker." >&2
 		exit 1
 	fi
 fi
@@ -129,7 +128,7 @@ mkdir -p "$DOCKER_BUILD_CACHE_DIR" "$DOCKER_BUILD_CACHE_DIR_NEW"
 	--cache-to "type=local,dest=${DOCKER_BUILD_CACHE_DIR_NEW},mode=max" \
 	--load .
 rm -rf "${DOCKER_BUILD_CACHE_DIR}.old"
-if [ -d "$DOCKER_BUILD_CACHE_DIR" ]; then
+if [[ -d "$DOCKER_BUILD_CACHE_DIR" ]]; then
 	mv "$DOCKER_BUILD_CACHE_DIR" "${DOCKER_BUILD_CACHE_DIR}.old"
 fi
 mv "$DOCKER_BUILD_CACHE_DIR_NEW" "$DOCKER_BUILD_CACHE_DIR"
@@ -157,7 +156,7 @@ find "$REPORTS_DIR" -type f -exec chmod 0644 {} +
 # Forwarded only when set, so an ordinary run's `docker run` line is unchanged.
 STAGE_ARGS=()
 for var in PIPELINE_STAGE RUN_REAL_ASR RUN_GPU_LONG_ASR WHISPER_BASE_URL REAL_ASR_TIMEOUT REAL_ASR_ADVERSARIAL_TIMEOUT; do
-	if [ -n "${!var:-}" ]; then
+	if [[ -n "${!var:-}" ]]; then
 		STAGE_ARGS+=(-e "${var}=${!var}")
 	fi
 done
@@ -165,6 +164,9 @@ case "${PIPELINE_STAGE:-}" in
 real-audio | real-audio-stress)
 	# Host networking, because these drive a container the operator started separately.
 	STAGE_ARGS+=(--network host)
+	;;
+*)
+	# Every other stage runs self-contained on the default bridge network.
 	;;
 esac
 
@@ -191,9 +193,12 @@ set -e
 # below would fail on a successful run. Skipped for exactly those two stages.
 case "${PIPELINE_STAGE:-}" in
 real-audio | real-audio-stress)
-	if [ "$TEST_EXIT_CODE" -ne 0 ]; then exit "$TEST_EXIT_CODE"; fi
+	if [[ "$TEST_EXIT_CODE" -ne 0 ]]; then exit "$TEST_EXIT_CODE"; fi
 	printf "\n--- Real-audio stage completed; skipping the coverage badge (this stage runs --no-cov) ---\n"
 	exit 0
+	;;
+*)
+	# Every other stage produces coverage.xml and continues to the badge step below.
 	;;
 esac
 
@@ -204,18 +209,18 @@ printf "\n--- Regenerating Coverage Badge (Mandatory Final Stage) ---\n"
 	-v "${TOOL_CACHE_VOLUME}:/var/cache/whisper-pro-asr-tools" \
 	whisper-pro-asr-test /bin/bash -lc "if [ ! -s /reports/coverage.xml ]; then echo 'Error: /reports/coverage.xml is missing or empty'; exit 1; fi; genbadge coverage -i /reports/coverage.xml -o /app/assets/coverage.svg"
 
-if [ ! -s "${PROJECT_ROOT}/assets/coverage.svg" ]; then
-	echo "Error: Mandatory coverage badge is missing or empty at assets/coverage.svg"
+if [[ ! -s "${PROJECT_ROOT}/assets/coverage.svg" ]]; then
+	echo "Error: Mandatory coverage badge is missing or empty at assets/coverage.svg" >&2
 	exit 1
 fi
 
 printf "\n--- Cyclomatic Complexity Summary (Radon cc) ---\n"
-if [ -f "${REPORTS_DIR}/complexity_output.txt" ]; then
+if [[ -f "${REPORTS_DIR}/complexity_output.txt" ]]; then
 	cat "${REPORTS_DIR}/complexity_output.txt"
 fi
 
 printf "\n--- Code Coverage Summary ---\n"
-if [ -f "${REPORTS_DIR}/coverage_output.txt" ]; then
+if [[ -f "${REPORTS_DIR}/coverage_output.txt" ]]; then
 	sed -n -E '/^[-_]+ coverage:/,/^TOTAL/p' "${REPORTS_DIR}/coverage_output.txt"
 fi
 

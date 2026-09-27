@@ -8,7 +8,6 @@ module.
 """
 
 import asyncio
-from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, Optional
 from unittest import mock
@@ -67,7 +66,7 @@ def _patch_worker_rpc(call_impl: Any, generation: int = 0):
 
 
 @pytest.fixture(autouse=True)
-def reset_state() -> Generator[None, None, None]:
+def reset_state() -> None:
     """Reset model_manager pools and scheduler states between tests."""
     model_manager.MODEL_POOL.clear()
     model_manager.PREPROCESSOR_POOL.clear()
@@ -82,7 +81,6 @@ def reset_state() -> Generator[None, None, None]:
 
     # Reset thread context
     utils.THREAD_CONTEXT.reset()
-    yield
 
 
 def test_diarization_success() -> None:

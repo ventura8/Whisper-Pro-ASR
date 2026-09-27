@@ -10,8 +10,8 @@ import pytest
 from modules.monitoring import history_helpers, history_manager
 
 
-@pytest.fixture(autouse=True)
-def reset_history_cache(tmp_path: Path):
+@pytest.fixture(autouse=True, name="reset_history_cache")
+def _reset_history_cache(tmp_path: Path):
     """Reset history cache and use a temporary file for each test."""
     history_manager.HISTORY_CACHE = []
     history_manager.ANALYTICS_CACHE = None
@@ -28,15 +28,15 @@ def reset_history_cache(tmp_path: Path):
         yield temp_file
 
 
-def test_history_imports_legacy_state_folder(request, tmp_path: Path) -> None:
+def test_history_imports_legacy_state_folder(reset_history_cache: Path, tmp_path: Path, monkeypatch) -> None:
     """When current history file is missing, runtime should import from legacy state path candidates."""
-    temp_file = request.getfixturevalue("reset_history_cache")
+    temp_file = reset_history_cache
     legacy_file = tmp_path / "legacy_state_task_history.json"
     legacy_payload = [{"task_id": "legacy-1", "status": "completed", "video_duration": 10.0}]
     legacy_file.write_text(json.dumps(legacy_payload), encoding="utf-8")
 
-    history_manager.HISTORY_CACHE = []
-    history_manager.STATS_CACHE = None
+    monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
+    monkeypatch.setattr(history_manager, "STATS_CACHE", None)
 
     with mock.patch("modules.monitoring.history_manager.LEGACY_HISTORY_FILES", [str(legacy_file)]):
         task_history = history_manager.get_history()

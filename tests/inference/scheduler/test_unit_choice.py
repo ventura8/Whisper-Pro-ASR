@@ -63,8 +63,9 @@ class TestPreferringADrivableUnit:
 
     def test_an_empty_pool_raises_empty_like_get_did(self, faster_whisper_everywhere):
         """Callers already handle queue.Empty; the contract must not change under them."""
+        empty_pool = _pool()
         with pytest.raises(queue.Empty):
-            unit_choice.take_idle_unit(_pool())
+            unit_choice.take_idle_unit(empty_pool)
 
 
 class TestHybridEngines:

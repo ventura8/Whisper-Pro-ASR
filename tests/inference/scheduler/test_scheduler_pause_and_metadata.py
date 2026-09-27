@@ -25,11 +25,11 @@ def reset_state():
         scheduler.STATE = scheduler.SchedulerState()
 
 
-def test_scheduler_task_helpers_update_progress_type_error():
+def test_scheduler_task_helpers_update_progress_type_error(monkeypatch):
     """Verify update_task_progress tolerates mixed progress types."""
     task_id = "test-progress-type-error"
-    utils.THREAD_CONTEXT.task_id = task_id
-    utils.THREAD_CONTEXT.registration_thread_id = None
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", task_id, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "registration_thread_id", None, raising=False)
 
     scheduler.STATE.task_registry[task_id] = {"progress": "not-started"}
     scheduler.update_task_progress(50, "stage1")
@@ -43,13 +43,13 @@ def test_scheduler_task_helpers_update_progress_type_error():
     assert (first_state, second_state) == (("not-started", "stage1"), (50, "stage2"))
 
 
-def test_release_priority_resumes_targeted_unit_when_queue_empty():
+def test_release_priority_resumes_targeted_unit_when_queue_empty(monkeypatch):
     """A targeted paused unit should resume once the final priority request is released."""
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.pause_requested.set()
     scheduler.STATE.resume_event.clear()
-    utils.THREAD_CONTEXT.is_priority = True
-    utils.THREAD_CONTEXT.target_unit_id = "CPU"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "is_priority", True)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", "CPU", raising=False)
 
     scheduler.STATE.unit_sync["CPU"] = {
         "pause_requested": scheduler.STATE.pause_requested,
@@ -88,8 +88,8 @@ def test_request_pause_for_target_sets_targeted_unit_state():
 
 def test_wait_for_priority_skips_duplicate_confirmation_wait_when_target_already_pausing(monkeypatch):
     """A follower priority request should not wait again for pause confirmation."""
-    scheduler.STATE.active_sessions = 1
-    scheduler.STATE.accel_limit = 1
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 1)
+    monkeypatch.setattr(scheduler.STATE, "accel_limit", 1)
     scheduler.STATE.task_registry["standard-task"] = {
         "task_id": "standard-task",
         "status": "active",
@@ -142,11 +142,11 @@ def test_select_preemption_target_prefers_configured_gpu_before_npu():
         assert scheduler._select_preemption_target_unit() == "GPU.0"
 
 
-def test_update_task_metadata_updates_live_text_for_existing_entry():
+def test_update_task_metadata_updates_live_text_for_existing_entry(monkeypatch):
     """Live text updates should refresh an existing task entry in place."""
     task_id = "live-task"
-    utils.THREAD_CONTEXT.task_id = task_id
-    utils.THREAD_CONTEXT.registration_thread_id = threading.get_ident()
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", task_id, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "registration_thread_id", threading.get_ident(), raising=False)
 
     scheduler.STATE.task_registry[task_id] = {
         "task_id": task_id,
@@ -160,11 +160,11 @@ def test_update_task_metadata_updates_live_text_for_existing_entry():
         assert scheduler.STATE.task_registry[task_id]["live_text"] == "Hello world"
 
 
-def test_update_task_metadata_and_progress_create_missing_entry():
+def test_update_task_metadata_and_progress_create_missing_entry(monkeypatch):
     """Missing task updates should log a warning and not create a registry entry."""
     task_id = "missing-task"
-    utils.THREAD_CONTEXT.task_id = task_id
-    utils.THREAD_CONTEXT.registration_thread_id = threading.get_ident()
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", task_id, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "registration_thread_id", threading.get_ident(), raising=False)
 
     scheduler.update_task_metadata(stage="Queued")
     scheduler.update_task_progress(42, stage="Processing")
@@ -174,11 +174,11 @@ def test_update_task_metadata_and_progress_create_missing_entry():
         assert task_id not in scheduler.STATE.task_registry
 
 
-def test_update_task_progress_does_not_regress_existing_progress_or_stage():
+def test_update_task_progress_does_not_regress_existing_progress_or_stage(monkeypatch):
     """Fallback flows must not rewind a task's progress or visible stage."""
     task_id = "ld-task"
-    utils.THREAD_CONTEXT.task_id = task_id
-    utils.THREAD_CONTEXT.registration_thread_id = threading.get_ident()
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", task_id, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "registration_thread_id", threading.get_ident(), raising=False)
     scheduler.STATE.task_registry[task_id] = {
         "task_id": task_id,
         "status": "active",
@@ -197,8 +197,8 @@ def test_update_task_progress_does_not_regress_existing_progress_or_stage():
 
 def test_wait_for_priority_waits_for_pause_confirmation_without_timeout(monkeypatch):
     """wait_for_priority should rely on cooperative confirmation without timeout failures."""
-    scheduler.STATE.active_sessions = 1
-    scheduler.STATE.accel_limit = 1
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 1)
+    monkeypatch.setattr(scheduler.STATE, "accel_limit", 1)
     scheduler.STATE.task_registry["standard-task"] = {
         "task_id": "standard-task",
         "status": "active",

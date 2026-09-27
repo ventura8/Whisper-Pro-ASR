@@ -97,7 +97,7 @@ class TestIgnoreSpecificWarnings:
         assert repr(IgnoreSpecificWarnings()) == "IgnoreSpecificWarnings()"
 
 
-def test_contextual_filter_uses_system_when_filename_none():
+def test_contextual_filter_uses_system_when_filename_none(monkeypatch):
     """ContextualFilter should map None filename values to System context."""
     filt = logging_setup.ContextualFilter()
     record = logging.LogRecord(
@@ -111,7 +111,9 @@ def test_contextual_filter_uses_system_when_filename_none():
     )
 
     logging_setup.utils.THREAD_CONTEXT.reset()
-    logging_setup.utils.THREAD_CONTEXT.filename = None
+    # raising=False: after reset() the context has no filename, so there is nothing to read
+    # back; monkeypatch then deletes it again on teardown.
+    monkeypatch.setattr(logging_setup.utils.THREAD_CONTEXT, "filename", None, raising=False)
 
     assert filt.filter(record) is True
     assert getattr(record, "task_ctx", "") == ""

@@ -14,7 +14,6 @@ def clear_metric_cache():
     with metrics_discovery._CACHE_LOCK:
         metrics_discovery._METRIC_CACHE.clear()
         metrics_discovery._LAST_REAL_ACCEL_SAMPLES.clear()
-    yield
 
 
 def test_get_nvidia_metrics_success():

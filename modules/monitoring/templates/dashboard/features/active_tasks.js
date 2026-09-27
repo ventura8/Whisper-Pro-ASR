@@ -182,11 +182,11 @@ function _activeTaskLiveSection(isAsr, domKey, id, liveText) {
 
 function _activeTaskSpeedEta(task, now, historicalSpeeds, stageText) {
     const elapsedActive = _uiElapsedActiveSeconds(task, now);
-    if (!(task.video_duration > 0)) {
-        return { showSpeed: false, speedText: '0.0x', showEta: false, etaText: '00:00:00' };
+    if (task.video_duration > 0) {
+        const estimate = _taskSpeedEtaEstimate(task, now, historicalSpeeds, stageText);
+        return _taskSpeedEtaView(elapsedActive, estimate);
     }
-    const estimate = _taskSpeedEtaEstimate(task, now, historicalSpeeds, stageText);
-    return _taskSpeedEtaView(elapsedActive, estimate);
+    return { showSpeed: false, speedText: '0.0x', showEta: false, etaText: '00:00:00' };
 }
 
 function _uiElapsedActiveSeconds(task, now) {

@@ -11,10 +11,8 @@ function _accumulateHistoricalSpeed(agg, item) {
     if (normalizeStatus(item.status) !== 'completed') {
         return;
     }
-    if (!(item.video_duration > 0)) {
-        return;
-    }
-    const perf = _historyPerformance(item);
+    // Only items with a positive media duration can yield a speed ratio.
+    const perf = item.video_duration > 0 ? _historyPerformance(item) : null;
     if (!perf) {
         return;
     }
@@ -23,21 +21,20 @@ function _accumulateHistoricalSpeed(agg, item) {
 }
 
 function _historyPerformance(item) {
-    if (item.result && item.result.performance) {
+    if (item.result?.performance) {
         return item.result.performance;
     }
-    if (item.response_json && item.response_json.performance) {
+    if (item.response_json?.performance) {
         return item.response_json.performance;
     }
     return null;
 }
 
 function _addPerfSpeed(agg, videoDuration, perfSeconds, sumField, countField) {
-    if (!(perfSeconds > 0)) {
-        return;
+    if (perfSeconds > 0) {
+        agg[sumField] += videoDuration / perfSeconds;
+        agg[countField] += 1;
     }
-    agg[sumField] += videoDuration / perfSeconds;
-    agg[countField] += 1;
 }
 
 function calculateTaskSpeedAndEta(t, now, historicalSpeeds, isUvr) {

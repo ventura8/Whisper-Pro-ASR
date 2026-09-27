@@ -27,7 +27,7 @@ USERNAME=""
 VERIFY_ONLY=false
 TIMEOUT=600
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--user)
 		USERNAME="${2:?--user needs a value}"
@@ -67,17 +67,17 @@ die() {
 	exit 1
 }
 
-[ -n "$HOST" ] || read -r -p "macOS host (IP or name): " HOST
-[ -n "$HOST" ] || die "a host is required"
+[[ -n "$HOST" ]] || read -r -p "macOS host (IP or name): " HOST
+[[ -n "$HOST" ]] || die "a host is required"
 
-if [ ! -f "$KEY" ]; then
+if [[ ! -f "$KEY" ]]; then
 	note "No identity at $KEY -- generating a dedicated one."
 	# ssh-keygen does not create intermediate directories, so a --key under a path that
 	# does not exist yet fails with a bare "No such file or directory" naming neither.
 	mkdir -p "$(dirname "$KEY")"
 	ssh-keygen -t ed25519 -N '' -C 'whisper-pro-asr remote hardware validation' -f "$KEY" >/dev/null
 fi
-if [ "$VERIFY_ONLY" != true ]; then
+if [[ "$VERIFY_ONLY" != true ]]; then
 	# Read here, not at the top: --verify-only tests an already-configured host and never
 	# prints the paste block, so requiring the .pub sidecar made it fail on a machine where
 	# only the private key had been kept. Same fix as setup_linux_remote.sh.
@@ -105,23 +105,23 @@ echo "READY user=\$(whoami) arch=\$(uname -m)"
 EOF
 fi
 
-if [ -z "$USERNAME" ]; then
+if [[ -z "$USERNAME" ]]; then
 	read -r -p "macOS username (from the READY line): " USERNAME
 fi
-[ -n "$USERNAME" ] || die "a username is required"
+[[ -n "$USERNAME" ]] || die "a username is required"
 
 hdr "Waiting for ${USERNAME}@${HOST}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes)
 deadline=$(($(date +%s) + TIMEOUT))
 until ssh -i "$KEY" "${SSH_OPTS[@]}" "${USERNAME}@${HOST}" 'exit' 2>/dev/null; do
-	[ "$(date +%s)" -lt "$deadline" ] || die "no SSH after ${TIMEOUT}s. Confirm Remote Login is on and port 22 is reachable: nc -vz ${HOST} 22"
+	[[ "$(date +%s)" -lt "$deadline" ]] || die "no SSH after ${TIMEOUT}s. Confirm Remote Login is on and port 22 is reachable: nc -vz ${HOST} 22"
 	sleep 5
 done
 run() { ssh -i "$KEY" "${SSH_OPTS[@]}" "${USERNAME}@${HOST}" "$@"; }
 note "ssh: OK ($(run 'echo "$(whoami)@$(hostname -s) $(uname -m) macOS $(sw_vers -productVersion)"'))"
 
 hdr "Verifying"
-if DOCKER_VER="$(run 'docker info --format "{{.ServerVersion}}" 2>/dev/null')" && [ -n "$DOCKER_VER" ]; then
+if DOCKER_VER="$(run 'docker info --format "{{.ServerVersion}}" 2>/dev/null')" && [[ -n "$DOCKER_VER" ]]; then
 	note "docker: $DOCKER_VER"
 else
 	die "Docker is not reachable. Start Docker Desktop on the Mac, then re-run with --verify-only."

@@ -170,7 +170,7 @@ def _assert_pause_wait_self_healed(t_wait: threading.Thread, errors: list[Except
     assert result.get("outcome") is True
 
 
-def test_pause_confirmation_self_heals_on_simulated_worker_crash():
+def test_pause_confirmation_self_heals_on_simulated_worker_crash(monkeypatch):
     """3.9: worker crash mid-pause-handshake must not hang the priority-side wait forever.
 
     `state_helpers.wait_for_pause_confirmation` has no fixed wall-clock
@@ -193,7 +193,7 @@ def test_pause_confirmation_self_heals_on_simulated_worker_crash():
 
     hw_list = [{"id": "NPU.0", "type": "NPU", "name": "Intel NPU"}]
     with mock.patch("modules.core.config.HARDWARE_UNITS", hw_list):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
         task_id = "crashed-asr-task"
         with scheduler.STATE.task_registry_lock:
@@ -249,7 +249,7 @@ def test_pause_confirmation_self_heals_on_simulated_worker_crash():
         assert result["elapsed"] < _SELF_HEAL_POLL_INTERVAL * 10 + 0.5
 
 
-def test_resume_wait_self_heals_on_simulated_priority_crash():
+def test_resume_wait_self_heals_on_simulated_priority_crash(monkeypatch):
     """3.9 (ASR side): if the priority task vanishes mid-pause, the paused ASR worker's
     resume wait (`concurrency._wait_for_resume_signal` / `_can_resume_preempted_unit`)
     must not hang forever either -- it self-heals once no queued/active priority
@@ -259,7 +259,7 @@ def test_resume_wait_self_heals_on_simulated_priority_crash():
 
     hw_list = [{"id": "NPU.0", "type": "NPU", "name": "Intel NPU"}]
     with mock.patch("modules.core.config.HARDWARE_UNITS", hw_list):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
 
         priority_task_id = "crashed-priority-task"
         with scheduler.STATE.task_registry_lock:

@@ -58,7 +58,7 @@ def test_preemption_resume_when_one_priority_remains():
         assert "std_NPU.0_resumed" in events
 
 
-def test_concurrency_no_priority_preemption_reset_deadlock():
+def test_concurrency_no_priority_preemption_reset_deadlock(monkeypatch):
     """Verify that multiple concurrent priority requests do not reset preemption flags and deadlock."""
     from modules.core import utils
     from modules.inference.scheduler import SchedulerState
@@ -69,7 +69,7 @@ def test_concurrency_no_priority_preemption_reset_deadlock():
         mock.patch("modules.core.config.HARDWARE_UNITS", hw_list),
         mock.patch("modules.inference.runtime.model_manager.unload_models"),
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
         model_manager.MODEL_POOL.clear()
         model_manager.PREPROCESSOR_POOL.clear()
         model_manager.MODEL_POOL["NPU.0"] = mock.MagicMock()
@@ -196,7 +196,7 @@ def test_concurrency_priority_burst_no_livelock():
     }
 
 
-def test_model_lock_ctx_releases_unit_on_metadata_failure():
+def test_model_lock_ctx_releases_unit_on_metadata_failure(monkeypatch):
     """Verify unit/semaphore are released even if metadata update fails before yielding."""
     from modules.inference.scheduler import SchedulerState
 
@@ -205,7 +205,7 @@ def test_model_lock_ctx_releases_unit_on_metadata_failure():
         mock.patch("modules.core.config.HARDWARE_UNITS", hw_list),
         mock.patch("modules.inference.runtime.model_manager.unload_models"),
     ):
-        scheduler.STATE = SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", SchedulerState())
         model_manager.MODEL_POOL.clear()
         model_manager.PREPROCESSOR_POOL.clear()
         model_manager.MODEL_POOL["CPU"] = mock.MagicMock()

@@ -32,7 +32,7 @@ LOG_DIR="${VALIDATION_LOG_DIR:-${REPO_ROOT}/.validation-logs}"
 ONLY=""
 DRY=false
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--only)
 		ONLY="${2:?--only needs a machine name}"
@@ -57,8 +57,14 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-hdr() { printf '\n=== %s ===\n' "$*"; }
-note() { printf '  %s\n' "$*"; }
+hdr() {
+	printf '\n=== %s ===\n' "$*"
+	return 0
+}
+note() {
+	printf '  %s\n' "$*"
+	return 0
+}
 
 # machine | host | target | engine | preprocess | suite | transport | device | separation
 #
@@ -125,7 +131,7 @@ local|local|nvidia-whisperx|WHISPERX|AUTO|smoke|||on
 local|local|cpu|FASTER-WHISPER|CPU|accuracy||CPU|on
 PLAN
 )
-if [ -f "$PLAN_FILE" ]; then
+if [[ -f "$PLAN_FILE" ]]; then
 	PLAN="${PLAN}
 $(grep -vE '^[[:space:]]*(#|$)' "$PLAN_FILE")"
 else
@@ -158,7 +164,10 @@ PLAN="$(printf '%s\n' "$PLAN" | awk -F'|' 'NF {
 # rows do not carry. What IS checkable is that each value exists, and that a preprocessing
 # device is reachable from the image the row builds.
 engine_is_known() {
-	case "$1" in FASTER-WHISPER | INTEL-WHISPER | OPENAI-WHISPER | WHISPERX) return 0 ;; esac
+	case "$1" in
+	FASTER-WHISPER | INTEL-WHISPER | OPENAI-WHISPER | WHISPERX) return 0 ;;
+	*) ;; # Anything else falls through to the rejection below.
+	esac
 	return 1
 }
 
@@ -167,15 +176,34 @@ preprocess_is_reachable() {
 	local device="$1" target="$2"
 	case "$device" in
 	AUTO | CPU) return 0 ;;
-	CUDA) case "$target" in *nvidia* | full) return 0 ;; esac ;;
-	GPU | NPU) case "$target" in intel | intel-xpu | intel-npu | nvidia-intel | full) return 0 ;; esac ;;
-	AMD) case "$target" in amd | amd-rocm-torch | full) return 0 ;; esac ;;
+	CUDA)
+		case "$target" in
+		*nvidia* | full) return 0 ;;
+		*) ;; # This image does not carry that provider: rejected below.
+		esac
+		;;
+	GPU | NPU)
+		case "$target" in
+		intel | intel-xpu | intel-npu | nvidia-intel | full) return 0 ;;
+		*) ;; # This image does not carry that provider: rejected below.
+		esac
+		;;
+	AMD)
+		case "$target" in
+		amd | amd-rocm-torch | full) return 0 ;;
+		*) ;; # This image does not carry that provider: rejected below.
+		esac
+		;;
+	*) ;; # Unknown preprocessing device: rejected below.
 	esac
 	return 1
 }
 
 device_is_known() {
-	case "${1:-AUTO}" in "" | AUTO | CPU | GPU | NPU | CUDA | AMD) return 0 ;; esac
+	case "${1:-AUTO}" in
+	"" | AUTO | CPU | GPU | NPU | CUDA | AMD) return 0 ;;
+	*) ;; # Anything else falls through to the rejection below.
+	esac
 	return 1
 }
 
@@ -183,14 +211,17 @@ device_is_known() {
 # treated as off and silently validate the wrong thing -- which is the failure this whole
 # column exists to end.
 separation_is_known() {
-	case "${1:-off}" in "" | on | off | true | false) return 0 ;; esac
+	case "${1:-off}" in
+	"" | on | off | true | false) return 0 ;;
+	*) ;; # Anything else ("yes", "1", ...) falls through to the rejection below.
+	esac
 	return 1
 }
 
 validate_plan() {
 	local problems=0 m host target engine preprocess suite transport device separation
 	while IFS='|' read -r m host target engine preprocess suite transport device separation; do
-		[ -n "$m" ] || continue
+		[[ -n "$m" ]] || continue
 		if ! device_is_known "$device"; then
 			echo "${m}: unknown device '${device}' (AUTO|CPU|GPU|NPU|CUDA|AMD)" >&2
 			problems=$((problems + 1))
@@ -199,7 +230,7 @@ validate_plan() {
 			echo "${m}: unknown separation '${separation}' (on|off)" >&2
 			problems=$((problems + 1))
 		fi
-		if [ ! -f "${REPO_ROOT}/docker-compose.${target}.yml" ]; then
+		if [[ ! -f "${REPO_ROOT}/docker-compose.${target}.yml" ]]; then
 			echo "${m}: invalid target '${target}' (no docker-compose.${target}.yml)" >&2
 			problems=$((problems + 1))
 		fi
@@ -218,7 +249,7 @@ validate_plan() {
 			problems=$((problems + 1))
 		fi
 	done <<<"$PLAN"
-	[ "$problems" -eq 0 ] || {
+	[[ "$problems" -eq 0 ]] || {
 		echo "refusing to run: ${problems} invalid plan row(s)" >&2
 		exit 2
 	}
@@ -229,13 +260,13 @@ run_machine() {
 	log="${LOG_DIR}/${machine}.log"
 	: >"$log"
 	while IFS='|' read -r m host target engine preprocess suite transport device separation; do
-		[ "$m" = "$machine" ] || continue
+		[[ "$m" = "$machine" ]] || continue
 		# Fixtures are ~3.2G and identical between configurations, so sync once per machine.
 		# The flag is chosen here but `first` is only consumed below, after the transport and
 		# host checks -- an invalid first row used to claim the one --fixtures run and `continue`
 		# without ever syncing, so every later row on that machine ran against absent fixtures.
 		fixtures_flag=""
-		if [ "$first" = true ]; then fixtures_flag="--fixtures"; fi
+		if [[ "$first" = true ]]; then fixtures_flag="--fixtures"; fi
 		{
 			printf '\n########## %s | %s | %s | prep=%s | suite=%s ##########\n' "$machine" "$target" "$engine" "$preprocess" "$suite"
 			# +%%FT%%T%%z, not -Is: BSD/macOS date rejects -I entirely, and this script is
@@ -272,20 +303,26 @@ run_machine() {
 		# present or absent, and an empty "" argument would reach remote_validate.sh as an
 		# unknown token and abort the row.
 		local device_args=() separation_args=()
-		[ -z "$device" ] || device_args=(--device "$device")
-		case "${separation:-off}" in on | true) separation_args=(--separation) ;; esac
+		[[ -z "$device" ]] || device_args=(--device "$device")
+		case "${separation:-off}" in
+		on | true) separation_args=(--separation) ;;
+		*) ;; # off/false: --separation stays absent.
+		esac
 		bash "$VALIDATE_SNAPSHOT" "$host" ${transport_args[@]+"${transport_args[@]}"} \
 			${device_args[@]+"${device_args[@]}"} ${separation_args[@]+"${separation_args[@]}"} \
 			--target "$target" --engine "$engine" --preprocess "$preprocess" \
 			--suite "$suite" --full --keep $fixtures_flag </dev/null >>"$log" 2>&1
 		rc=$?
-		[ "$rc" -eq 0 ] || failures=$((failures + 1))
+		[[ "$rc" -eq 0 ]] || failures=$((failures + 1))
 		printf '########## exit=%s %s ##########\n' "$rc" "$(date +%Y-%m-%dT%H:%M:%S%z)" >>"$log"
 	done <<<"$PLAN"
 	# Returned so the wait loop below can aggregate it. Without this the function's status
 	# was the final printf's -- always 0 -- and a matrix in which every configuration failed
 	# still exited successfully.
-	[ "$failures" -eq 0 ]
+	if [[ "$failures" -eq 0 ]]; then
+		return 0
+	fi
+	return 1
 }
 
 mkdir -p "$LOG_DIR"
@@ -312,7 +349,7 @@ cp "${REPO_ROOT}/scripts/remote_validate.sh" "$VALIDATE_SNAPSHOT" ||
 # Space-separated: the membership test below is a glob on " $MACHINES ", and newlines
 # would make every match fail silently.
 MACHINES=$(printf '%s\n' "$PLAN" | cut -d'|' -f1 | awk '!seen[$0]++' | tr '\n' ' ')
-if [ -n "$ONLY" ]; then
+if [[ -n "$ONLY" ]]; then
 	# Checked against the plan: an unknown name used to yield an empty matrix that ran
 	# nothing and exited 0, which reads exactly like a clean pass.
 	case " $MACHINES " in
@@ -333,7 +370,7 @@ printf '%s\n' "$PLAN" | while IFS='|' read -r m host target engine preprocess su
 	case " $MACHINES " in *" $m "*) printf '  %-8s %-14s %-15s dev=%-5s prep=%-5s uvr=%-3s %-8s %s\n' "$m" "$target" "$engine" "${device:-AUTO}" "$preprocess" "${separation:-off}" "${transport:-linux}" "$suite" ;; esac
 done
 
-if [ "$DRY" = true ]; then
+if [[ "$DRY" = true ]]; then
 	hdr "Dry run"
 	note "nothing executed"
 	exit 0
@@ -359,7 +396,7 @@ for m in $MACHINES; do
 		sed 's/^/    /' | tail -40
 done
 
-if [ "$EXIT_STATUS" -ne 0 ]; then
+if [[ "$EXIT_STATUS" -ne 0 ]]; then
 	printf '\n  At least one configuration failed; see the logs above.\n'
 fi
 exit "$EXIT_STATUS"

@@ -77,7 +77,7 @@ def _assert_uvr_stage_events(t_asr: threading.Thread, t_prio: threading.Thread, 
     _assert_stage_order(events, "uvr_start", "prio_mid_uvr_done", "uvr_done")
 
 
-def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str):
+def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str, monkeypatch):
     """Mid-UVR multi-chunk separation: priority task interrupts mid-UVR, executes, and UVR resumes."""
     patcher, _ = setup_concurrency_harness(HW_TOPOLOGY_1_NPU)
     events: list[str] = []
@@ -99,7 +99,7 @@ def test_stage_mid_uvr_multi_chunk_preemption(sample_wav: str):
     t_asr: threading.Thread | None = None
     t_prio: threading.Thread | None = None
     try:
-        model_manager.PREPROCESSOR_POOL["NPU.0"].preprocess_audio = mock_preprocess
+        monkeypatch.setattr(model_manager.PREPROCESSOR_POOL["NPU.0"], "preprocess_audio", mock_preprocess)
 
         t_asr = threading.Thread(target=_worker_uvr_task, args=(sample_wav, events))
         t_asr.start()

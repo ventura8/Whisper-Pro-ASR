@@ -81,7 +81,8 @@ def test_provision_models_opens_gate_when_download_raises():
 
     assert model_provisioning.should_gate_tasks() is False
     error = model_provisioning.get_progress()["error"]
-    assert error is not None and "network down" in str(error)
+    assert error is not None
+    assert "network down" in str(error)
 
 
 def test_a_failure_is_not_reported_as_ready_and_can_be_retried():
@@ -509,5 +510,6 @@ class TestTheUvrDownloadRecoveryPath:
 
     def test_an_unhandled_error_is_not_swallowed(self, tmp_path):
         """A broad handler here would turn Ctrl-C into a silent retry."""
+        interrupt = KeyboardInterrupt()
         with pytest.raises(KeyboardInterrupt):
-            self._run_download(tmp_path, KeyboardInterrupt())
+            self._run_download(tmp_path, interrupt)

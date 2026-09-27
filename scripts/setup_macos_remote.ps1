@@ -23,11 +23,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 function Hdr($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
-function Note($m) { Write-Host "  $m" }
+function Show-Note($m) { Write-Host "  $m" }
 function Fail($m) { Write-Host "`nERROR: $m" -ForegroundColor Red; exit 1 }
 
 if (-not (Test-Path $Key)) {
-    Note "No identity at $Key -- generating a dedicated one."
+    Show-Note "No identity at $Key -- generating a dedicated one."
     New-Item -ItemType Directory -Force -Path (Split-Path $Key) | Out-Null
     # PowerShell 7.3 changed how arguments are passed to native commands: the old
     # workaround -N '""' now reaches ssh-keygen as a literal two-character passphrase, so
@@ -101,15 +101,15 @@ while ($true) {
     if ((Get-Date) -gt $deadline) { Fail "no SSH after ${TimeoutSeconds}s. Confirm Remote Login is enabled and port 22 is reachable." }
     Start-Sleep -Seconds 5
 }
-Note "ssh: OK ($(Run 'echo "$(whoami)@$(hostname -s) $(uname -m) macOS $(sw_vers -productVersion)"'))"
+Show-Note "ssh: OK ($(Run 'echo "$(whoami)@$(hostname -s) $(uname -m) macOS $(sw_vers -productVersion)"'))"
 
 Hdr "Verifying"
 $dockerVersion = Run 'docker info --format "{{.ServerVersion}}" 2>/dev/null'
 if (-not $dockerVersion) { Fail 'Docker is not reachable. Start Docker Desktop on the Mac, then re-run with -VerifyOnly.' }
-Note "docker: $dockerVersion"
+Show-Note "docker: $dockerVersion"
 # BSD df differs from GNU's; -g reports gigabytes on macOS.
-Note "free space: $(Run 'df -g / | tail -1 | awk ''{print $4"G"}''')"
-Note "cpu: $(Run 'sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown')"
+Show-Note "free space: $(Run 'df -g / | tail -1 | awk ''{print $4"G"}''')"
+Show-Note "cpu: $(Run 'sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown')"
 
 @"
 

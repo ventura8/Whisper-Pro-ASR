@@ -163,7 +163,8 @@ class TestNothingBreaksWithoutLines:
         """The tail pool becomes the only pool; scenes are still laid out."""
         sources = [s for s in _sources() if s.get("role") != "line"]
         blocks, scenes = longform_film.plan(sources, random.Random(SEED), 300.0)
-        assert _speech(blocks) and scenes
+        assert _speech(blocks)
+        assert scenes
 
     def test_no_sources_means_no_layout(self):
         """Nothing to lay out is an empty plan, not an error."""
@@ -189,10 +190,11 @@ class TestShapes:
         passage kind, which is what "no passages" means in the ground truth.
         """
         monkeypatch.setitem(longform_film.film_shapes.SHAPES, "bare", {"passages": ()})
-        expected = longform_film.plan(_sources(), random.Random(SEED), 1200.0, "bare")
+        expected_blocks, expected_scenes = longform_film.plan(_sources(), random.Random(SEED), 1200.0, "bare")
         blocks, scenes = longform_film.plan(_sources(), random.Random(SEED), 1200.0)
-        assert (blocks, scenes) == expected
-        assert longform_film.plan(_sources(), random.Random(SEED), 1200.0, "film") == expected
+        assert blocks == expected_blocks
+        assert scenes == expected_scenes
+        assert longform_film.plan(_sources(), random.Random(SEED), 1200.0, "film") == (expected_blocks, expected_scenes)
         assert not any("kind" in scene for scene in scenes)
 
     def test_a_passage_due_after_the_clip_ends_is_due_at_the_end(self, monkeypatch):

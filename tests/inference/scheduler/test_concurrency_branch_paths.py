@@ -11,9 +11,9 @@ from modules.inference import scheduler
 from modules.inference.runtime import concurrency, model_manager
 
 
-def test_try_borrow_preemptible_unit_without_target_covers_known_and_unknown_ids():
+def test_try_borrow_preemptible_unit_without_target_covers_known_and_unknown_ids(monkeypatch):
     """Cover non-targeted borrow branch for resolvable and unknown preemptible IDs."""
-    utils.THREAD_CONTEXT.target_unit_id = None
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", None, raising=False)
 
     isolated_state = mock.Mock()
     isolated_state.task_registry_lock = threading.RLock()
@@ -100,9 +100,9 @@ def test_is_preprocessor_lock_available_allows_missing_model_manager_or_lock():
 
 
 @mock.patch("modules.core.config.HARDWARE_UNITS", [{"id": "CPU", "type": "CPU", "name": "Host CPU"}])
-def test_try_borrow_preemptible_unit_targeted_missing_returns_none():
+def test_try_borrow_preemptible_unit_targeted_missing_returns_none(monkeypatch):
     """Cover targeted borrow branch when target is not currently preemptible."""
-    utils.THREAD_CONTEXT.target_unit_id = "CPU"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", "CPU", raising=False)
     scheduler.STATE.preemptible_units.clear()
 
     unit = concurrency._try_borrow_preemptible_unit()
@@ -110,7 +110,7 @@ def test_try_borrow_preemptible_unit_targeted_missing_returns_none():
     assert unit is None
 
 
-def test_try_borrow_preemptible_unit_falls_back_to_other_preemptible_when_target_missing():
+def test_try_borrow_preemptible_unit_falls_back_to_other_preemptible_when_target_missing(monkeypatch):
     """Priority task should borrow another available preemptible unit if target is not ready."""
     isolated_state = mock.Mock()
     isolated_state.task_registry_lock = threading.RLock()
@@ -126,7 +126,7 @@ def test_try_borrow_preemptible_unit_falls_back_to_other_preemptible_when_target
             ],
         ),
     ):
-        utils.THREAD_CONTEXT.target_unit_id = "NPU.0"
+        monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", "NPU.0", raising=False)
 
         unit = concurrency._try_borrow_preemptible_unit()
 
@@ -134,7 +134,7 @@ def test_try_borrow_preemptible_unit_falls_back_to_other_preemptible_when_target
         assert unit["id"] == "GPU.0"
 
 
-def test_try_borrow_preemptible_unit_skips_target_when_preprocessor_lock_is_held():
+def test_try_borrow_preemptible_unit_skips_target_when_preprocessor_lock_is_held(monkeypatch):
     """Targeted borrow should not remove a preemptible unit when preprocessor lock is unavailable."""
     isolated_state = mock.Mock()
     isolated_state.task_registry_lock = threading.RLock()
@@ -145,14 +145,14 @@ def test_try_borrow_preemptible_unit_skips_target_when_preprocessor_lock_is_held
         mock.patch("modules.core.config.HARDWARE_UNITS", [{"id": "NPU.0", "type": "NPU", "name": "Intel NPU"}]),
         mock.patch("modules.inference.runtime.concurrency._is_preprocessor_lock_available", return_value=False),
     ):
-        utils.THREAD_CONTEXT.target_unit_id = "NPU.0"
+        monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", "NPU.0", raising=False)
         unit = concurrency._try_borrow_preemptible_unit()
 
     assert unit is None
     assert "NPU.0" in isolated_state.preemptible_units
 
 
-def test_try_borrow_preemptible_unit_fallback_skips_locked_candidate_and_uses_next():
+def test_try_borrow_preemptible_unit_fallback_skips_locked_candidate_and_uses_next(monkeypatch):
     """Fallback borrow should skip locked candidates and use the next runnable unit."""
     isolated_state = mock.Mock()
     isolated_state.task_registry_lock = threading.RLock()
@@ -173,7 +173,7 @@ def test_try_borrow_preemptible_unit_fallback_skips_locked_candidate_and_uses_ne
             side_effect=lambda uid: uid != "GPU.0",
         ),
     ):
-        utils.THREAD_CONTEXT.target_unit_id = "NPU.0"
+        monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", "NPU.0", raising=False)
         unit = concurrency._try_borrow_preemptible_unit()
 
     assert unit is not None
@@ -242,9 +242,9 @@ def test_both_callers_take_the_drivable_unit_over_the_head_of_the_pool(take):
     release.assert_not_called()
 
 
-def test_priority_acquire_unit_fallback_marks_borrowed():
+def test_priority_acquire_unit_fallback_marks_borrowed(monkeypatch):
     """Cover fallback borrow path when no targeted unit is set."""
-    utils.THREAD_CONTEXT.target_unit_id = None
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "target_unit_id", None, raising=False)
     with (
         mock.patch("modules.inference.runtime.concurrency._try_take_idle_unit", return_value=None),
         mock.patch("modules.inference.runtime.concurrency._try_borrow_preemptible_unit", return_value={"id": "CPU"}),
@@ -300,7 +300,7 @@ def test_standard_task_acquires_idle_unit_while_priority_is_active_without_backl
 
 def test_standard_task_not_blocked_when_queued_priority_below_capacity(monkeypatch):
     """On two units, one queued priority task should not block standard acquisition."""
-    scheduler.STATE.accel_limit = 2
+    monkeypatch.setattr(scheduler.STATE, "accel_limit", 2)
     utils.THREAD_CONTEXT.reset()
 
     monkeypatch.setattr(scheduler, "get_queued_priority_count", lambda *_args, **_kwargs: 1)
@@ -331,7 +331,7 @@ def test_standard_task_not_blocked_when_queued_priority_below_capacity(monkeypat
 )
 def test_standard_task_capacity_threshold_for_queued_priority(monkeypatch, accel_limit, queued_priority_count, expect_blocked):
     """Standard acquisition should remain unit-driven and not block on queued-priority count alone."""
-    scheduler.STATE.accel_limit = accel_limit
+    monkeypatch.setattr(scheduler.STATE, "accel_limit", accel_limit)
     utils.THREAD_CONTEXT.reset()
 
     monkeypatch.setattr(scheduler, "get_queued_priority_count", lambda *_args, **_kwargs: queued_priority_count)
@@ -356,10 +356,10 @@ def test_standard_task_capacity_threshold_for_queued_priority(monkeypatch, accel
         mock_sleep.assert_not_called()
 
 
-def test_check_preemption_ignores_shared_pause_when_unit_sync_missing():
+def test_check_preemption_ignores_shared_pause_when_unit_sync_missing(monkeypatch):
     """Preemption should not trigger from shared pause flags when no unit-specific sync exists."""
     utils.THREAD_CONTEXT.reset()
-    utils.THREAD_CONTEXT.task_id = "fallback-task"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", "fallback-task", raising=False)
     scheduler.STATE.task_registry["fallback-task"] = {
         "status": "active",
         "is_priority": False,
@@ -393,10 +393,10 @@ def test_determine_preemption_needed_includes_pause_generation():
     u_sync["pause_requested"].clear()
 
 
-def test_restore_task_state_promotes_stale_paused_queue_status_to_active():
+def test_restore_task_state_promotes_stale_paused_queue_status_to_active(monkeypatch):
     """Resumed tasks should not fabricate a stage when none is available."""
     utils.THREAD_CONTEXT.reset()
-    utils.THREAD_CONTEXT.task_id = "resume-task"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", "resume-task", raising=False)
     scheduler.STATE.task_registry["resume-task"] = {
         "status": "queued",
         "is_priority": False,
@@ -421,10 +421,10 @@ def test_restore_task_state_promotes_stale_paused_queue_status_to_active():
     scheduler.STATE.task_registry.pop("resume-task", None)
 
 
-def test_restore_task_state_restores_vocal_separation_segment_stage():
+def test_restore_task_state_restores_vocal_separation_segment_stage(monkeypatch):
     """Resume should keep the last known vocal-separation segment stage."""
     utils.THREAD_CONTEXT.reset()
-    utils.THREAD_CONTEXT.task_id = "resume-vocal-task"
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", "resume-vocal-task", raising=False)
     scheduler.STATE.task_registry["resume-vocal-task"] = {
         "status": "queued",
         "is_priority": False,

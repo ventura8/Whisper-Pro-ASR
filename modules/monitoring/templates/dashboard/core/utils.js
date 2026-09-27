@@ -48,7 +48,7 @@ function _statusDataForHardwareLabeling() {
     if (typeof lastStatusData !== 'undefined' && lastStatusData) {
         return lastStatusData;
     }
-    if (globalThis && globalThis.lastStatusData) {
+    if (globalThis?.lastStatusData) {
         return globalThis.lastStatusData;
     }
     return null;
@@ -109,11 +109,11 @@ function getAuthHeaders(contentType, admin) {
 function escapeHtml(text) {
     if (!text) return "";
     return text.toString()
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
 function downloadSrt(filename, content) {
@@ -126,12 +126,12 @@ function downloadSrt(filename, content) {
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
+    a.remove();
 }
 
 function downloadSrtById(id) {
     const task = fullTaskHistory.find(t => (t.task_id || t.filename) === id);
-    if (task && task.result && task.result.text) {
+    if (task?.result?.text) {
         downloadSrt(task.filename, task.result.text);
     } else {
         alert("Transcription content not found in history.");

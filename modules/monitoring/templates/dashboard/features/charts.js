@@ -1,5 +1,5 @@
 function changeChartWindow(val) {
-    chartWindowMinutes = parseInt(val, 10);
+    globalThis.chartWindowMinutes = Number.parseInt(val, 10);
     renderCharts();
 }
 
@@ -161,7 +161,7 @@ function _currentAndPeak(values) {
 }
 
 function _isFiniteMetric(value) {
-    return value !== null && value !== undefined && !isNaN(value);
+    return value !== null && value !== undefined && !Number.isNaN(Number(value));
 }
 
 function _setTextIfExists(id, value) {
@@ -267,7 +267,7 @@ function _colorForHardwareBucket(bucket, unitId, index) {
 function _stableTextHash(text) {
     let hash = 0;
     for (let i = 0; i < text.length; i++) {
-        hash = (hash * 31 + text.charCodeAt(i)) % 997;
+        hash = (hash * 31 + text.codePointAt(i)) % 997;
     }
     return hash;
 }
@@ -325,7 +325,7 @@ function _resolveHardwareValue(point, unit) {
 function _resolveHardwareValueFromTelemetryMap(point, unit) {
     const telemetry = point.telemetry || {};
     const hwUtil = telemetry.hardware_util;
-    if (hwUtil && hwUtil[unit.id] !== undefined) {
+    if (hwUtil?.[unit.id] !== undefined) {
         return hwUtil[unit.id];
     }
     return null;
@@ -380,7 +380,7 @@ function _resolveLegacyNvidiaValue(point, unit) {
 }
 
 function _legacyNvidiaArray(point) {
-    if (point.telemetry && point.telemetry.nvidia) {
+    if (point.telemetry?.nvidia) {
         return point.telemetry.nvidia;
     }
     return point.nvidia_util;
@@ -446,8 +446,9 @@ function _pickLegacyUnitMetricByType(unitId, value) {
 }
 
 function _resolveUnitIndex(unitId) {
-    const match = String(unitId || '').match(/(\d+)(?!.*\d)/);
-    return match ? parseInt(match[1], 10) : 0;
+    // The index is the last run of digits in the id (e.g. "CUDA:1" -> 1).
+    const digitRuns = String(unitId || '').match(/\d+/g);
+    return digitRuns ? Number.parseInt(digitRuns[digitRuns.length - 1], 10) : 0;
 }
 
 function _isNvidiaUnit(unit) {
@@ -459,15 +460,15 @@ function updateHardwareStats(hwDatasets) {
     if (!hwStatsEl) return;
 
     const escapeHtml = (value) => String(value ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
     
     hwStatsEl.innerHTML = '';
     hwDatasets.forEach(dataset => {
-        const values = dataset.data.map(d => d.y).filter(v => !isNaN(v));
+        const values = dataset.data.map(d => d.y).filter(v => !Number.isNaN(Number(v)));
         const current = values[values.length - 1] || 0;
         const highest = values.length > 0 ? Math.max(...values) : 0;
         
@@ -557,17 +558,19 @@ function createOrUpdateLineChart(id, datasets, percent) {
     if (!el) return;
     let series = _buildApexSeries(datasets);
     series = _withFallbackSeries(series);
-    const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const isDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
     const themeMode = isDark ? 'dark' : 'light';
     const rangeMs = (chartWindowMinutes * 30 - 1) * 2000;
     const yaxisMax = _resolveChartYaxisMax(datasets, percent);
-    const options = _buildLineChartOptions(id, series, datasets, percent, isDark, themeMode, rangeMs, yaxisMax);
+    // Everything the option builders need, passed as one spec object.
+    const spec = { id, series, datasets, percent, isDark, themeMode, rangeMs, yaxisMax };
+    const options = _buildLineChartOptions(spec);
     const state = _getOrCreateChartState(id);
     if (charts[id]) {
-        _updateExistingChart(id, state, series, datasets, percent, isDark, themeMode, rangeMs, yaxisMax);
+        _updateExistingChart(spec, state);
         return;
     }
-    _createNewChart(id, el, state, options, datasets, rangeMs, themeMode, yaxisMax);
+    _createNewChart(spec, el, state, options);
 }
 
 function _getOrCreateChartState(id) {
@@ -604,7 +607,8 @@ function _maxDatasetValue(datasets) {
     return maxVal;
 }
 
-function _buildLineChartOptions(id, series, datasets, percent, isDark, themeMode, rangeMs, yaxisMax) {
+function _buildLineChartOptions(spec) {
+    const { id, series, datasets, percent, isDark, themeMode, rangeMs, yaxisMax } = spec;
     const strokeStyles = _seriesStrokeStyles(datasets);
     const markerStyles = _seriesMarkerStyles(id, datasets);
     const showLegend = id !== 'hwChart';
@@ -761,7 +765,8 @@ function _needsFullChartUpdate(state, rangeMs, themeMode, yaxisMax, styleSig) {
     return state.rangeMs !== rangeMs || state.theme !== themeMode || state.yaxisMax !== yaxisMax || state.styleSig !== styleSig;
 }
 
-function _updateExistingChart(id, state, series, datasets, percent, isDark, themeMode, rangeMs, yaxisMax) {
+function _updateExistingChart(spec, state) {
+    const { id, series, datasets, percent, isDark, themeMode, rangeMs, yaxisMax } = spec;
     const styleSig = _datasetStyleSignature(datasets);
     if (!_needsFullChartUpdate(state, rangeMs, themeMode, yaxisMax, styleSig)) {
         charts[id].updateSeries(series);
@@ -781,7 +786,8 @@ function _updateExistingChart(id, state, series, datasets, percent, isDark, them
     });
 }
 
-function _createNewChart(id, el, state, options, datasets, rangeMs, themeMode, yaxisMax) {
+function _createNewChart(spec, el, state, options) {
+    const { id, datasets, rangeMs, themeMode, yaxisMax } = spec;
     const styleSig = _datasetStyleSignature(datasets);
     _saveChartState(state, rangeMs, themeMode, yaxisMax, styleSig);
     charts[id] = new ApexCharts(el, options);

@@ -69,13 +69,13 @@ def test_history_stats():
     }
 
 
-def test_history_persistence():
+def test_history_persistence(monkeypatch):
     """Test that history is saved to SSD and reloaded."""
     history_manager.log_completed_task({"task_id": "p1", "video_duration": 50})
 
     # Force reload by clearing cache
-    history_manager.HISTORY_CACHE = []
-    history_manager.STATS_CACHE = None
+    monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
+    monkeypatch.setattr(history_manager, "STATS_CACHE", None)
 
     task_history = history_manager.get_history()
     assert len(task_history) == 1
@@ -97,13 +97,12 @@ def test_history_limit():
         assert task_history[0]["task_id"] == "3"
 
 
-def test_ensure_loaded_corrupt(request):
+def test_ensure_loaded_corrupt(reset_history_cache, monkeypatch):
     """Test resilience to corrupt JSON on SSD."""
-    temp_file = request.getfixturevalue("reset_history_cache")
-    with open(temp_file, "w", encoding="utf-8") as f:
+    with open(reset_history_cache, "w", encoding="utf-8") as f:
         f.write("corrupt")
 
-    history_manager.HISTORY_CACHE = []
+    monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
     history_manager.ensure_loaded()
     assert not history_manager.HISTORY_CACHE
 
@@ -114,15 +113,13 @@ def test_history_manager_exceptions():
     history_manager.log_completed_task(None)
 
 
-def test_history_manager_stats_cache():
+def test_history_manager_stats_cache(monkeypatch):
     """Cover stats cache hit branch."""
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    history_manager.STATS_CACHE = {"cached": True}
-    history_manager.STATS_CACHE_DATE = today_str
+    monkeypatch.setattr(history_manager, "STATS_CACHE", {"cached": True})
+    monkeypatch.setattr(history_manager, "STATS_CACHE_DATE", today_str)
     _history, stats = history_manager.get_history_stats()
     assert stats["cached"] is True
-    history_manager.STATS_CACHE = None
-    history_manager.STATS_CACHE_DATE = None
 
 
 def test_load_history_cache_from_disk_prefers_primary_entries() -> None:
@@ -206,7 +203,7 @@ def test_history_stats_persistent_on_clear():
     )
 
 
-def test_ensure_loaded_backfills_filenames(tmp_path):
+def test_ensure_loaded_backfills_filenames(tmp_path, monkeypatch):
     """Verify ensure_loaded correctly cleans and backfills generic filenames from request_json."""
     history_file = tmp_path / "task_history.json"
     dummy_history = [
@@ -221,7 +218,7 @@ def test_ensure_loaded_backfills_filenames(tmp_path):
     history_file.write_text(json.dumps(dummy_history), encoding="utf-8")
 
     with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
-        history_manager.HISTORY_CACHE = []
+        monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
         history_manager.ensure_loaded()
 
         cache = history_manager.HISTORY_CACHE
@@ -232,7 +229,7 @@ def test_ensure_loaded_backfills_filenames(tmp_path):
         assert cache[2]["filename"] == "already_correct.mp3"
 
 
-def test_log_completed_task_backfills_generic_filename(tmp_path):
+def test_log_completed_task_backfills_generic_filename(tmp_path, monkeypatch):
     """History writes should recover Bazarr-style filenames from request_json.local_path."""
     history_file = tmp_path / "task_history.json"
     task_data = {
@@ -247,13 +244,13 @@ def test_log_completed_task_backfills_generic_filename(tmp_path):
     }
 
     with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
-        history_manager.HISTORY_CACHE = []
+        monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
         history_manager.log_completed_task(task_data)
 
         assert history_manager.HISTORY_CACHE[0]["filename"] == "Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
 
 
-def test_get_history_backfills_filename_from_bazarr_json_path_key(tmp_path):
+def test_get_history_backfills_filename_from_bazarr_json_path_key(tmp_path, monkeypatch):
     """Legacy history entries may store the media path as request_json object key."""
     history_file = tmp_path / "task_history.json"
     path = "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
@@ -272,13 +269,13 @@ def test_get_history_backfills_filename_from_bazarr_json_path_key(tmp_path):
     )
 
     with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
-        history_manager.HISTORY_CACHE = []
+        monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
         history = history_manager.get_history()
 
     assert history[0]["filename"] == "Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
 
 
-def test_get_history_backfills_request_json_from_bazarr_path_key(tmp_path):
+def test_get_history_backfills_request_json_from_bazarr_path_key(tmp_path, monkeypatch):
     """Serving history should normalize Bazarr path-as-key request payloads."""
     history_file = tmp_path / "task_history.json"
     path = "/tv/Doc - In Your Hands/Season 3/Doc (IT) - S03E01 - Awakenings WEBDL-1080p.mkv"
@@ -297,22 +294,26 @@ def test_get_history_backfills_request_json_from_bazarr_path_key(tmp_path):
     )
 
     with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
-        history_manager.HISTORY_CACHE = []
+        monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
         history = history_manager.get_history()
 
     assert history[0]["request_json"] == {"local_path": path}
 
 
-def test_get_history_backfills_generic_filename_without_reload(tmp_path):
+def test_get_history_backfills_generic_filename_without_reload(tmp_path, monkeypatch):
     """Serving history should repair generic filenames already present in RAM cache."""
     history_file = tmp_path / "task_history.json"
-    history_manager.HISTORY_CACHE = [
-        {
-            "task_id": "live-1",
-            "filename": "Unknown Media",
-            "request_json": {"local_path": "/media/show/episode.mkv"},
-        }
-    ]
+    monkeypatch.setattr(
+        history_manager,
+        "HISTORY_CACHE",
+        [
+            {
+                "task_id": "live-1",
+                "filename": "Unknown Media",
+                "request_json": {"local_path": "/media/show/episode.mkv"},
+            }
+        ],
+    )
 
     with mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(history_file)):
         history = history_manager.get_history()
@@ -320,7 +321,7 @@ def test_get_history_backfills_generic_filename_without_reload(tmp_path):
     assert history[0]["filename"] == "episode.mkv"
 
 
-def test_ensure_loaded_imports_legacy_history_when_primary_missing(tmp_path):
+def test_ensure_loaded_imports_legacy_history_when_primary_missing(tmp_path, monkeypatch):
     """Upgrade path should import history from legacy data location when new state file is absent."""
     new_history_file = tmp_path / "state" / "task_history.json"
     legacy_history_file = tmp_path / "legacy" / "task_history.json"
@@ -343,7 +344,7 @@ def test_ensure_loaded_imports_legacy_history_when_primary_missing(tmp_path):
         mock.patch("modules.monitoring.history_manager.HISTORY_FILE", str(new_history_file)),
         mock.patch("modules.monitoring.history_manager.LEGACY_HISTORY_FILES", [str(legacy_history_file)]),
     ):
-        history_manager.HISTORY_CACHE = []
+        monkeypatch.setattr(history_manager, "HISTORY_CACHE", [])
         history_manager.ensure_loaded()
 
         cache = history_manager.HISTORY_CACHE

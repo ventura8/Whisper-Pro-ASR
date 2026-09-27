@@ -382,7 +382,7 @@ def test_get_service_stats_blocks_placeholder_status_and_stage_values(clean_tele
     stats = get_service_stats_with_common_patches()
 
     task_by_id = {task.get("task_id"): task for task in stats["tasks"]}
-    assert {
+    assert {task_id: (task["status"], task["stage"]) for task_id, task in task_by_id.items()} == {
         "placeholder_task": ("initializing", "Initializing"),
         "ratio_placeholder": ("initializing", "Initializing"),
-    } == {task_id: (task["status"], task["stage"]) for task_id, task in task_by_id.items()}
+    }

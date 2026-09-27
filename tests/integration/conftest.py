@@ -32,7 +32,7 @@ _BAZARR_DETECTION_RESULT = {
 }
 
 
-@pytest.fixture()
+@pytest.fixture
 def bazarr_wav(tmp_path):
     """Create a realistic WAV file simulating a Bazarr volume-mapped media path."""
     media_dir = tmp_path / "media" / "movies"
@@ -68,7 +68,7 @@ def mock_asr_manager_for_transcription(
     mock_mm.run_transcription.return_value = copy.deepcopy(_BAZARR_TRANSCRIPTION_RESULT) if result is None else result
 
 
-@pytest.fixture()
+@pytest.fixture
 def bazarr_client():
     """Create test client with mocked inference layer for Bazarr integration."""
     with (
@@ -84,7 +84,7 @@ def bazarr_client():
         yield FlaskCompatibleClient(app)
 
 
-@pytest.fixture()
+@pytest.fixture
 def bazarr_secured_client():
     """Create a full app client with API key middleware enabled for Bazarr endpoint coverage."""
     with (

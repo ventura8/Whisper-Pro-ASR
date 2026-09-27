@@ -400,7 +400,8 @@ def _run_npu_failure_and_concurrent_gpu_task(
 def _assert_npu_and_gpu_threads_finished(t_npu: threading.Thread, t_gpu: threading.Thread | None) -> None:
     """Assert both the NPU-side and GPU-side threads finished (no hang, no leftover daemon)."""
     assert not t_npu.is_alive()
-    assert t_gpu is not None and not t_gpu.is_alive()
+    assert t_gpu is not None
+    assert not t_gpu.is_alive()
 
 
 @pytest.mark.usefixtures("dual_harness")

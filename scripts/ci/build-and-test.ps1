@@ -9,7 +9,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 # Load shared dependencies
 $depsFile = Join-Path $PSScriptRoot "dependencies.env"
 if (Test-Path $depsFile) {
-    Get-Content $depsFile | Foreach-Object {
+    Get-Content $depsFile | ForEach-Object {
         if ($_ -match '^\s*([^#=\s]+)\s*=\s*(.*?)\s*$') {
             $name = $Matches[1]
             $value = $Matches[2]

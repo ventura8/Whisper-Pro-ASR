@@ -9,7 +9,7 @@ function activateTabOnKey(event, tab) {
 }
 
 function showTab(tab) {
-    currentTab = tab;
+    globalThis.currentTab = tab;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.getElementById(`tab-${tab}`).classList.add('active');
     ['active', 'history', 'analytics', 'charts', 'settings'].forEach(s => {
@@ -29,7 +29,7 @@ function showTab(tab) {
     }
     if (tab === 'history') {
         fetch('/history', { headers: getAuthHeaders() }).then(res => res.json()).then(data => {
-            fullTaskHistory = data || [];
+            globalThis.fullTaskHistory = data || [];
             renderHistory();
         });
     }
@@ -76,22 +76,22 @@ function bindToggleHandlers(root = document) {
 function startRefreshInterval() {
     if (typeof refreshTimer !== 'undefined' && refreshTimer) {
         clearInterval(refreshTimer);
-        refreshTimer = null;
+        globalThis.refreshTimer = null;
     }
     if (refreshEnabled && typeof currentRefreshInterval !== 'undefined') {
-        refreshTimer = setInterval(updateStats, currentRefreshInterval);
+        globalThis.refreshTimer = setInterval(updateStats, currentRefreshInterval);
     }
 }
 
 function changeRefreshInterval(val) {
-    currentRefreshInterval = parseInt(val, 10);
+    globalThis.currentRefreshInterval = Number.parseInt(val, 10);
     startRefreshInterval();
     renderCharts();
 }
 
 function handleTelemetryPurgeSuccess() {
     alert('Telemetry history purged successfully.');
-    rollingTelemetryBuffer = [];
+    globalThis.rollingTelemetryBuffer = [];
     if (typeof globalThis.resetTelemetryChartsAndStats === 'function') {
         globalThis.resetTelemetryChartsAndStats();
     }
@@ -151,8 +151,8 @@ async function saveSettings() {
             method: 'POST',
             headers: getAuthHeaders('application/json', true),
             body: JSON.stringify({
-                telemetry_retention_hours: parseInt(telemetryHours, 10),
-                log_retention_days: parseInt(logDays, 10)
+                telemetry_retention_hours: Number.parseInt(telemetryHours, 10),
+                log_retention_days: Number.parseInt(logDays, 10)
             })
         });
         if (!response.ok) {
@@ -173,7 +173,7 @@ async function clearTaskHistory() {
         });
         if (res.ok) {
             alert('Task history purged successfully.');
-            fullTaskHistory = [];
+            globalThis.fullTaskHistory = [];
             renderHistory();
         } else {
             alert('Failed to clear task history.');

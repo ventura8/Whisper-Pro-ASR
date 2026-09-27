@@ -26,13 +26,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 function Hdr($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
-function Note($m) { Write-Host "  $m" }
+function Show-Note($m) { Write-Host "  $m" }
 function Fail($m) { Write-Host "`nERROR: $m" -ForegroundColor Red; exit 1 }
 
 $repoRoot = Split-Path (Split-Path $PSCommandPath -Parent) -Parent
 
 if (-not (Test-Path $Key)) {
-    Note "No identity at $Key -- generating a dedicated one."
+    Show-Note "No identity at $Key -- generating a dedicated one."
     New-Item -ItemType Directory -Force -Path (Split-Path $Key) | Out-Null
     # PowerShell 7.3 changed how arguments are passed to native commands: the old
     # workaround -N '""' now reaches ssh-keygen as a literal two-character passphrase, so
@@ -117,13 +117,13 @@ while ($true) {
     if ((Get-Date) -gt $deadline) { Fail "no SSH after ${TimeoutSeconds}s. Check sshd is running and port 22 is reachable." }
     Start-Sleep -Seconds 5
 }
-Note "ssh: OK ($(Run 'echo "$(whoami)@$(hostname) $(uname -m) kernel=$(uname -r)"'))"
+Show-Note "ssh: OK ($(Run 'echo "$(whoami)@$(hostname) $(uname -m) kernel=$(uname -r)"'))"
 
 Hdr "Verifying"
 Run 'docker info >/dev/null 2>&1'
 if ($LASTEXITCODE -ne 0) { Fail 'docker still needs sudo. Confirm the usermod ran, then re-run with -VerifyOnly.' }
-Note "docker: usable without sudo ($(Run 'docker --version'))"
-Note "free space: $(Run 'df -BG --output=avail / | tail -1 | tr -d " "')"
+Show-Note "docker: usable without sudo ($(Run 'docker --version'))"
+Show-Note "free space: $(Run 'df -BG --output=avail / | tail -1 | tr -d " "')"
 
 Hdr "Hardware audit"
 # Piped so the remote needs no checkout. Never assume which vendor is present: a host
@@ -134,7 +134,7 @@ $auditScript = Join-Path $repoRoot 'scripts\audit_hardware.sh'
 # "$'\r': command not found" on a script that is perfectly valid.
 $auditBody = (Get-Content $auditScript -Raw) -replace "`r`n", "`n"
 $audit = $auditBody | & ssh -i $Key @sshOpts "$User@$RemoteHost" 'bash -s -- --json'
-Note $audit
+Show-Note $audit
 
 $target = [regex]::Match($audit, '"recommended_target":"([^"]*)"').Groups[1].Value
 $hasNpu = $audit -match '"intel_npu":true'

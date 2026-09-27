@@ -26,9 +26,9 @@ def reset_state():
         scheduler.STATE = scheduler.SchedulerState()
 
 
-def test_priority_does_not_wait_for_unrelated_ffmpeg_once_target_is_preemptible():
+def test_priority_does_not_wait_for_unrelated_ffmpeg_once_target_is_preemptible(monkeypatch):
     """Priority task should not be blocked by unrelated FFmpeg count."""
-    scheduler.STATE.active_sessions = 2
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 2)
     scheduler.STATE.task_registry["standard_task"] = {
         "task_id": "standard_task",
         "status": "active",
@@ -84,7 +84,7 @@ def test_priority_task_starts_as_queued_for_dashboard_visibility():
     assert captured["stage"] == "Waiting for Priority Slot"
 
 
-def test_priority_sequential_lock_is_single_permit_across_hardware_units():
+def test_priority_sequential_lock_is_single_permit_across_hardware_units(monkeypatch):
     """Priority lock must enforce one-at-a-time execution regardless of hardware count."""
     with mock.patch(
         "modules.core.config.HARDWARE_UNITS",
@@ -93,7 +93,7 @@ def test_priority_sequential_lock_is_single_permit_across_hardware_units():
             {"id": "GPU.0", "type": "GPU", "name": "Intel GPU"},
         ],
     ):
-        scheduler.STATE = scheduler.SchedulerState()
+        monkeypatch.setattr(scheduler, "STATE", scheduler.SchedulerState())
 
     assert scheduler.STATE.priority_sequential_lock.acquire(blocking=False) is True
     assert scheduler.STATE.priority_sequential_lock.acquire(blocking=False) is False
@@ -135,12 +135,12 @@ def test_get_service_stats_minimal_returns_active_tasks():
     assert stats["active_tasks"][0]["stage"] == "Inference"
 
 
-def test_is_uvr_loaded_reflects_state_flag():
+def test_is_uvr_loaded_reflects_state_flag(monkeypatch):
     """Ensure is_uvr_loaded mirrors scheduler state."""
-    scheduler.STATE.uvr_loaded = False
+    monkeypatch.setattr(scheduler.STATE, "uvr_loaded", False)
     assert scheduler.is_uvr_loaded() is False
 
-    scheduler.STATE.uvr_loaded = True
+    monkeypatch.setattr(scheduler.STATE, "uvr_loaded", True)
     assert scheduler.is_uvr_loaded() is True
 
 
@@ -307,10 +307,10 @@ def test_wait_for_pause_confirmation_accepts_legacy_event_without_generation():
             u_sync["pause_confirmed"].clear()
 
 
-def test_get_standard_task_state_uses_session_fallback_when_registry_empty():
+def test_get_standard_task_state_uses_session_fallback_when_registry_empty(monkeypatch):
     """Fallback session accounting should mark standard work as active when sessions are present."""
-    scheduler.STATE.active_sessions = 1
-    scheduler.STATE.priority_requests = 0
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 1)
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 0)
 
     active, initializing = scheduler._get_standard_task_state(None, None)
 
@@ -318,10 +318,10 @@ def test_get_standard_task_state_uses_session_fallback_when_registry_empty():
     assert initializing is False
 
 
-def test_get_standard_task_state_skips_session_fallback_for_priority_only_registry():
+def test_get_standard_task_state_skips_session_fallback_for_priority_only_registry(monkeypatch):
     """Priority-only registry entries must not be treated as active standard workload."""
-    scheduler.STATE.active_sessions = 2
-    scheduler.STATE.priority_requests = 1
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 2)
+    monkeypatch.setattr(scheduler.STATE, "priority_requests", 1)
     scheduler.STATE.task_registry["prio"] = {
         "task_id": "prio",
         "status": "active",
@@ -335,10 +335,10 @@ def test_get_standard_task_state_skips_session_fallback_for_priority_only_regist
     assert initializing is False
 
 
-def test_wait_for_priority_does_not_pause_when_registry_has_only_priority_tasks():
+def test_wait_for_priority_does_not_pause_when_registry_has_only_priority_tasks(monkeypatch):
     """Priority-only bursts must not request preemption/pause on any unit."""
-    scheduler.STATE.active_sessions = 4
-    scheduler.STATE.accel_limit = 2
+    monkeypatch.setattr(scheduler.STATE, "active_sessions", 4)
+    monkeypatch.setattr(scheduler.STATE, "accel_limit", 2)
     scheduler.STATE.task_registry["prio-a"] = {
         "task_id": "prio-a",
         "status": "active",
@@ -441,12 +441,12 @@ def test_wait_for_pause_confirmation_returns_when_no_active_standard(monkeypatch
         scheduler.STATE.task_registry.pop("std", None)
 
 
-def test_cleanup_failed_task_removes_arrival_order_entries():
+def test_cleanup_failed_task_removes_arrival_order_entries(monkeypatch):
     """cleanup_failed_task should remove registry, logs, and FIFO arrival tracking."""
     task_id = "failed-task"
     thread_id = threading.get_ident()
-    utils.THREAD_CONTEXT.task_id = task_id
-    utils.THREAD_CONTEXT.registration_thread_id = thread_id
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", task_id, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "registration_thread_id", thread_id, raising=False)
 
     scheduler.STATE.task_registry[task_id] = {"task_id": task_id, "status": "queued"}
     scheduler.STATE.task_arrival_order[task_id] = time.time()
@@ -458,11 +458,11 @@ def test_cleanup_failed_task_removes_arrival_order_entries():
     assert thread_id not in scheduler.STATE.task_arrival_order
 
 
-def test_scheduler_task_helpers_cleanup_branches():
+def test_scheduler_task_helpers_cleanup_branches(monkeypatch):
     """Verify cleanup_failed_task handles task-id and thread-id lookups."""
     thread_id = threading.get_ident()
-    utils.THREAD_CONTEXT.task_id = None
-    utils.THREAD_CONTEXT.registration_thread_id = thread_id
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", None, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "registration_thread_id", thread_id, raising=False)
 
     scheduler.STATE.task_registry[thread_id] = {"task_id": "thread-task"}
     logging_setup.TASK_LOGS[thread_id] = ["log1"]
@@ -470,8 +470,8 @@ def test_scheduler_task_helpers_cleanup_branches():
     scheduler.cleanup_failed_task()
 
     task_id = "some-task-id"
-    utils.THREAD_CONTEXT.task_id = task_id
-    utils.THREAD_CONTEXT.registration_thread_id = None
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "task_id", task_id, raising=False)
+    monkeypatch.setattr(utils.THREAD_CONTEXT, "registration_thread_id", None, raising=False)
     logging_setup.TASK_LOGS[task_id] = ["log2"]
     scheduler.cleanup_failed_task()
 

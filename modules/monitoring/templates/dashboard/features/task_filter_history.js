@@ -28,10 +28,11 @@ function getTaskFilterCategory(task) {
 }
 
 function _taskFieldLower(task, field) {
-    if (!task || task[field] === null || task[field] === undefined) {
+    const value = task?.[field];
+    if (value === null || value === undefined) {
         return '';
     }
-    return String(task[field]).toLowerCase();
+    return String(value).toLowerCase();
 }
 
 function _containsAnyKeyword(text, keywords) {
@@ -86,7 +87,7 @@ function filterHistory(type) {
 }
 
 function toggleRefresh() {
-    refreshEnabled = !refreshEnabled;
+    globalThis.refreshEnabled = !refreshEnabled;
     const icon = document.getElementById('refresh-icon');
     const text = document.getElementById('refresh-text');
     const btn = document.getElementById('toggle-refresh');
@@ -122,9 +123,9 @@ function renderHistory() {
         return;
     }
 
-    const orderedHistory = filteredHistory.sort(_compareHistoryItems);
+    filteredHistory.sort(_compareHistoryItems);
 
-    hList.innerHTML = orderedHistory.map((item, index) => _renderHistoryCardByIndex(item, index)).join('');
+    hList.innerHTML = filteredHistory.map((item, index) => _renderHistoryCardByIndex(item, index)).join('');
 }
 
 function _historyMatchesSelectedFilter(item) {
@@ -140,17 +141,19 @@ function _compareHistoryItems(a, b) {
 }
 
 function _historyStartTime(item) {
-    if (!item || item.start_time === null || item.start_time === undefined) {
+    const startTime = item?.start_time;
+    if (startTime === null || startTime === undefined) {
         return 0;
     }
-    return Number(item.start_time);
+    return Number(startTime);
 }
 
 function _historyTaskId(item) {
-    if (!item || item.task_id === null || item.task_id === undefined) {
+    const taskId = item?.task_id;
+    if (taskId === null || taskId === undefined) {
         return '';
     }
-    return String(item.task_id);
+    return String(taskId);
 }
 
 function _renderHistoryCardByIndex(item, index) {
@@ -268,7 +271,7 @@ function _historyLogsText(h) {
 }
 
 function _historyResultPayload(h) {
-    return h.result ? h.result : (h.response_json ? h.response_json : {});
+    return h.result || h.response_json || {};
 }
 
 function _historyFinalSrt(h, result) {
@@ -283,10 +286,10 @@ function _warnIfMissingHistoryText(result, id, item) {
 
 function _historySpeedText(h) {
     const elapsed = h.active_elapsed_sec || h.total_elapsed_sec;
-    if (!(h.video_duration > 0) || !(elapsed > 0)) {
-        return '0.0x';
+    if (h.video_duration > 0 && elapsed > 0) {
+        return (h.video_duration / elapsed).toFixed(1) + 'x';
     }
-    return (h.video_duration / elapsed).toFixed(1) + 'x';
+    return '0.0x';
 }
 
 function _historyStatusMeta(status) {

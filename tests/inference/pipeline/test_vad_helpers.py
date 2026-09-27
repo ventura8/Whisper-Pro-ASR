@@ -111,7 +111,8 @@ class TestFfmpegDecodeCommand:
     def test_the_whole_file_command_carries_no_bounds(self):
         """The whole file command carries no bounds."""
         cmd = vad._build_ffmpeg_decode_cmd("/in.mkv", "/out.wav")
-        assert "-ss" not in cmd and "-t" not in cmd
+        assert "-ss" not in cmd
+        assert "-t" not in cmd
         assert cmd[-1] == "/out.wav"
 
     def test_an_offset_and_duration_are_both_passed(self):

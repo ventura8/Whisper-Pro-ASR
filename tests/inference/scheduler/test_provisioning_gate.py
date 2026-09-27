@@ -43,7 +43,8 @@ def test_a_gated_task_gets_no_unit(quiet_scheduler):
         with mock.patch.object(scheduler.STATE.cond, "wait") as wait:
             unit, borrowed, queued_added = concurrency._loop_step_acquire("t1", False, False)
 
-    assert unit is None and borrowed is False
+    assert unit is None
+    assert borrowed is False
     assert queued_added is True, "the task must be registered as queued exactly once"
     wait.assert_called_once()
     quiet_scheduler["metadata"].assert_called_once_with(status="queued")

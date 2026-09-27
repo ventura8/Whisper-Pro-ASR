@@ -36,7 +36,7 @@ rm -rf "${SITE_PACKAGES}/triton" "${SITE_PACKAGES}"/pytorch_triton_xpu*
 # The glob below then matched nothing and the step reported "deduplicated 0 MB" while the
 # ~1.1GB of duplicated .so copies shipped intact.
 VENV_LIB_DIR="$(python3 -c 'import pathlib, site; print(pathlib.Path(site.getsitepackages()[0]).parent.parent)')"
-if [ ! -d "$VENV_LIB_DIR" ]; then
+if [[ ! -d "$VENV_LIB_DIR" ]]; then
 	echo "install_xpu_torch: ERROR derived library directory does not exist: $VENV_LIB_DIR" >&2
 	exit 1
 fi

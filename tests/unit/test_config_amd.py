@@ -116,17 +116,18 @@ class TestConfigAmd:
         finally:
             self._reset_config_module()
 
-    def test_get_parallel_limit_amd_honors_amd_unit_count(self):
+    def test_get_parallel_limit_amd_honors_amd_unit_count(self, monkeypatch):
         """get_parallel_limit('AMD') should honor the number of registered AMD units."""
-        config_module.HARDWARE_UNITS = [
-            {"id": "amd:0", "type": "AMD", "name": "AMD GPU 0"},
-            {"id": "amd:1", "type": "AMD", "name": "AMD GPU 1"},
-            {"id": "amd:2", "type": "AMD", "name": "AMD GPU 2"},
-        ]
-        try:
-            assert config_module.get_parallel_limit("AMD") == 3
-        finally:
-            config_module.HARDWARE_UNITS = []
+        monkeypatch.setattr(
+            config_module,
+            "HARDWARE_UNITS",
+            [
+                {"id": "amd:0", "type": "AMD", "name": "AMD GPU 0"},
+                {"id": "amd:1", "type": "AMD", "name": "AMD GPU 1"},
+                {"id": "amd:2", "type": "AMD", "name": "AMD GPU 2"},
+            ],
+        )
+        assert config_module.get_parallel_limit("AMD") == 3
 
 
 class TestAmdHardwareDetectionHelpers:

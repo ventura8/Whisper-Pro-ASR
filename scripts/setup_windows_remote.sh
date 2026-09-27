@@ -30,7 +30,7 @@ DISTRO="Ubuntu"
 VERIFY_ONLY=false
 TIMEOUT=600
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--user)
 		USERNAME="${2:?--user needs a value}"
@@ -74,17 +74,17 @@ die() {
 	exit 1
 }
 
-[ -n "$HOST" ] || read -r -p "Windows host (IP or name): " HOST
-[ -n "$HOST" ] || die "a host is required"
+[[ -n "$HOST" ]] || read -r -p "Windows host (IP or name): " HOST
+[[ -n "$HOST" ]] || die "a host is required"
 
-if [ ! -f "$KEY" ]; then
+if [[ ! -f "$KEY" ]]; then
 	note "No identity at $KEY -- generating a dedicated one."
 	# ssh-keygen does not create intermediate directories, so a --key under a path that
 	# does not exist yet fails with a bare "No such file or directory" naming neither.
 	mkdir -p "$(dirname "$KEY")"
 	ssh-keygen -t ed25519 -N '' -C 'whisper-pro-asr remote hardware validation' -f "$KEY" >/dev/null
 fi
-if [ "$VERIFY_ONLY" != true ]; then
+if [[ "$VERIFY_ONLY" != true ]]; then
 	# Read only where it is used. At the top level, `--verify-only` against a host set up from
 	# another machine failed on a missing .pub sidecar before it could test anything -- and
 	# verification needs the private key to connect, never the public one.
@@ -121,22 +121,22 @@ username and the WSL distro it configured -- tell me both, and pass the distro t
 script with --distro so every check below runs against that one, not the host default.
 
 EOF
-	if [ "$LEN" -gt 8191 ]; then
+	if [[ "$LEN" -gt 8191 ]]; then
 		note "WARNING: the command is ${LEN} characters, over cmd.exe's 8191 limit."
 		note "Paste it into PowerShell (not a cmd window), or it will be truncated."
 	fi
 fi
 
-if [ -z "$USERNAME" ]; then
+if [[ -z "$USERNAME" ]]; then
 	read -r -p "Windows username (from the last line of that output): " USERNAME
 fi
-[ -n "$USERNAME" ] || die "a username is required"
+[[ -n "$USERNAME" ]] || die "a username is required"
 
 hdr "Waiting for ${USERNAME}@${HOST}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes)
 deadline=$(($(date +%s) + TIMEOUT))
 until ssh -i "$KEY" "${SSH_OPTS[@]}" "${USERNAME}@${HOST}" 'exit' 2>/dev/null; do
-	[ "$(date +%s)" -lt "$deadline" ] || die "no SSH after ${TIMEOUT}s. Check the setup output, and that port 22 is reachable: nc -vz ${HOST} 22"
+	[[ "$(date +%s)" -lt "$deadline" ]] || die "no SSH after ${TIMEOUT}s. Check the setup output, and that port 22 is reachable: nc -vz ${HOST} 22"
 	sleep 5
 done
 note "ssh: OK"
@@ -158,7 +158,7 @@ else
 	die "WSL distro '${DISTRO}' is not reachable over SSH. Install one (wsl --install -d Ubuntu), or pass --distro with the name from the setup output, and re-run with --verify-only."
 fi
 
-if DOCKER_VER="$(run "wsl -d ${DISTRO} -e bash -lc \"docker info --format {{.ServerVersion}} 2>/dev/null\"" 2>/dev/null)" && [ -n "$DOCKER_VER" ]; then
+if DOCKER_VER="$(run "wsl -d ${DISTRO} -e bash -lc \"docker info --format {{.ServerVersion}} 2>/dev/null\"" 2>/dev/null)" && [[ -n "$DOCKER_VER" ]]; then
 	note "docker in wsl (${DISTRO}): $DOCKER_VER"
 else
 	die "Docker is not reachable inside WSL distro '${DISTRO}'. Docker Desktop -> Settings -> Resources -> WSL Integration -> enable it for ${DISTRO}, then re-run with --verify-only."

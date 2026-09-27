@@ -100,7 +100,8 @@ def test_preemption_still_crosses_the_process_boundary(prep):
     # any state at all -- including one whose worker had died and been silently respawned
     # with no handle. Assert that the call answers with the handle's own record instead.
     state = prep._channel.call("state", handle=prep._handle)
-    assert isinstance(state, dict) and "loaded" in state, f"the channel did not answer after preemption: {state!r}"
+    assert isinstance(state, dict), f"the channel did not answer after preemption: {state!r}"
+    assert "loaded" in state, f"the channel did not answer after preemption: {state!r}"
 
 
 def test_separator_probe_reports_loaded_state(prep):

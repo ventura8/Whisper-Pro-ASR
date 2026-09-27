@@ -6,7 +6,7 @@ set -euo pipefail
 fail=0
 check() {
 	local label="$1" count="$2"
-	if [ "$count" -ne 0 ]; then
+	if [[ "$count" -ne 0 ]]; then
 		echo "FAIL: $label ($count found)" >&2
 		fail=1
 	else
@@ -31,7 +31,7 @@ check "apt lists" "$(find /var/lib/apt/lists -type f 2>/dev/null | wc -l)"
 # reporting a build-artifact failure that never happened. The emptiness check below stays
 # the only thing that decides this verdict.
 site_packages="$(find /opt/venv/lib -maxdepth 2 -type d -name site-packages 2>/dev/null | head -n1 || true)"
-if [ -z "$site_packages" ]; then
+if [[ -z "$site_packages" ]]; then
 	echo "FAIL: no site-packages under /opt/venv/lib -- the artifact checks would pass vacuously" >&2
 	exit 1
 fi

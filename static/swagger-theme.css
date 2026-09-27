@@ -2,17 +2,12 @@
 
     a { color: #8c8cfa; }
 
-    ::-webkit-scrollbar-track-piece { background-color: rgba(255, 255, 255, .2) !important; }
-
-    ::-webkit-scrollbar-track { background-color: rgba(255, 255, 255, .3) !important; }
-
-    ::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, .5) !important; }
-
     embed[type="application/pdf"] { filter: invert(90%); }
 
     html {
         background: #1f1f1f !important;
         box-sizing: border-box;
+        color: #bfbfbf;
         filter: contrast(100%) brightness(100%) saturate(100%);
         overflow-y: scroll;
     }
@@ -28,14 +23,12 @@
         color: #bfbfbf;
     }
 
-    font, html { color: #bfbfbf; }
-
     .swagger-ui, .swagger-ui section h3 { color: #b5bac9; }
 
     .swagger-ui a { background-color: transparent; }
 
     .swagger-ui mark {
-        background-color: #664b00;
+        background-color: #614700;
         color: #bfbfbf;
     }
 
@@ -541,7 +534,7 @@
     .swagger-ui .tab li:first-of-type::after { background: rgba(0, 0, 0, .2); }
 
     .swagger-ui .download-contents {
-        background: #7c8192;
+        background: #6f7485;
         color: #fff;
     }
 
@@ -590,7 +583,7 @@ animation: 1s linear 0s infinite normal none running rotation, .5s ease 0s 1 nor
     .swagger-ui .btn.authorize svg { fill: #9ce3c3; }
 
     .btn.authorize.unlocked:hover {
-        background-color: #48cb90;
+        background-color: #258359;
         color: #fff;
     }
 
@@ -599,8 +592,8 @@ animation: 1s linear 0s infinite normal none running rotation, .5s ease 0s 1 nor
     }
 
     .swagger-ui .btn.execute {
-        background-color: #5892d5;
-        border-color: #5892d5;
+        background-color: #3276c6;
+        border-color: #3276c6;
         color: #fff;
     }
 
@@ -693,7 +686,7 @@ animation: 1s linear 0s infinite normal none running rotation, .5s ease 0s 1 nor
     .swagger-ui .topbar .download-url-wrapper .select-label { color: #f0f0f0; }
 
     .swagger-ui .topbar .download-url-wrapper .download-url-button {
-        background: #63a040;
+        background: #508134;
         color: #fff;
     }
 
@@ -722,36 +715,6 @@ animation: 1s linear 0s infinite normal none running rotation, .5s ease 0s 1 nor
     .arrow, #large-arrow-up { fill: #fff; }
 
     #unlocked, #locked { fill: #fff; }
-
-    ::-webkit-scrollbar-track { background-color: #646464 !important; }
-
-    ::-webkit-scrollbar-thumb {
-        background-color: #242424 !important;
-        border: 2px solid #3e4346 !important;
-    }
-
-    ::-webkit-scrollbar-button:vertical:start:decrement {
-
-background: linear-gradient(130deg, #696969 40%, rgba(255, 0, 0, 0) 41%), linear-gradient(230deg, #696969 40%, transparent 41%), linear-gradient(0deg, #696969 40%, transparent 31%);
-        background-color: #b6b6b6;
-    }
-
-    ::-webkit-scrollbar-button:vertical:end:increment {
-        background: linear-gradient(310deg, #696969 40%, transparent 41%), linear-gradient(50deg, #696969 40%, transparent 41%), linear-gradient(180deg, #696969 40%, transparent 31%);
-        background-color: #b6b6b6;
-    }
-
-    ::-webkit-scrollbar-button:horizontal:end:increment {
-        background: linear-gradient(210deg, #696969 40%, transparent 41%), linear-gradient(330deg, #696969 40%, transparent 41%), linear-gradient(90deg, #696969 30%, transparent 31%);
-        background-color: #b6b6b6;
-    }
-
-    ::-webkit-scrollbar-button:horizontal:start:decrement {
-        background: linear-gradient(30deg, #696969 40%, transparent 41%), linear-gradient(150deg, #696969 40%, transparent 41%), linear-gradient(270deg, #696969 30%, transparent 31%);
-        background-color: #b6b6b6;
-    }
-
-    ::-webkit-scrollbar-button, ::-webkit-scrollbar-track-piece { background-color: #3e4346 !important; }
 
     .swagger-ui .black, .swagger-ui .checkbox, .swagger-ui .dark-gray, .swagger-ui .download-url-wrapper .loading, .swagger-ui .errors-wrapper .errors small, .swagger-ui .fallback, .swagger-ui .filter .loading, .swagger-ui .gray, .swagger-ui .hover-black:focus, .swagger-ui .hover-black:hover, .swagger-ui .hover-dark-gray:focus, .swagger-ui .hover-dark-gray:hover, .swagger-ui .hover-gray:focus, .swagger-ui .hover-gray:hover, .swagger-ui .hover-light-silver:focus, .swagger-ui .hover-light-silver:hover, .swagger-ui .hover-mid-gray:focus, .swagger-ui .hover-mid-gray:hover, .swagger-ui .hover-near-black:focus, .swagger-ui .hover-near-black:hover, .swagger-ui .hover-silver:focus, .swagger-ui .hover-silver:hover, .swagger-ui .light-silver, .swagger-ui .markdown pre, .swagger-ui .mid-gray, .swagger-ui .model .property, .swagger-ui .model .property.primitive, .swagger-ui .model-title, .swagger-ui .near-black, .swagger-ui .parameter__extension, .swagger-ui .parameter__in, .swagger-ui .prop-format, .swagger-ui .renderedmarkdown pre, .swagger-ui .response-col_links .response-undocumented, .swagger-ui .response-col_status .response-undocumented, .swagger-ui .silver, .swagger-ui section.models h4, .swagger-ui section.models h5, .swagger-ui span.token-not-formatted, .swagger-ui span.token-string, .swagger-ui table.headers .header-example, .swagger-ui table.model tr.description, .swagger-ui table.model tr.extension { color: #bfbfbf; }
 

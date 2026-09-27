@@ -125,7 +125,8 @@ class TestAmdProviderConfig:
 
         # Branch 2: Neither device node present
         no_nodes_msg = resolve_msg_fn(False, False, False)
-        assert "Neither /dev/kfd" in no_nodes_msg and "nor /dev/dxg" in no_nodes_msg
+        assert "Neither /dev/kfd" in no_nodes_msg
+        assert "nor /dev/dxg" in no_nodes_msg
 
         # Branch 3: Default no-supported-provider case
         default_msg = resolve_msg_fn(True, True, True)

@@ -171,9 +171,12 @@ class TestSeparatorInit:
 
             mock_ort = mock.MagicMock()
             mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+            # MagicMock has no dunder attributes, so without this the provider log line raised
+            # AttributeError('__version__') and the test passed without ever reaching load_model.
+            mock_ort.__version__ = "0.0-test"
 
             with mock.patch("modules.inference.pipeline.preprocessing.ort", mock_ort):
-                with pytest.raises(Exception):
+                with pytest.raises(Exception, match="^Fail$"):
                     prep_manager._init_separator()
                 assert prep_manager.separator is None
 

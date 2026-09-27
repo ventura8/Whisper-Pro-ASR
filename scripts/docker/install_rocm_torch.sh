@@ -41,7 +41,7 @@ echo "install_rocm_torch: installing torch ${TORCH_VERSION}"
 PYTHONDONTWRITEBYTECODE=1 python3 -m pip install --no-cache-dir --no-deps \
 	--index-url "${TORCH_INDEX}" "torch==${TORCH_VERSION}"
 
-test -d "${TORCH_LIB}" || {
+[[ -d "${TORCH_LIB}" ]] || {
 	echo "install_rocm_torch: ${TORCH_LIB} missing after install" >&2
 	exit 1
 }

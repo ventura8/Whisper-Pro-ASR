@@ -52,8 +52,9 @@ def test_the_sentences_must_come_in_order():
     past where the first was found."""
     fox, whisper = accuracy.EXPECTED_PHRASES
     accuracy._assert_says(accuracy.EXPECTED_PHRASES, _payload(f"{fox}. {whisper}."))
+    swapped = _payload(f"{whisper}. {fox}.")
     with pytest.raises(AssertionError, match="after word"):
-        accuracy._assert_says(accuracy.EXPECTED_PHRASES, _payload(f"{whisper}. {fox}."))
+        accuracy._assert_says(accuracy.EXPECTED_PHRASES, swapped)
 
 
 def test_a_swapped_article_still_passes_in_order():

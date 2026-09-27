@@ -13,7 +13,6 @@ of this machinery. The client now delegates here, so the invariants are tested o
 # The unit under test is the module's internals; reaching them by name is the point.
 
 import threading
-from collections.abc import Generator
 from unittest import mock
 
 import pytest
@@ -27,8 +26,8 @@ def _worker_main(conn):
 
 
 @pytest.fixture(name="channel")
-def _channel() -> Generator[WorkerChannel, None, None]:
-    yield WorkerChannel(_worker_main, name="test-worker", log_tag="TestWorker")
+def _channel() -> WorkerChannel:
+    return WorkerChannel(_worker_main, name="test-worker", log_tag="TestWorker")
 
 
 def _mock_process(alive: bool = True) -> mock.MagicMock:
