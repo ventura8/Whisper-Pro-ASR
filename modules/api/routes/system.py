@@ -2,7 +2,6 @@
 System and Diagnostic Routes for Whisper Pro ASR
 """
 
-import json
 import logging
 import os
 from typing import Optional
@@ -146,7 +145,7 @@ def clear_history(request: Request):
     return {"status": "success", "message": "History cleared"}
 
 
-@router.post("/system/telemetry/clear")
+@router.post("/system/telemetry/clear", responses={500: {"description": "Failed to clear telemetry"}})
 def clear_telemetry(request: Request):
     """
     Purge all telemetry history
@@ -162,7 +161,7 @@ def clear_telemetry(request: Request):
         telemetry_manager.clear_telemetry_history()
         return {"status": "success", "message": "Telemetry cleared"}
     except OSError as e:
-        logger.error("[System] Failed to clear telemetry history: %s", e)
+        logger.exception("[System] Failed to clear telemetry history: %s", e)
         raise HTTPException(status_code=500, detail="Failed to clear telemetry") from e
 
 
@@ -224,7 +223,7 @@ def download_logs(request: Request):
         }
         return Response(content=content, media_type="text/plain", headers=headers)
     except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as e:
-        logger.error("[System] Log download error: %s", e)
+        logger.exception("[System] Log download error: %s", e)
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
@@ -311,7 +310,8 @@ async def _parse_settings_payload(request: Request) -> tuple[dict, Optional[JSON
         if not isinstance(payload, dict):
             return {}, JSONResponse(content={"error": "Malformed JSON"}, status_code=400)
         return payload, None
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
+        # json.JSONDecodeError is a ValueError subclass, so this covers malformed JSON too.
         return {}, JSONResponse(content={"error": "Malformed JSON"}, status_code=400)
 
 

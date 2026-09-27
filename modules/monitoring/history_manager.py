@@ -30,23 +30,15 @@ from modules.monitoring.io_utils import load_json_list_file
 
 logger = logging.getLogger(__name__)
 
-HISTORY_FILE = os.path.join(config.STATE_DIR, "task_history.json")
-ANALYTICS_FILE = os.path.join(config.STATE_DIR, "analytics_stats.json")
+_HISTORY_FILENAME = "task_history.json"
+_ANALYTICS_FILENAME = "analytics_stats.json"
+HISTORY_FILE = os.path.join(config.STATE_DIR, _HISTORY_FILENAME)
+ANALYTICS_FILE = os.path.join(config.STATE_DIR, _ANALYTICS_FILENAME)
 LEGACY_STATE_DIR = os.environ.get("WHISPER_LEGACY_STATE_DIR", "/app/state-legacy")
-LEGACY_HISTORY_FILES = [
-    os.path.join(LEGACY_STATE_DIR, "task_history.json"),
-    os.path.join("/app/state", "task_history.json"),
-    os.path.join("/app/data-legacy", "task_history.json"),
-    os.path.join(os.path.abspath("state"), "task_history.json"),
-    os.path.join(os.path.abspath("data"), "task_history.json"),
-]
-LEGACY_ANALYTICS_FILES = [
-    os.path.join(LEGACY_STATE_DIR, "analytics_stats.json"),
-    os.path.join("/app/state", "analytics_stats.json"),
-    os.path.join("/app/data-legacy", "analytics_stats.json"),
-    os.path.join(os.path.abspath("state"), "analytics_stats.json"),
-    os.path.join(os.path.abspath("data"), "analytics_stats.json"),
-]
+#: Directories earlier releases kept state in, in search order; each is searched for both files.
+_LEGACY_DIRS = [LEGACY_STATE_DIR, "/app/state", "/app/data-legacy", os.path.abspath("state"), os.path.abspath("data")]
+LEGACY_HISTORY_FILES = [os.path.join(legacy_dir, _HISTORY_FILENAME) for legacy_dir in _LEGACY_DIRS]
+LEGACY_ANALYTICS_FILES = [os.path.join(legacy_dir, _ANALYTICS_FILENAME) for legacy_dir in _LEGACY_DIRS]
 MAX_HISTORY_DISK = 1000  # Persistent storage limit
 MAX_HISTORY_RAM = 60  # RAM cache limit for fast dashboard reads (disk persistence retains up to MAX_HISTORY_DISK)
 
@@ -216,7 +208,7 @@ def _persist_analytics_cache(cache: Dict[str, Any]) -> None:
             json.dump(cache, f, indent=2)
         os.replace(tmp_file, ANALYTICS_FILE)
     except (IOError, OSError) as e:
-        logger.error("[Analytics] Failed to save rebuilt analytics: %s", e)
+        logger.exception("[Analytics] Failed to save rebuilt analytics: %s", e)
 
 
 def categorize_task(task_data: Dict[str, Any]) -> str:
@@ -344,7 +336,7 @@ def update_analytics(task_data: Dict[str, Any]) -> None:
         module.STATS_CACHE = None
         module.STATS_CACHE_DATE = None
     except (IOError, OSError, ValueError, TypeError) as e:
-        logger.error("[Analytics] Failed to update analytics: %s", e)
+        logger.exception("[Analytics] Failed to update analytics: %s", e)
 
 
 def _analytics_date_for_task(task_data: Dict[str, Any]) -> str:
@@ -394,7 +386,7 @@ def log_completed_task(task_data: Dict[str, Any]) -> None:
         update_analytics(task_data)
 
     except (KeyError, ValueError, TypeError) as e:
-        logger.error("[History] Failed to log task history: %s", e)
+        logger.exception("[History] Failed to log task history: %s", e)
 
 
 def _ensure_completion_timestamp(task_data: Dict[str, Any]) -> None:
@@ -483,7 +475,7 @@ def flush_history() -> None:
         module.UNSAVED_COUNT = 0
         module.LAST_SYNC = time.time()
     except (IOError, OSError) as e:
-        logger.error("[History] SSD Sync Failed: %s", e)
+        logger.exception("[History] SSD Sync Failed: %s", e)
 
 
 def _load_disk_history() -> List[Dict[str, Any]]:
@@ -597,4 +589,4 @@ def clear_history() -> None:
             os.remove(HISTORY_FILE)
             logger.info("[History] History file purged on disk.")
         except OSError as e:
-            logger.error("[History] Failed to purge history file: %s", e)
+            logger.exception("[History] Failed to purge history file: %s", e)

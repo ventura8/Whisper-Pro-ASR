@@ -1,6 +1,5 @@
 """Helper-route tests split from test_routes.py."""
 
-import asyncio
 from unittest import mock
 
 import pytest
@@ -34,7 +33,7 @@ class TestHelperFunctions:
         mock_request = mock.MagicMock()
         mock_request.query_params = {}
         mock_request.url.path = "/asr"
-        params = asyncio.run(get_request_params(mock_request, {}))
+        params = get_request_params(mock_request, {})
         assert params["output_format"] == "srt"
         assert params["task"] == "transcribe"
 
@@ -43,7 +42,7 @@ class TestHelperFunctions:
         mock_request = mock.MagicMock()
         mock_request.query_params = {"output": "json", "language": "es", "task": "translate", "batch_size": "4"}
         mock_request.url.path = "/asr"
-        params = asyncio.run(get_request_params(mock_request, {}))
+        params = get_request_params(mock_request, {})
         assert params["output_format"] == "json"
         assert params["language"] == "es"
         assert params["task"] == "translate"
@@ -119,7 +118,7 @@ def test_routes_extract_new_params(query_params, expected):
     mock_request = mock.MagicMock()
     mock_request.query_params = query_params
     mock_request.url.path = "/asr"
-    params = asyncio.run(get_request_params(mock_request, {}))
+    params = get_request_params(mock_request, {})
     for key, value in expected.items():
         assert params[key] == value
 

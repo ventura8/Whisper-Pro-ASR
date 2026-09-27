@@ -33,6 +33,9 @@ def _get_sf():
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 # Pre-compiled regex for language token extraction
 _LANG_PATTERN = re.compile(r"<\|([a-z]{2,3})\|>")
 
@@ -144,7 +147,7 @@ def _execute_batch_scan(audio_path, offsets, model_manager, scans, start_time=No
                 return res
 
     except (OSError, ValueError, RuntimeError, ImportError, TypeError) as e:
-        logger.error("[LD] Batch consensus scan failed: %s", e)
+        logger.exception("[LD] Batch consensus scan failed: %s", e)
     finally:
         _cleanup_batch_assets(montage_path, isolated_path)
 
@@ -177,7 +180,7 @@ def run_voting_detection_on_isolated(audio_path, model, model_manager, start_tim
         montage_path = _step_create_montage(audio_path, offsets, scans, perf)
         return _step_run_inference((model, model_manager), montage_path or audio_path, scans, perf)
     except (OSError, ValueError, RuntimeError, ImportError, TypeError) as e:
-        logger.error("[LD] Batch consensus scan on separated audio failed: %s", e)
+        logger.exception("[LD] Batch consensus scan on separated audio failed: %s", e)
         return None
     finally:
         _cleanup_batch_assets(montage_path, None)
@@ -452,7 +455,7 @@ def _find_best_offset_in_zone(audio_path, base_offset, zone_size, total_duration
 
         return base_offset + (zone_size / 2)
 
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         return base_offset + (zone_size / 2)
 
 

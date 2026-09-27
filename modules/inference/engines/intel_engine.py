@@ -18,6 +18,10 @@ from modules.core import config, model_integrity, model_provisioning, utils
 from modules.inference.pipeline import vad
 
 logger = logging.getLogger(__name__)
+
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 _VAD_FAILURE_SENTINEL = object()
 
 
@@ -87,7 +91,7 @@ def _should_return_empty_vad_result(kwargs, speech_ts) -> bool:
 
 
 def _empty_vad_result(language):
-    return (s for s in []), Namespace(language=language or "en", language_probability=0.0, duration=0.0)
+    return iter(()), Namespace(language=language or "en", language_probability=0.0, duration=0.0)
 
 
 def _gap_midpoints_in_window(gaps: List[tuple], target_end: float, window_half: float) -> List[float]:
@@ -163,7 +167,7 @@ class IntelWhisperEngine:
             self.pipeline.generate(np.zeros(16000, dtype=np.float32))
             logger.info("[Intel] NPU verified: a warmup inference completed.")
             return
-        except tuple([Exception]) as e:
+        except _ANY_EXCEPTION as e:
             # Deliberately broad. This is a warmup probe whose entire purpose is to decide
             # whether the NPU can execute, and the OpenVINO/Level Zero stack raises through
             # pybind11 as types that are neither RuntimeError nor ValueError. Anything that
@@ -198,7 +202,7 @@ class IntelWhisperEngine:
         try:
             self._load_pipeline(model_path, "CPU")
         except (RuntimeError, ValueError, ImportError, OSError) as e:
-            logger.error("[Intel] Fallback to CPU also failed: %s", e)
+            logger.exception("[Intel] Fallback to CPU also failed: %s", e)
             return False
         self.device = "CPU"
         logger.error(
@@ -214,7 +218,7 @@ class IntelWhisperEngine:
             self._load_pipeline(model_path, device)
             return True
         except (RuntimeError, ValueError, ImportError, OSError) as retry_error:
-            logger.error("[Intel] Retry after corrupted-model purge failed: %s", retry_error)
+            logger.exception("[Intel] Retry after corrupted-model purge failed: %s", retry_error)
         return False
 
     @staticmethod
@@ -312,6 +316,8 @@ class IntelWhisperEngine:
             gen_config.language = token
 
     def _build_segment_generator(self, audio_data, split_points, total_chunks, *, gen_config, info, language, **kwargs):
+        vad_filter = kwargs.get("vad_filter", False)
+
         def segment_generator():
             for i in range(total_chunks):
                 chunk_start = split_points[i]
@@ -321,33 +327,40 @@ class IntelWhisperEngine:
                 chunk_audio = audio_data[start_idx:end_idx]
 
                 # Skip completely silent/zeroed-out chunks if VAD is active
-                if kwargs.get("vad_filter", False) and np.all(chunk_audio == 0.0):
+                if vad_filter and np.all(chunk_audio == 0.0):
                     continue
 
-                logger.info(
-                    "[Intel] Transcribing chunk %d/%d (Audio range: %s - %s)...",
-                    i + 1,
-                    total_chunks,
-                    utils.format_duration(chunk_start),
-                    utils.format_duration(chunk_end),
-                )
-
-                try:
-                    logger.info("[Intel] Detecting: Beam: %d, Timestamps: True", gen_config.num_beams)
-                    result = self.pipeline.generate(chunk_audio, gen_config)
-                    res_segments, res_info = self._parse_response(result, info.language)
-
-                    # Update and lock language dynamically if auto-detected on the first chunk
-                    if i == 0 and not language:
-                        self._lock_first_chunk_language(res_info.language, gen_config, info)
-
-                    for seg in res_segments:
-                        yield Namespace(text=seg.text, start=seg.start + chunk_start, end=seg.end + chunk_start)
-                except (RuntimeError, ValueError) as e:
-                    logger.error("[Intel] Chunk transcription failed: %s", e)
-                    raise
+                # Update and lock language dynamically if auto-detected on the first chunk
+                lock = i == 0 and not language
+                chunk = (i + 1, total_chunks, chunk_start, chunk_end)
+                yield from self._transcribe_chunk(chunk_audio, chunk, gen_config=gen_config, info=info, lock_language=lock)
 
         return segment_generator()
+
+    def _transcribe_chunk(self, chunk_audio, chunk, *, gen_config, info, lock_language):
+        """Transcribe one chunk (number, total, start, end), yielding segments on the full-audio timeline."""
+        chunk_number, total_chunks, chunk_start, chunk_end = chunk
+        logger.info(
+            "[Intel] Transcribing chunk %d/%d (Audio range: %s - %s)...",
+            chunk_number,
+            total_chunks,
+            utils.format_duration(chunk_start),
+            utils.format_duration(chunk_end),
+        )
+
+        try:
+            logger.info("[Intel] Detecting: Beam: %d, Timestamps: True", gen_config.num_beams)
+            result = self.pipeline.generate(chunk_audio, gen_config)
+            res_segments, res_info = self._parse_response(result, info.language)
+
+            if lock_language:
+                self._lock_first_chunk_language(res_info.language, gen_config, info)
+
+            for seg in res_segments:
+                yield Namespace(text=seg.text, start=seg.start + chunk_start, end=seg.end + chunk_start)
+        except (RuntimeError, ValueError) as e:
+            logger.exception("[Intel] Chunk transcription failed: %s", e)
+            raise
 
     def _apply_vad_mask(self, audio_data: np.ndarray, speech_ts: List[dict]) -> np.ndarray:
         """Create a boolean mask from speech timestamps and zero out non-speech.
@@ -542,7 +555,7 @@ class IntelWhisperEngine:
             # so we return 1.0 for the detected one.
             return lang_code, 1.0, [(lang_code, 1.0)]
         except (RuntimeError, ValueError) as e:
-            logger.error("[Intel] Language detection failed: %s", e)
+            logger.exception("[Intel] Language detection failed: %s", e)
             # Fallback
             return "en", 0.0, [("en", 0.0)]
 

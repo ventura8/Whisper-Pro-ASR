@@ -136,13 +136,13 @@ def _is_valid_local_model_path(path: str) -> bool:
 
     try:
         candidate = Path(path).expanduser().resolve(strict=False)
-    except tuple([OSError, RuntimeError]):
+    except (OSError, RuntimeError):
         candidate = Path(path).expanduser().absolute()
 
     for root in allowed_roots:
         try:
             root_resolved = root.resolve(strict=False)
-        except tuple([OSError, RuntimeError]):
+        except (OSError, RuntimeError):
             root_resolved = root.absolute()
 
         try:

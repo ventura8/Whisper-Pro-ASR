@@ -89,7 +89,7 @@ def _poll_once(conn: Connection, deadline: float):
         if not conn.poll(remaining):
             return False, None
         return True, conn.recv()
-    except (EOFError, OSError, BrokenPipeError):
+    except (EOFError, OSError):
         return _PIPE_BROKEN, None
 
 
@@ -331,7 +331,7 @@ class WorkerChannel:
         conn = self._state["conn"]
         try:
             conn.send({"id": request_id, "cmd": cmd, "args": args, "stream": stream})
-        except (EOFError, OSError, BrokenPipeError) as exc:
+        except (EOFError, OSError) as exc:
             # Read the exit status before tearing down -- teardown clears the process
             # handle, and with it the only evidence of how the worker died.
             detail = self._death_detail()
@@ -376,7 +376,7 @@ class WorkerChannel:
                 self._reject_if_shutdown_requested(cmd)
                 raise self._error_cls(f"{self._log_tag} worker timed out after {self._call_timeout_sec}s during '{cmd}'")
             return conn.recv()
-        except (EOFError, OSError, BrokenPipeError) as exc:
+        except (EOFError, OSError) as exc:
             detail = self._death_detail()
             self._teardown_worker()
             raise self._error_cls(f"{self._log_tag} died during '{cmd}' ({detail}): {exc or 'pipe closed'}") from exc
@@ -456,7 +456,7 @@ class WorkerChannel:
             return
         try:
             conn.send({"control": "cancel"})
-        except (OSError, BrokenPipeError):
+        except OSError:
             pass
 
     def _abandon_stream(self) -> None:

@@ -36,7 +36,7 @@ def _is_valid_upload_file(val) -> bool:
 
 
 def _find_upload_file_in_dict(data: dict) -> Optional[UploadFile]:
-    for _, value in data.items():
+    for value in data.values():
         if isinstance(value, (UploadFile, StarletteUploadFile)):
             return value
     return None

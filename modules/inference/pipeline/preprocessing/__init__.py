@@ -50,6 +50,7 @@ class UVRAcceleratorUnavailableError(RuntimeError):
 
 
 # --- [ENGINE CONFIGURATION] ---
+_DEFAULT_STAGE = "Vocal Separation"  # dashboard label unless a caller passes its own
 logging.getLogger("audio_separator").setLevel(logging.INFO)
 
 CACHE_DIR = Path(config.PREPROCESSING_CACHE_DIR)
@@ -360,7 +361,7 @@ class PreprocessingManager:
                 separator.onnx_execution_provider = ["CPUExecutionProvider"]
                 separator.load_model(config.VOCAL_SEPARATION_MODEL)
                 return
-            logger.error("[System] Failed to load UVR model: %s", e)
+            logger.exception("[System] Failed to load UVR model: %s", e)
             self.separator = None
             raise
         finally:
@@ -483,7 +484,7 @@ class PreprocessingManager:
             return candidate
         return str(CACHE_DIR / path_value)
 
-    def _run_preprocess_pipeline(self, audio_path, yield_cb=None, stage="Vocal Separation"):
+    def _run_preprocess_pipeline(self, audio_path, yield_cb=None, stage=_DEFAULT_STAGE):
         """Run the vocal-separation preprocessing pipeline and return resolved output path."""
         original_path = audio_path
         audio_path = utils.prepare_for_uvr(audio_path, yield_cb=yield_cb)
@@ -496,7 +497,7 @@ class PreprocessingManager:
         _run_optional_yield_impl(yield_cb)
         return self._resolve_isolation_output_path(stems, effective_sep, audio_path)
 
-    def preprocess_audio(self, audio_path, force=False, yield_cb=None, stage="Vocal Separation"):
+    def preprocess_audio(self, audio_path, force=False, yield_cb=None, stage=_DEFAULT_STAGE):
         """Perform vocal isolation on a file using the unit's separator.
 
         ``stage`` lets a caller keep its own dashboard label. Language detection isolates
@@ -509,10 +510,10 @@ class PreprocessingManager:
         try:
             self._purge_stale_cache()
             return self._run_preprocess_pipeline(audio_path, yield_cb=yield_cb, stage=stage)
-        except (UVRAcceleratorUnavailableError, AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
+        except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
             return self._handle_preprocess_error(audio_path, yield_cb, e, stage=stage)
 
-    def _handle_preprocess_error(self, audio_path, yield_cb, error: Exception, stage="Vocal Separation"):
+    def _handle_preprocess_error(self, audio_path, yield_cb, error: Exception, stage=_DEFAULT_STAGE):
         if isinstance(error, UVRAcceleratorUnavailableError) or self._should_cpu_fallback(error):
             return self._run_cpu_fallback(audio_path, yield_cb, error, stage=stage)
         logger.error("[UVR] Processing failed on %s: %s", self._device_id, error)
@@ -525,7 +526,7 @@ class PreprocessingManager:
             return openvino_resolver.is_openvino_session_fallback_error(error)
         return True
 
-    def _run_cpu_fallback(self, audio_path, yield_cb, error: Exception, stage="Vocal Separation"):
+    def _run_cpu_fallback(self, audio_path, yield_cb, error: Exception, stage=_DEFAULT_STAGE):
         logger.warning("[UVR] Falling back to CPU preprocessing after %s failed: %s", self._device_id, error)
         original_device_id = self._device_id
         original_device_type = self._device_type
@@ -535,7 +536,7 @@ class PreprocessingManager:
         try:
             return self._run_preprocess_pipeline(audio_path, yield_cb=yield_cb, stage=stage)
         except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as cpu_error:
-            logger.error("[UVR] CPU fallback preprocessing failed: %s", cpu_error)
+            logger.exception("[UVR] CPU fallback preprocessing failed: %s", cpu_error)
             return audio_path
         finally:
             self._device_id = original_device_id

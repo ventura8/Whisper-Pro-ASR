@@ -115,7 +115,7 @@ def _download_openvino_genai():
         _cache_directory(OV_WHISPER_DIR, "whisper-openvino")
         return True
     except Exception as exc:
-        logger.error("Failed to download pre-converted OpenVINO Whisper model: %s", exc)
+        logger.exception("Failed to download pre-converted OpenVINO Whisper model: %s", exc)
         return False
 
 

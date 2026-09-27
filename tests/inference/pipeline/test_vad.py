@@ -209,7 +209,7 @@ def test_get_speech_timestamps_from_path_exception():
         with mock.patch("modules.inference.pipeline.vad.logger") as mock_logger:
             res = vad.get_speech_timestamps_from_path("dummy.wav")
             assert res == []
-            mock_logger.error.assert_called_once()
+            mock_logger.exception.assert_called_once()
 
 
 def test_get_speech_timestamps_missing_dependencies():

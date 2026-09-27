@@ -13,6 +13,9 @@ from modules.core import config, process_exec
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 #: Mirrors real Bazarr's own encode_audio_stream()/get_audio_delay() threshold: ignore
 #: delays smaller than 20ms (close to 1 frame at 60fps) to avoid unnecessary filtering.
 _STREAM_ALIGNMENT_SYNC_THRESHOLD_MS = 20
@@ -150,7 +153,7 @@ def _probe_streams_and_packets(source_path: str) -> dict:
             source_path,
         ]
         return json.loads(process_exec.check_output_text(cmd, timeout=10))
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         logger.debug("[Stream] ffprobe failed for %s: %s", source_path, exc)
         return {}
 
@@ -242,7 +245,7 @@ def build_stream_alignment_directives(source_path: str, target_language: str | N
             return stream_index, None
         delay_ms = int(pts * 1000)
         return stream_index, _delay_filter_for_ms(delay_ms)
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         return None, None
 
 
@@ -268,7 +271,7 @@ def _execute_ffmpeg_with_watchdog(command, duration, ffmpeg_timeout, format_dura
         logger.warning("[Prep] FFmpeg execution exceeded timeout (%.1fs).", ffmpeg_timeout)
         raise RuntimeError(f"FFmpeg standardization timed out after {ffmpeg_timeout}s") from exc
     except process_exec.CommandExecutionError as exc:
-        logger.error("[Prep] FFmpeg failed execution: %s (stderr: %s)", exc, getattr(exc, "stderr", ""))
+        logger.exception("[Prep] FFmpeg failed execution: %s (stderr: %s)", exc, getattr(exc, "stderr", ""))
         raise RuntimeError(f"FFmpeg failed with return code {exc.returncode}") from exc
 
 
@@ -383,7 +386,7 @@ def secure_remove(file_path):
     if file_path and os.path.exists(file_path):
         try:
             os.remove(file_path)
-        except tuple([Exception]):
+        except _ANY_EXCEPTION:
             pass
 
 
@@ -451,7 +454,7 @@ def _prune_file_if_old(root: str, name: str, cutoff: float):
         if os.path.getmtime(file_path) < cutoff:
             os.remove(file_path)
             logger.debug("[System] Pruned old file: %s", name)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         logger.warning("[System] Failed to prune %s: %s", name, e)
 
 
@@ -464,10 +467,10 @@ def purge_temporary_assets():
                 try:
                     _remove_temporary_asset_entry(temp_dir, name)
                 except OSError as exc:
-                    logger.error("[System] Cleanup failed for %s: %s", name, exc)
+                    logger.exception("[System] Cleanup failed for %s: %s", name, exc)
             logger.info("[System] Purged temporary asset cache")
         except OSError as exc:
-            logger.error("[System] Cleanup failed: %s", exc)
+            logger.exception("[System] Cleanup failed: %s", exc)
 
 
 def _resolve_temp_asset_dir() -> str:

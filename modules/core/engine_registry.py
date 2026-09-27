@@ -177,7 +177,7 @@ def engine_is_installed(engine: str) -> bool:
     try:
         if importlib.util.find_spec(module) is not None:
             return True
-    except (ImportError, ValueError, ModuleNotFoundError):
+    except (ImportError, ValueError):
         pass
     return _module_is_in_segregated_lib(engine, module)
 

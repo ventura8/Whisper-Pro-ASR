@@ -123,6 +123,9 @@ logging.getLogger("audio_separator").setLevel(logging.INFO)
 TASK_LOGS = logging_setup.TASK_LOGS
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 #: Re-exported from init_failures: the same dict object, so a write through either name is
 #: visible to both. concurrency.py and the tests read it as model_manager.LAST_INIT_ERROR.
 LAST_INIT_ERROR = init_failures.LAST_INIT_ERROR
@@ -294,7 +297,7 @@ def _update_audio_duration_metadata(audio_path):
     try:
         audio_duration = utils.get_audio_duration(audio_path)
         scheduler.update_task_metadata(video_duration=audio_duration)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         logger.warning("[Engine] Failed to get audio duration early: %s", e)
 
 

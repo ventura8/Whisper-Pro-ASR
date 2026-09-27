@@ -24,6 +24,9 @@ from modules.inference.runtime.concurrency import _check_preemption
 router = APIRouter(tags=["Transcription"])
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 type ApiError = tuple[str, int]
 type QueryParams = dict[str, str]
 type FormData = dict[str, Any]
@@ -94,7 +97,7 @@ async def transcribe(
     model_manager.increment_active_session()
     try:
         form_data = await routes_utils.parse_form_data(request)
-        params = await get_request_params(request, form_data)
+        params = get_request_params(request, form_data)
         resolved_local_path, uploaded_file = await routes_utils.resolve_and_materialize_upload(
             local_path, audio_file, file, form_data, request
         )
@@ -122,7 +125,7 @@ async def transcribe(
             return JSONResponse(content={"error": msg}, status_code=code)
 
         return build_response(result, params, {"total": time.time() - start_time}, source_path, start_time)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         msg, code = routes_utils.handle_error(e)
         return JSONResponse(content={"error": msg}, status_code=code)
     finally:
@@ -283,7 +286,7 @@ def _run_transcription(
     )
 
 
-async def get_request_params(request: Request, form_data: FormData) -> RequestParams:
+def get_request_params(request: Request, form_data: FormData) -> RequestParams:
     """Extract parameters from request."""
     query_params: QueryParams = dict(request.query_params)
     params = _build_base_request_params(request, query_params, form_data)
@@ -528,12 +531,15 @@ _OUTPUT_FORMAT_ALIASES = {
 }
 
 
+#: Canonical formats map to themselves, so the normalized value is always one of these
+#: constants and never the caller's own string (which is also what makes it safe to log).
+_CANONICAL_OUTPUT_FORMATS = {fmt: fmt for fmt in ("json", "vtt", "txt", "tsv", "srt")}
+
+
 def _normalize_output_format(output_format: str) -> str:
     fmt = str(output_format or "srt").lower()
     fmt = _OUTPUT_FORMAT_ALIASES.get(fmt, fmt)
-    if fmt in {"json", "vtt", "txt", "tsv", "srt"}:
-        return fmt
-    return "srt"
+    return _CANONICAL_OUTPUT_FORMATS.get(fmt, "srt")
 
 
 def _resolve_task_type(params: RequestParams) -> str:
@@ -541,11 +547,14 @@ def _resolve_task_type(params: RequestParams) -> str:
 
 
 def _log_task_start(task_type: str, params: RequestParams) -> None:
+    # Both values come from the request: the format is logged in its normalized (closed-set)
+    # form and the language with control characters stripped, so neither can forge log lines.
+    language = "".join(ch for ch in str(params.get("language") or "") if ch.isprintable())
     logger.info(
         "    Task: %s | Format: %s | Lang: %s",
         task_type.upper(),
-        params.get("output_format", "srt").upper(),
-        params.get("language") or "auto-detect",
+        _normalize_output_format(params.get("output_format", "srt")).upper(),
+        language or "auto-detect",
     )
 
 

@@ -95,7 +95,7 @@ def _persistent_temp_dir(ov_cache_dir: str) -> str:
     path = os.path.abspath(os.path.join(ov_cache_dir, "temp"))
     try:
         os.makedirs(path, exist_ok=True)
-    except (PermissionError, OSError):
+    except OSError:
         return os.path.abspath(tempfile.gettempdir())
     return path
 
@@ -104,7 +104,7 @@ def _temp_dir() -> str:
     path = os.environ.get("WHISPER_TEMP_DIR", tempfile.gettempdir())
     try:
         os.makedirs(path, exist_ok=True)
-    except (PermissionError, OSError):
+    except OSError:
         return tempfile.gettempdir()
     return path
 
@@ -189,7 +189,7 @@ def preprocessing_cache_dir(base: str) -> str:
     try:
         os.makedirs(path, exist_ok=True)
         return path
-    except (PermissionError, OSError):
+    except OSError:
         path = os.path.join(tempfile.gettempdir(), "preprocessing")
         try:
             os.makedirs(path, exist_ok=True)

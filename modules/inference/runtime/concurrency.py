@@ -18,7 +18,7 @@ from modules.inference.scheduler import unit_choice
 
 logger = logging.getLogger(__name__)
 
-
+_PAUSED_STAGE = "Paused for Priority Task"  # dashboard contract: status=queued + this stage
 PRIORITY_RETRY_DELAY_SEC = 0.05
 STANDARD_RETRY_DELAY_SEC = 0.5
 
@@ -544,9 +544,9 @@ def _find_active_registry_key(task_id, thread_id) -> Optional[str]:
 
 
 def _resolve_restored_stage(current_stage: Optional[str], old_stage: Optional[str]) -> Optional[str]:
-    if current_stage and current_stage != "Paused for Priority Task":
+    if current_stage and current_stage != _PAUSED_STAGE:
         return current_stage
-    if old_stage and old_stage != "Paused for Priority Task":
+    if old_stage and old_stage != _PAUSED_STAGE:
         return old_stage
     return None
 
@@ -590,7 +590,7 @@ def _execute_preemption_flow(
     # Temporarily mark task as queued during preemption/pause
     scheduler.update_task_metadata(status="queued")
     progress = task.get("progress") if task else 0
-    scheduler.update_task_progress(progress, "Paused for Priority Task")
+    scheduler.update_task_progress(progress, _PAUSED_STAGE)
     logger.debug("[Engine] Task marked as paused (status=queued, stage=Paused for Priority Task)")
 
     scheduler.mark_unit_preemptible(unit_id)

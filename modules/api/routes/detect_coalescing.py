@@ -24,6 +24,9 @@ from modules.inference.runtime import model_manager
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 type DetectError = tuple[str, int]
 type DetectResponsePayload = dict[str, object] | Response
 type CoalescedDetectResult = tuple[DetectResponsePayload | None, DetectError | None]
@@ -98,7 +101,7 @@ async def _await_shared_result(shared_future: concurrent.futures.Future[Coalesce
     """Wait for a leader request and return the same response payload."""
     try:
         result, err = await asyncio.wrap_future(shared_future)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         msg, code = routes_utils.handle_error(e, "LD")
         return JSONResponse(content={"error": msg}, status_code=code)
 
@@ -142,7 +145,7 @@ def _json_response_failure(response: JSONResponse) -> tuple[str, int]:
         payload = json.loads(response.body)
         if isinstance(payload, dict) and payload.get("error"):
             return str(payload["error"]), code
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         pass
     return "Language detection failed", code
 

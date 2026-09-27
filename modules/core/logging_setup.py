@@ -90,21 +90,22 @@ class ContextualFilter(logging.Filter):
     def filter(self, record):
         """Inject filename and step info into log record."""
         # Allow pre-existing task_ctx to persist (useful for logo/banner)
-        if hasattr(record, "task_ctx"):
-            return True
-
-        filename = getattr(utils.THREAD_CONTEXT, "filename", None) or "System"
-        step_info = getattr(utils.THREAD_CONTEXT, "step_info", None)
-
-        if _should_omit_system_context(filename, step_info):
-            record.task_ctx = ""
-            return True
-
-        record.task_ctx = _build_task_context(filename, step_info)
+        if not hasattr(record, "task_ctx"):
+            record.task_ctx = _resolve_task_context()
+        # This filter only annotates; it never drops a record.
         return True
 
     def __repr__(self):
         return "ContextualFilter()"
+
+
+def _resolve_task_context() -> str:
+    """Return the ``[filename] step`` prefix for the current thread, or "" for idle System."""
+    filename = getattr(utils.THREAD_CONTEXT, "filename", None) or "System"
+    step_info = getattr(utils.THREAD_CONTEXT, "step_info", None)
+    if _should_omit_system_context(filename, step_info):
+        return ""
+    return _build_task_context(filename, step_info)
 
 
 def _should_omit_system_context(filename: str, step_info) -> bool:
@@ -231,8 +232,8 @@ def update_log_retention(days):
         if fh:
             fh.backupCount = int(days)
             logger.info("[Logging] Dynamic log retention updated to %d days", fh.backupCount)
-    except tuple([Exception]) as e:
-        logger.error("[Logging] Failed to dynamically update log retention: %s", e)
+    except _ANY_EXCEPTION as e:
+        logger.exception("[Logging] Failed to dynamically update log retention: %s", e)
 
 
 # Initial attachment (at import time)
@@ -251,8 +252,12 @@ for logger_name in LOGGERS_TO_FILTER:
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 # Alignment constants for banner output
 _LABEL_WIDTH = 30
+_BANNER_RULE = "=" * 64
 
 
 def _format_prop_value(val):
@@ -290,7 +295,7 @@ def _read_hardware_property_line(core, real_device, prop_key):
     try:
         val = core.get_property(real_device, prop_key)
         return _format_hardware_property_line(label, val)
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         return None
 
 
@@ -327,7 +332,7 @@ def _get_device_properties(device_alias):
         info_lines = _extract_hardware_properties(core, real_device)
         info_lines.sort()
         return device_full_name, info_lines
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         return device_full_name, []
 
 
@@ -343,7 +348,7 @@ def _resolve_real_openvino_device(available_devices, device_alias):
 def _resolve_device_full_name(core, real_device):
     try:
         return core.get_property(real_device, "FULL_DEVICE_NAME")
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         return real_device
 
 
@@ -384,7 +389,7 @@ def _get_openvino_available_devices_line():
         core = ov.Core()
         devices = ", ".join(core.available_devices) or "<none>"
         return f"  {'OpenVINO devices':<{_LABEL_WIDTH}}: {devices}"
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         return f"  {'OpenVINO devices':<{_LABEL_WIDTH}}: unavailable ({exc})"
 
 
@@ -401,9 +406,9 @@ def _get_openvino_target_probe_lines():
             try:
                 full_name = core.get_property(target, "FULL_DEVICE_NAME")
                 lines.append(f"  {target:<{_LABEL_WIDTH}}: {full_name}")
-            except tuple([Exception]) as exc:
+            except _ANY_EXCEPTION as exc:
                 lines.append(f"  {target:<{_LABEL_WIDTH}}: unavailable ({exc})")
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         lines.append(f"  {'OpenVINO probe':<{_LABEL_WIDTH}}: unavailable ({exc})")
     return lines
 
@@ -460,9 +465,9 @@ def _banner_config_lines(cfg):
 
     preprocess_val = f"Vocals={config.ENABLE_VOCAL_SEPARATION} | LD-Pre={config.ENABLE_LD_PREPROCESSING}"
     lines = [
-        "================================================================",
+        _BANNER_RULE,
         f"      {config.APP_NAME} {config.VERSION_DISPLAY}",
-        "================================================================",
+        _BANNER_RULE,
         "  [ENGINE CONFIG]",
         f"  {'Whisper Model ID':<{w}}: {_get_real_model_name()}",
         f"  {'Vocal Separator Model ID':<{w}}: {_get_vocal_separator_model_display()}",
@@ -496,7 +501,7 @@ def _banner_config_lines(cfg):
         [
             f"  {'Model Source':<{w}}: {cfg['model_status']}",
             f"  {'Binary Cache Status':<{w}}: {cfg['cache_status']}",
-            "================================================================",
+            _BANNER_RULE,
         ]
     )
     return lines

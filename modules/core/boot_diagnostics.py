@@ -14,6 +14,9 @@ from pathlib import Path
 
 from modules.core.constants import INTEL_ENV_KEYS
 
+# The Intel NPU's device node; absent on iGPU/Arc-only hosts.
+_NPU_ACCEL_NODE = "/dev/accel/accel0"
+
 
 def log_intel_runtime_diagnostics(boot_logger) -> None:
     """Log everything known about the Intel runtime, devices and access at boot."""
@@ -22,7 +25,7 @@ def log_intel_runtime_diagnostics(boot_logger) -> None:
     _log_optional_openvino_target_probe(boot_logger)
     boot_logger.debug(
         "Intel device nodes: /dev/accel/accel0=%s /dev/dri=%s /opt/intel/openvino=%s",
-        os.path.exists("/dev/accel/accel0"),
+        os.path.exists(_NPU_ACCEL_NODE),
         os.path.exists("/dev/dri"),
         os.path.exists("/opt/intel/openvino"),
     )
@@ -188,7 +191,7 @@ def _device_open_probe(path: str) -> str:
 
 def _log_intel_access_diagnostics(boot_logger) -> None:
     drm_probe = _device_open_probe("/dev/dri/renderD128")
-    accel_probe = _device_open_probe("/dev/accel/accel0")
+    accel_probe = _device_open_probe(_NPU_ACCEL_NODE)
 
     boot_logger.debug(
         "Intel device open probe: /dev/dri/renderD128=%s | /dev/accel/accel0=%s",
@@ -227,7 +230,7 @@ def _any_intel_device_opened(drm_probe: str, accel_probe: str) -> bool:
     """
     if drm_probe == "open_ok":
         return True
-    return os.path.exists("/dev/accel/accel0") and accel_probe == "open_ok"
+    return os.path.exists(_NPU_ACCEL_NODE) and accel_probe == "open_ok"
 
 
 def _log_onnxruntime_details(boot_logger) -> None:

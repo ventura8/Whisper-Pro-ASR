@@ -91,7 +91,9 @@ Once the system is stable and covered by tests:
   `shellcheck disable`, anywhere. The established ways to satisfy a check honestly:
   - a deferred import -> `importlib.import_module("pkg.mod")`, which is a call, not an
     import statement, so neither ruff PLC0415 nor pylint import-outside-toplevel applies;
-  - a deliberately broad handler -> `except tuple([Exception])`, as in `pcm_helpers.py`;
+  - a deliberately broad handler -> `except _ANY_EXCEPTION`, a module constant
+    `_ANY_EXCEPTION = (Exception,)`, as in `pcm_helpers.py` (not `except tuple([Exception])`,
+    which SonarQube flags as python:S7496);
   - a module-level name rebound at runtime -> assign through `sys.modules[__name__]`
     rather than `global`, as `history_manager` does;
   - an unquoted shell expansion -> a bash array, not `# shellcheck disable=SC2086`;

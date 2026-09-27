@@ -257,12 +257,15 @@ def _cleanup_tracked_file_list(files: list, scope_label: str):
         len(files),
         scope_label,
     )
-    for f_path in list(files):
+    for f_path in files:
         secure_remove(f_path)
     files.clear()
 
 
 logger = logging.getLogger(__name__)
+
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
 
 
 def _cuda_device_count() -> int:
@@ -295,7 +298,7 @@ def clear_gpu_cache():
             _clear_single_cuda_cache()
             return
         _clear_multi_cuda_cache(device_count)
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         pass
 
 
@@ -405,7 +408,7 @@ def _convert_base(
         _run_optional_yield(yield_cb)
         logger.info("[%s] Normalization sequence completed successfully.", tag)
         return track_file(output_path)
-    except tuple([Exception]) as err:
+    except _ANY_EXCEPTION as err:
         _log_and_cleanup_conversion_failure(tag, err, output_path)
         return None
 

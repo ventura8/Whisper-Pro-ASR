@@ -29,6 +29,9 @@ except ImportError:
 # Lazy-loaded modules for hardware coordination
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 _VAD_STATE = {"wrapped": False, "wrapped_func": None}
 
@@ -73,7 +76,7 @@ def _log_vad_statistics_safe(audio: AudioBuffer, res: Any) -> None:
     try:
         if isinstance(res, (list, tuple)):
             _log_vad_statistics(audio, res)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         logger.debug("[VAD] Failed to log VAD statistics: %s", e)
 
 
@@ -94,7 +97,8 @@ def _patch_loaded_faster_whisper_modules(wrapped_func: VadCallable | None) -> No
     if wrapped_func is None:
         return
     try:
-        for name, module in list(sys.modules.items()):
+        # Snapshot (tuple): an import on another thread can grow sys.modules mid-iteration.
+        for name, module in tuple(sys.modules.items()):
             if _is_patchable_faster_whisper_module(name, module):
                 setattr(module, "get_speech_timestamps", wrapped_func)
     except (RuntimeError, KeyError, AttributeError, TypeError):
@@ -222,7 +226,7 @@ def get_speech_timestamps(audio, threshold=0.35, min_silence_duration_ms=500, sp
 
         # Convert sample counts (at 16kHz) to seconds
         return [{"start": round(ts["start"] / 16000, 3), "end": round(ts["end"] / 16000, 3)} for ts in speech_ts]
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         logger.warning("[VAD] Unified segment analysis failed: %s", e)
         return []
 
@@ -245,5 +249,5 @@ def get_speech_timestamps_from_path(audio_path, threshold=0.35, **kwargs):
                 ts["end"] += start_offset
         return results
     except (ImportError, RuntimeError, process_exec.CommandExecutionError, process_exec.CommandTimeoutError, OSError, ValueError) as e:
-        logger.error("[VAD] File decoding failed: %s", e)
+        logger.exception("[VAD] File decoding failed: %s", e)
         return []

@@ -31,11 +31,19 @@ def _source(params: dict, context: dict) -> Path:
     Every manifest entry names a flat sibling clip (``en_core``), so requiring the
     resolved path to sit directly in ``root`` costs nothing and rejects traversal.
     """
-    root = context["root"].resolve()
-    clip = (root / f"{params['source']}.wav").resolve()
-    if clip.parent != root:
+    clip = _inside_root(context["root"] / f"{params['source']}.wav", context)
+    if clip is None:
         raise ValueError(f"fixture source {params['source']!r} resolves outside the audio matrix root")
     return clip
+
+
+def _inside_root(path: Path, context: dict) -> Path | None:
+    """``path`` resolved, when it names a file directly in the matrix root; otherwise None."""
+    root = context["root"].resolve()
+    resolved = path.resolve()
+    if resolved.is_relative_to(root) and resolved.parent == root:
+        return resolved
+    return None
 
 
 def build_silence(dest: Path, params: dict, context: dict) -> None:
@@ -101,7 +109,11 @@ def build_tiny(dest: Path, params: dict, context: dict) -> None:
 
 def build_truncated_header(dest: Path, params: dict, context: dict) -> None:
     """A file that begins announcing itself as a WAV and then stops."""
-    dest.write_bytes(_source(params, context).read_bytes()[:TRUNCATED_HEADER_BYTES])
+    # dest derives from the manifest entry id, so it is confined like every source is.
+    target = _inside_root(dest, context)
+    if target is None:
+        raise ValueError(f"fixture destination {dest} resolves outside the audio matrix root")
+    target.write_bytes(_source(params, context).read_bytes()[:TRUNCATED_HEADER_BYTES])
 
 
 def build_zero_byte(dest: Path, _params: dict, _context: dict) -> None:

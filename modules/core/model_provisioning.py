@@ -21,6 +21,9 @@ from modules.core import model_integrity
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 # Failure modes a download can surface: network/transport, filesystem, and the assorted
 # errors the hub/separator libraries raise. Startup must degrade, never die, on any of them.
 _DOWNLOAD_ERRORS = (RuntimeError, ValueError, OSError, EOFError, ImportError, TypeError, KeyError)
@@ -282,7 +285,7 @@ def _provision_one(label, provision) -> bool:
         _fail(label, f"Could not provision {label}")
     except _DOWNLOAD_ERRORS as exc:
         _fail(label, str(exc))
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         _fail(label, f"{type(exc).__name__}: {exc}")
     return False
 

@@ -171,6 +171,17 @@ def test_truncated_header_refuses_a_traversing_source(context):
         adversarial.build_truncated_header(context["root"] / "out.wav", {"source": "../../etc/passwd"}, context)
 
 
+def test_truncated_header_refuses_a_destination_outside_the_root(context):
+    """The destination is written directly, so it is confined to the matrix root as well."""
+    (context["root"] / "nested").mkdir()
+    stray = context["root"] / "nested" / "elsewhere.wav"
+
+    with pytest.raises(ValueError, match="destination"):
+        adversarial.build_truncated_header(stray, {"source": "en_core"}, context)
+
+    assert not stray.exists()
+
+
 def test_zero_byte_writes_an_empty_file(context):
     """An empty upload is its own failure mode."""
     dest = context["root"] / "out.wav"

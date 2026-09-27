@@ -44,7 +44,7 @@ def verify_file_sha256(file_path: str | Path, expected_sha256: str) -> bool:
             return False
         digest = compute_file_sha256(path)
         return digest.lower() == expected_sha256.lower()
-    except (OSError, PermissionError) as exc:
+    except OSError as exc:
         logger.warning("[Integrity] Failed to compute hash for %s: %s", path, exc)
         return False
 
@@ -162,8 +162,8 @@ def purge_corrupted_path(target_path: str | Path, description: str = "asset") ->
             path.unlink()
         logger.info("[Integrity] Successfully removed corrupted %s: %s", description, path)
         return True
-    except (OSError, PermissionError) as exc:
-        logger.error("[Integrity] Failed to remove corrupted %s at %s: %s", description, path, exc)
+    except OSError as exc:
+        logger.exception("[Integrity] Failed to remove corrupted %s at %s: %s", description, path, exc)
         return False
 
 

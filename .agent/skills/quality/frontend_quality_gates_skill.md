@@ -16,6 +16,7 @@ Keep frontend quality gates deterministic and enforceable in local runs and CI.
 Load-order contract note:
 
 - Dashboard and analytics scripts are concatenated via manifest order (`dashboard_js_files.txt` and `analytics_js_files.txt`), not ESM imports. Test fixtures and script loaders must preserve the same ordering.
+- Because they share one scope only after concatenation, a dashboard state variable that a file other than `core/state.js` reassigns is declared on `globalThis` in `core/state.js` and written as `globalThis.name = ...`; a bare assignment reads as an implicit global to per-file analysis (SonarQube javascript:S2703). The vm-context unit tests supply these names as context properties, which `globalThis` resolves to.
 
 ## Required Gates
 

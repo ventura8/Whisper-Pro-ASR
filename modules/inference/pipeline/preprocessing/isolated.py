@@ -64,7 +64,8 @@ def channel_for(device_type: str) -> worker_channel.WorkerChannel:
 
 def shutdown_all() -> None:
     """Terminate every preprocessing worker, returning the device memory UVR held."""
-    for device_type, channel in list(_CHANNELS.items()):
+    # Snapshot (tuple) rather than live iteration: another thread may register a channel meanwhile.
+    for device_type, channel in tuple(_CHANNELS.items()):
         logger.info("[Isolated] Shutting down UVR %s worker", device_type)
         channel.shutdown()
 

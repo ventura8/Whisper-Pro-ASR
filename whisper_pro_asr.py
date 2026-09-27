@@ -103,28 +103,42 @@ if __name__ != "__mp_main__":
                 items.append(f"{quote(k)}={quote(v)}")
         return "&".join(items)
 
-    def create_app(testing: bool = False) -> FastAPI:
-        """Enterprise FastAPI Factory."""
-        logging_setup.setup_logging()
-        logging_setup.log_banner()
-        utils.cleanup_old_files(config.LOG_DIR, days=config.LOG_RETENTION_DAYS)
-        logger.debug("Using bootstrap configuration: %s", bootstrap)
+    def _optional_request_log_suffixes(request: Request) -> tuple[str, str, str]:
+        """Build the optional ' | Body:'/' | Params:'/' | Content-Type:' log
+        suffixes, each empty when the corresponding header/query data is absent."""
+        content_length = request.headers.get("content-length", "0")
+        body_log = f" | Body: {content_length} bytes" if content_length != "0" else ""
+        query_str = sanitize_query_params(request.query_params)
+        params_log = f" | Params: {query_str}" if query_str else ""
+        content_type = request.headers.get("content-type", "")
+        ct_log = f" | Content-Type: {content_type}" if content_type else ""
+        return body_log, params_log, ct_log
 
-        if config.VERIFY_RUNTIME:
-            verify_runtime_integrity()
+    def _log_request_start(request: Request) -> Callable[..., None]:
+        """Log the incoming request line and return the log function used
+        (debug for noisy health-check paths, info otherwise) so the completion
+        log below is logged at the same level."""
+        client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+        body_log, params_log, ct_log = _optional_request_log_suffixes(request)
 
-        fastapi_app = FastAPI(
-            title="Whisper Pro ASR API",
-            description="Enterprise-grade Whisper Automatic Speech Recognition web service",
-            version=config.VERSION,
-            lifespan=lifespan,
-            docs_url=None,  # Disabled native docs to override with customized Swagger
-            redoc_url=None,
+        log_func = logger.debug if request.url.path in ("/status", "/") else logger.info
+        log_func(">>> %s %s [Source: %s]%s%s%s", request.method, request.url.path, client_ip, body_log, params_log, ct_log)
+        return log_func
+
+    def _log_request_complete(request: Request, response: Response | None, log_func: Callable[..., None]) -> None:
+        """Log the completion line using the log function chosen at request start."""
+        duration = time.time() - request.state.start_time
+        status_code = response.status_code if response is not None else 500
+        log_func(
+            "<<< %s %s [%d] | Latency: %s",
+            request.method,
+            request.url.path,
+            status_code,
+            utils.format_duration(duration),
         )
 
-        fastapi_app.state.testing = testing
-
-        # Configure CORS
+    def _configure_cors(fastapi_app: FastAPI) -> None:
+        """Add the CORS middleware only when origins are explicitly configured."""
         cors_origins = security.get_cors_origins()
         if cors_origins:
             fastapi_app.add_middleware(
@@ -135,41 +149,9 @@ if __name__ != "__mp_main__":
                 allow_headers=["*"],
             )
 
-        def _optional_request_log_suffixes(request: Request) -> tuple[str, str, str]:
-            """Build the optional ' | Body:'/' | Params:'/' | Content-Type:' log
-            suffixes, each empty when the corresponding header/query data is absent."""
-            content_length = request.headers.get("content-length", "0")
-            body_log = f" | Body: {content_length} bytes" if content_length != "0" else ""
-            query_str = sanitize_query_params(request.query_params)
-            params_log = f" | Params: {query_str}" if query_str else ""
-            content_type = request.headers.get("content-type", "")
-            ct_log = f" | Content-Type: {content_type}" if content_type else ""
-            return body_log, params_log, ct_log
+    def _register_request_lifecycle_middleware(fastapi_app: FastAPI) -> None:
+        """Configure Request Lifecycle Logging & Storage Hygiene Middleware."""
 
-        def _log_request_start(request: Request) -> Callable[..., None]:
-            """Log the incoming request line and return the log function used
-            (debug for noisy health-check paths, info otherwise) so the completion
-            log below is logged at the same level."""
-            client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
-            body_log, params_log, ct_log = _optional_request_log_suffixes(request)
-
-            log_func = logger.debug if request.url.path in ("/status", "/") else logger.info
-            log_func(">>> %s %s [Source: %s]%s%s%s", request.method, request.url.path, client_ip, body_log, params_log, ct_log)
-            return log_func
-
-        def _log_request_complete(request: Request, response: Response | None, log_func: Callable[..., None]) -> None:
-            """Log the completion line using the log function chosen at request start."""
-            duration = time.time() - request.state.start_time
-            status_code = response.status_code if response is not None else 500
-            log_func(
-                "<<< %s %s [%d] | Latency: %s",
-                request.method,
-                request.url.path,
-                status_code,
-                utils.format_duration(duration),
-            )
-
-        # Configure Request Lifecycle Logging & Storage Hygiene Middleware
         @fastapi_app.middleware("http")
         async def request_lifecycle_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
             request.state.start_time = time.time()
@@ -191,36 +173,62 @@ if __name__ != "__mp_main__":
 
             return response
 
+    def _static_or_cdn(local_path: str, cdn_url: str) -> str:
+        """The bundled static asset's URL when it ships with the image, else the CDN copy."""
+        return f"/{local_path}" if os.path.exists(local_path) else cdn_url
+
+    def _render_swagger_html(fastapi_app: FastAPI) -> str:
+        """Render the Swagger UI page, preferring bundled assets and adding the theme."""
+        res = get_swagger_ui_html(
+            openapi_url=fastapi_app.openapi_url or "",
+            title=fastapi_app.title + " - Swagger UI",
+            swagger_js_url=_static_or_cdn(
+                "static/swagger-ui-bundle.js", "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"
+            ),
+            swagger_css_url=_static_or_cdn("static/swagger-ui.css", "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"),
+            swagger_favicon_url=_static_or_cdn("static/favicon.png", "https://fastapi.tiangolo.com/img/favicon.png"),
+        )
+        html = bytes(res.body).decode("utf-8")
+        if os.path.exists("static/swagger-theme.css"):
+            theme_link = '<link rel="stylesheet" type="text/css" href="/static/swagger-theme.css">'
+            html = html.replace("</head>", f"  {theme_link}\n</head>")
+        return html
+
+    def _register_swagger_docs(fastapi_app: FastAPI) -> None:
+        """Custom Swagger Endpoint for themed documentation."""
+
+        @fastapi_app.get("/docs", include_in_schema=False)
+        async def custom_swagger_ui_html() -> HTMLResponse:
+            return HTMLResponse(content=_render_swagger_html(fastapi_app))
+
+    def create_app(testing: bool = False) -> FastAPI:
+        """Enterprise FastAPI Factory."""
+        logging_setup.setup_logging()
+        logging_setup.log_banner()
+        utils.cleanup_old_files(config.LOG_DIR, days=config.LOG_RETENTION_DAYS)
+        logger.debug("Using bootstrap configuration: %s", bootstrap)
+
+        if config.VERIFY_RUNTIME:
+            verify_runtime_integrity()
+
+        fastapi_app = FastAPI(
+            title="Whisper Pro ASR API",
+            description="Enterprise-grade Whisper Automatic Speech Recognition web service",
+            version=config.VERSION,
+            lifespan=lifespan,
+            docs_url=None,  # Disabled native docs to override with customized Swagger
+            redoc_url=None,
+        )
+
+        fastapi_app.state.testing = testing
+
+        _configure_cors(fastapi_app)
+        _register_request_lifecycle_middleware(fastapi_app)
+
         # Mount static assets
         fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
 
-        # Custom Swagger Endpoint for themed documentation
-        @fastapi_app.get("/docs", include_in_schema=False)
-        async def custom_swagger_ui_html() -> HTMLResponse:
-            swagger_js = (
-                "/static/swagger-ui-bundle.js"
-                if os.path.exists("static/swagger-ui-bundle.js")
-                else "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"
-            )
-            swagger_css = (
-                "/static/swagger-ui.css"
-                if os.path.exists("static/swagger-ui.css")
-                else "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"
-            )
-            swagger_fav = "/static/favicon.png" if os.path.exists("static/favicon.png") else "https://fastapi.tiangolo.com/img/favicon.png"
-
-            res = get_swagger_ui_html(
-                openapi_url=fastapi_app.openapi_url or "",
-                title=fastapi_app.title + " - Swagger UI",
-                swagger_js_url=swagger_js,
-                swagger_css_url=swagger_css,
-                swagger_favicon_url=swagger_fav,
-            )
-            html = bytes(res.body).decode("utf-8")
-            if os.path.exists("static/swagger-theme.css"):
-                theme_link = '<link rel="stylesheet" type="text/css" href="/static/swagger-theme.css">'
-                html = html.replace("</head>", f"  {theme_link}\n</head>")
-            return HTMLResponse(content=html)
+        _register_swagger_docs(fastapi_app)
 
         # Register API Routers
         fastapi_app.include_router(routes_system.router)

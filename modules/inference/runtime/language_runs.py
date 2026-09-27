@@ -92,14 +92,18 @@ def _blocks(labelled: list) -> list:
     blocks: list = []
     for region, span in labelled:
         language = _language_of(span)
-        if _continues(blocks, language):
-            pass
-        elif _awaiting_label(blocks):
-            blocks[-1]["language"] = language
-        else:
-            blocks.append({"language": language, "regions": [], "confidences": [], "labelled_seconds": 0.0})
+        if not _continues(blocks, language):
+            _label_or_open_block(blocks, language)
         _extend(blocks[-1], region, span)
     return blocks
+
+
+def _label_or_open_block(blocks: list, language: str | None) -> None:
+    """Give a waiting unlabelled opening its first label, or else open a new block."""
+    if _awaiting_label(blocks):
+        blocks[-1]["language"] = language
+    else:
+        blocks.append({"language": language, "regions": [], "confidences": [], "labelled_seconds": 0.0})
 
 
 def _language_of(span) -> str | None:

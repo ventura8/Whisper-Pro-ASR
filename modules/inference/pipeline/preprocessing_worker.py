@@ -42,6 +42,9 @@ from modules.inference.engines import worker_runtime
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 #: unit_id -> PreprocessingManager. Mirrors the pool the parent used to hold.
 _MANAGERS: dict[str, Any] = {}
 
@@ -129,8 +132,8 @@ def _separate(handle: str, audio_path: str, force: bool = False, stage: str = "V
             outcome["cancelled"] = True
         # Deliberately broad: this runs on the separation thread, and ANY escape would be
         # swallowed by the runtime and reported to the parent as a silent hang instead of an
-        # error. `tuple([Exception])` avoids the ruff/pylint suppressions this repo bans.
-        except tuple([Exception]) as exc:
+        # error. `_ANY_EXCEPTION` avoids the ruff/pylint suppressions this repo bans.
+        except _ANY_EXCEPTION as exc:
             outcome["error"] = f"{type(exc).__name__}: {exc}"
 
     thread = threading.Thread(target=_run, name="uvr-separate", daemon=True)

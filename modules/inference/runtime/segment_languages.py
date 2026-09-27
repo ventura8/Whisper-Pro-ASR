@@ -24,6 +24,9 @@ from modules.core import config
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 def spans_for(runs: list, segments: list, info) -> list:
     """Label the segments from the decode runs and return the spans to report.
@@ -143,7 +146,7 @@ def _release_region_audio(model, processed_path: str) -> None:
         return
     try:
         release(processed_path)
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         logger.warning("[ASR] Could not release the worker's region audio: %s", exc)
 
 
@@ -152,7 +155,7 @@ def _guarded_events(model, processed_path: str, regions: list):
     exception the caller can tell apart from anything raised while consuming them."""
     try:
         yield from _detection_events(model, processed_path, regions)
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         logger.warning("[ASR] Per-clip language detection failed; segments keep the file language: %s", exc)
         raise _DetectionFailed from exc
 

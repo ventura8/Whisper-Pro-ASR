@@ -57,17 +57,20 @@ async def _terminate_process(proc) -> None:
             await proc.wait()
 
 
-async def _run_capture_async(command: list[str], timeout: float | None) -> CommandResult:
+async def _run_capture_async(command: list[str]) -> CommandResult:
+    # No timeout parameter: the deadline is applied by the caller around this coroutine
+    # (see _run_bounded). When it expires the coroutine is cancelled, and the child must
+    # not outlive it, so cancellation terminates the process before propagating.
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError as exc:
+        stdout_b, stderr_b = await proc.communicate()
+    except asyncio.CancelledError:
         await _terminate_process(proc)
-        raise CommandTimeoutError(f"Command timed out after {timeout}s") from exc
+        raise
 
     return CommandResult(
         returncode=proc.returncode,
@@ -76,7 +79,8 @@ async def _run_capture_async(command: list[str], timeout: float | None) -> Comma
     )
 
 
-async def _run_stream_async(command: list[str], timeout: float, on_line: Callable[[str], None]) -> int:
+async def _run_stream_async(command: list[str], on_line: Callable[[str], None]) -> int:
+    # Deadline applied by the caller, as for _run_capture_async; cancellation kills the child.
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
@@ -94,17 +98,30 @@ async def _run_stream_async(command: list[str], timeout: float, on_line: Callabl
         await proc.wait()
 
     try:
-        await asyncio.wait_for(_consume_lines(), timeout=timeout)
-    except asyncio.TimeoutError as exc:
+        await _consume_lines()
+    except asyncio.CancelledError:
         await _terminate_process(proc)
-        raise CommandTimeoutError(f"Command timed out after {timeout}s") from exc
+        raise
 
     return proc.returncode
 
 
+def _run_bounded(coro, timeout: float | None):
+    """Run ``coro`` to completion from sync code under an optional deadline.
+
+    ``asyncio.wait_for`` cancels the coroutine when the deadline passes; the coroutine
+    terminates its child process on that cancellation, and the resulting TimeoutError is
+    reported as CommandTimeoutError. ``timeout=None`` waits indefinitely.
+    """
+    try:
+        return _run_coroutine_sync(asyncio.wait_for(coro, timeout=timeout))
+    except TimeoutError as exc:
+        raise CommandTimeoutError(f"Command timed out after {timeout}s") from exc
+
+
 def run_capture(command: list[str], timeout: float | None = None, *, check: bool = False) -> CommandResult:
     """Run a command and capture stdout/stderr."""
-    result: CommandResult = _run_coroutine_sync(_run_capture_async(command, timeout))
+    result: CommandResult = _run_bounded(_run_capture_async(command), timeout)
     if check and result.returncode != 0:
         raise CommandExecutionError(command, result.returncode, result.stderr)
     return result
@@ -118,7 +135,7 @@ def check_output_text(command: list[str], timeout: float | None = None) -> str:
 
 def run_stream(command: list[str], timeout: float, on_line: Callable[[str], None]) -> int:
     """Run a command, streaming merged stdout/stderr lines to a callback."""
-    returncode: int = _run_coroutine_sync(_run_stream_async(command, timeout, on_line))
+    returncode: int = _run_bounded(_run_stream_async(command, on_line), timeout)
     if returncode != 0:
         raise CommandExecutionError(command, returncode)
     return returncode

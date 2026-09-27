@@ -30,7 +30,6 @@ def _query_nvidia_vram_lines(nvidia_smi: str) -> list[str] | None:
     except (
         process_exec.CommandExecutionError,
         process_exec.CommandTimeoutError,
-        FileNotFoundError,
         OSError,
     ):
         return None

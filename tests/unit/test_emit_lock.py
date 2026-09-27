@@ -11,6 +11,8 @@ import io
 import json
 from unittest import mock
 
+import pytest
+
 from scripts.audio_matrix import _emit_lock
 
 
@@ -151,3 +153,20 @@ def _ctx(stream):
     manager.__enter__.return_value = stream
     manager.__exit__.return_value = False
     return manager
+
+
+def test_refuses_a_report_that_is_not_an_existing_json_file(tmp_path):
+    """A mistyped report argument fails before anything is read or written."""
+    with pytest.raises(ValueError, match="pip --report"):
+        _emit_lock.main(str(tmp_path / "missing.json"), str(tmp_path / "out.txt"))
+
+
+def test_refuses_an_output_path_outside_the_report_directory(tmp_path):
+    """The lock is written beside the report, so a stray output path cannot overwrite other files."""
+    report = _write_report(tmp_path, [])
+    stray = tmp_path / "nested" / "out.txt"
+
+    with pytest.raises(ValueError, match="directly beside the report"):
+        _emit_lock.main(report, str(stray))
+
+    assert not stray.exists()

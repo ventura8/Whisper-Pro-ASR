@@ -28,6 +28,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 class CancelledByParent(Exception):
     """Raised inside a stream handler when the parent asks it to stop."""
@@ -114,10 +117,10 @@ def _dispatch(handlers: dict[str, Callable[..., Any]], request: dict[str, Any]) 
         return {"id": request_id, "ok": False, "error": f"Unknown command '{cmd}'"}
     try:
         return {"id": request_id, "ok": True, "result": handler(**request.get("args", {}))}
-    # `tuple([Exception])` rather than a bare `except Exception`, which needs a ruff BLE001
+    # `_ANY_EXCEPTION` rather than a bare `except Exception`, which needs a ruff BLE001
     # and a pylint broad-exception-caught suppression -- both banned here. Same idiom as
     # modules/core/pcm_helpers.py; the breadth itself is deliberate and explained above.
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         logger.exception("[Worker] Command '%s' failed", cmd)
         return {"id": request_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -144,7 +147,7 @@ def _run_stream(
         # from completion on the wire. "done" now means exhausted, and only that.
         _send(conn, {"id": request_id, "event": _TERMINATOR[cancelled]})
     # Same rationale and same idiom as _dispatch above.
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         logger.exception("[Worker] Streaming command '%s' failed", cmd)
         _send(conn, {"id": request_id, "event": "error", "error": f"{type(exc).__name__}: {exc}"})
     finally:

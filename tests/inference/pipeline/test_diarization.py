@@ -7,7 +7,6 @@ imported directly, so these tests fake out ``worker.call`` /
 module.
 """
 
-import asyncio
 from contextlib import contextmanager
 from typing import Any, Optional
 from unittest import mock
@@ -237,7 +236,7 @@ def test_routes_extract_diarize_params() -> None:
     mock_req.headers = {"X-HF-Token": "test_tok"}
     mock_req.query_params = {"diarize": "true", "min_speakers": "2", "max_speakers": "4"}
     mock_req.url.path = "/asr"
-    params = asyncio.run(get_request_params(mock_req, {}))
+    params = get_request_params(mock_req, {})
     assert (params["diarize"], params["min_speakers"], params["max_speakers"], params["hf_token"]) == (
         True,
         2,
@@ -249,19 +248,19 @@ def test_routes_extract_diarize_params() -> None:
     mock_req_default.headers = {}
     mock_req_default.query_params = {}
     mock_req_default.url.path = "/asr"
-    params_default = asyncio.run(get_request_params(mock_req_default, {}))
+    params_default = get_request_params(mock_req_default, {})
 
     mock_req_invalid = mock.MagicMock()
     mock_req_invalid.headers = {}
     mock_req_invalid.query_params = {"min_speakers": "invalid", "max_speakers": "invalid"}
     mock_req_invalid.url.path = "/asr"
-    params_invalid = asyncio.run(get_request_params(mock_req_invalid, {}))
+    params_invalid = get_request_params(mock_req_invalid, {})
 
     mock_req_header = mock.MagicMock()
     mock_req_header.query_params = {}
     mock_req_header.headers = {"X-HF-Token": "header_tok"}
     mock_req_header.url.path = "/asr"
-    params_header = asyncio.run(get_request_params(mock_req_header, {}))
+    params_header = get_request_params(mock_req_header, {})
 
     assert (params_default["diarize"], params_default["min_speakers"], params_default["max_speakers"], params_default["hf_token"]) == (
         False,

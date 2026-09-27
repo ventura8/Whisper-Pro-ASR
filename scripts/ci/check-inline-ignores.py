@@ -93,7 +93,7 @@ def _report_violations(root_dir: str, filepath: str, violations: list[Violation]
 def _is_fence(line: str) -> bool:
     """Whether a Markdown line opens or closes a fenced code block."""
     stripped = line.lstrip()
-    return stripped.startswith("```") or stripped.startswith("~~~")
+    return stripped.startswith(("```", "~~~"))
 
 
 def _fenced_code_lines(handle: Iterable[str]) -> Iterator[tuple[int, str]]:
@@ -134,7 +134,7 @@ def scan_file(filepath: str) -> list[Violation]:
                     if pattern.search(line):
                         violations.append((line_num, name, line.strip()))
     except Exception as exc:
-        logger.error("Error reading %s: %s", filepath, exc)
+        logger.exception("Error reading %s: %s", filepath, exc)
         raise RuntimeError(f"Failed to scan file: {filepath}") from exc
     return violations
 

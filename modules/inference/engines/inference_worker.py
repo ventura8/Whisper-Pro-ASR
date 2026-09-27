@@ -41,6 +41,7 @@ _ENGINES: dict[str, Any] = {}
 _REGION_AUDIO: dict[str, Any] = {}
 #: Files kept at once: one per unit a worker is likely to serve, plus one being released.
 _REGION_AUDIO_LIMIT = 4
+_VAD_MODULE = "modules.inference.pipeline.vad"
 
 
 def _apply_env(env: Optional[dict[str, str]]) -> None:
@@ -223,7 +224,7 @@ def _detect_language_regions(handle: str, audio_path: str, regions: list) -> Ite
 def _region_audio(audio_path: str):
     """The decoded samples of ``audio_path``, decoded once per file across region chunks."""
     if audio_path not in _REGION_AUDIO:
-        vad = importlib.import_module("modules.inference.pipeline.vad")
+        vad = importlib.import_module(_VAD_MODULE)
         while len(_REGION_AUDIO) >= _REGION_AUDIO_LIMIT:
             _REGION_AUDIO.pop(next(iter(_REGION_AUDIO)))
         _REGION_AUDIO[audio_path] = vad.decode_audio(audio_path)
@@ -250,7 +251,7 @@ def _detect_language_batch(handle: str, audio_path: str, segment_count: int) -> 
     audio is decoded once, in this process, so no arrays cross the pipe.
     """
     engine = _get_engine(handle)
-    vad = importlib.import_module("modules.inference.pipeline.vad")
+    vad = importlib.import_module(_VAD_MODULE)
     run_language_detection_core = importlib.import_module("modules.inference.pipeline.language_detection_core").run_language_detection_core
 
     full_audio = vad.decode_audio(audio_path)
@@ -280,7 +281,7 @@ def _detect_language(handle: str, audio_path: str) -> dict[str, Any]:
     is the path the transcription pipeline actually uses.
     """
     engine = _get_engine(handle)
-    vad = importlib.import_module("modules.inference.pipeline.vad")
+    vad = importlib.import_module(_VAD_MODULE)
 
     audio = vad.decode_audio(audio_path)
     try:

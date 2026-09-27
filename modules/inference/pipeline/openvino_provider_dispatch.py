@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 ProviderConfig = tuple[list[str], list[dict[str, object]]]
 
+#: The ROCm kernel-driver node; its presence means a native Linux ROCm stack.
+_KFD_NODE = "/dev/kfd"
+#: AMD provider preferences, most capable first, per platform.
+_AMD_ROCM_PROVIDERS: tuple[str, ...] = ("MIGraphXExecutionProvider", "ROCMExecutionProvider")
+_AMD_DIRECTML_PROVIDERS: tuple[str, ...] = ("DmlExecutionProvider",)
+_NO_PROVIDERS: tuple[str, ...] = ()
+
 
 def _normalize_openvino_device_type(device_id: str) -> str:
     """Normalize any device id to an OpenVINO-compatible target name."""
@@ -84,11 +91,11 @@ def openvino_provider_config(device_id: str) -> ProviderConfig:
 
 
 def _get_amd_candidates() -> tuple[str, ...]:
-    if os.path.exists("/dev/kfd"):
-        return ("MIGraphXExecutionProvider", "ROCMExecutionProvider")
+    if os.path.exists(_KFD_NODE):
+        return _AMD_ROCM_PROVIDERS
     if sys.platform == "win32":
-        return ("DmlExecutionProvider",)
-    return ()
+        return _AMD_DIRECTML_PROVIDERS
+    return _NO_PROVIDERS
 
 
 def _can_use_amd_providers() -> bool:
@@ -146,7 +153,7 @@ def _resolve_amd_fallback_message(kfd_present: bool, dxg_present: bool, rocdxg_p
 def _log_amd_cpu_fallback_reason(available: list[str]) -> None:
     """Log the specific reason no AMD GPU provider could be selected."""
     fmt = _resolve_amd_fallback_message(
-        os.path.exists("/dev/kfd"),
+        os.path.exists(_KFD_NODE),
         os.path.exists("/dev/dxg"),
         os.path.exists("/opt/rocm/lib/librocdxg.so"),
     )
@@ -178,7 +185,7 @@ def cpu_provider_config() -> ProviderConfig:
 
 def _has_amd_device_node() -> bool:
     """Return True only if AMD GPU device nodes are mounted in docker container."""
-    return os.path.exists("/dev/kfd") or (os.path.exists("/dev/dxg") and os.path.exists("/opt/rocm/lib/librocdxg.so"))
+    return os.path.exists(_KFD_NODE) or (os.path.exists("/dev/dxg") and os.path.exists("/opt/rocm/lib/librocdxg.so"))
 
 
 def _has_amd_provider(providers: list[str]) -> bool:

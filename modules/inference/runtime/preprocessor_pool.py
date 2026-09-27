@@ -47,7 +47,7 @@ def _pool_preprocessor_by_type(pool: PreprocessorPool, preferred_type: str) -> A
     # Snapshot: the pool is inserted into by other threads building shared preprocessors,
     # and iterating it live raises "dictionary changed size during iteration" mid-request.
     wanted = _normalized(preferred_type)
-    for preprocessor in list(pool.values()):
+    for preprocessor in tuple(pool.values()):
         if _normalized(getattr(preprocessor, "device_type", None)) == wanted:
             return preprocessor
     return None

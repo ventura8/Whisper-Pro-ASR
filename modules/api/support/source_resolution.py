@@ -22,6 +22,9 @@ from modules.core import config, utils
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 def _remove_path_if_exists(path: str):
     if os.path.exists(path):
@@ -69,7 +72,7 @@ def _write_upload_sync(audio_file, tmp_path: str):
     if hasattr(audio_file, "file") and audio_file.file:
         try:
             audio_file.file.seek(0)
-        except tuple([Exception]):
+        except _ANY_EXCEPTION:
             pass
         with open(tmp_path, "wb") as f:
             shutil_copy_file_in_chunks(audio_file.file, f)

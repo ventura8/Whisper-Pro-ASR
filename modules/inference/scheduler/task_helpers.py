@@ -214,11 +214,13 @@ def decrement_queued_session(state):
 def get_preemptible_unit(state):
     """Finds a unit that can be borrowed from a paused task."""
     with state.task_registry_lock:
-        for unit_id in list(state.preemptible_units):
-            state.preemptible_units.remove(unit_id)
-            logger.info("[Scheduler] Borrowing unit %s for priority task", unit_id)
-            return unit_id
-    return None
+        if not state.preemptible_units:
+            return None
+        # First in iteration order, exactly as the loop this replaced picked it.
+        unit_id = next(iter(state.preemptible_units))
+        state.preemptible_units.remove(unit_id)
+        logger.info("[Scheduler] Borrowing unit %s for priority task", unit_id)
+        return unit_id
 
 
 def mark_unit_preemptible(state, unit_id):

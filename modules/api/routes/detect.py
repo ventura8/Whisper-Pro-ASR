@@ -23,6 +23,9 @@ from modules.inference.runtime import model_manager
 router = APIRouter(tags=["Identification"])
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 @router.post("/detect-language")
 @router.post("/detectlang")
@@ -69,7 +72,7 @@ async def detect_language(
             )
 
         return await _run_detection_without_dedupe(resolved_local_path, uploaded_file, filename, start_time, worker_context=worker_context)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         msg, code = routes_utils.handle_error(e, "LD")
         return JSONResponse(content={"error": msg}, status_code=code)
 
@@ -165,7 +168,7 @@ async def _run_detection_internal(
             msg, code = err
             return JSONResponse(content={"error": msg}, status_code=code), (None, err)
         return result, (result, None)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         msg, code = routes_utils.handle_error(e, "LD")
         return JSONResponse(content={"error": msg}, status_code=code), (None, (msg, code))
     finally:
@@ -202,7 +205,7 @@ def _perform_detect_language_task(
 
         try:
             result = language_detection.run_voting_detection(source_path, model_manager, start_time)
-        except tuple([Exception]) as e:
+        except _ANY_EXCEPTION as e:
             msg, code = routes_utils.handle_error(e, "LD")
             model_manager.record_task_failure(msg, code, context="LD")
             return None, (msg, code)

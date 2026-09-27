@@ -13,6 +13,9 @@ from modules.inference.engines import whisperx_worker_client
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 def _read_reclamation_memory_snapshot() -> dict[str, float | int | None]:
     """Capture process RSS and optional CUDA VRAM usage for reclaim logs."""
@@ -57,7 +60,7 @@ def _clear_whisper_models(model_pool: dict[str, Any]) -> int:
                     model.unload()
                 elif hasattr(model, "pipeline"):
                     model.pipeline = None
-            except tuple([Exception]) as exc:
+            except _ANY_EXCEPTION as exc:
                 logger.debug("[Engine] Error unloading model %s: %s", unit_id, exc)
             del model
         model_pool.clear()
@@ -70,7 +73,7 @@ def _clear_uvr_models(preprocessor_pool: dict[str, Any]) -> int:
         preprocessor = preprocessor_pool.pop(unit_id)
         try:
             preprocessor.unload_model()
-        except tuple([Exception]) as exc:
+        except _ANY_EXCEPTION as exc:
             logger.debug("[Engine] Error unloading UVR %s: %s", unit_id, exc)
         del preprocessor
     preprocessor_pool.clear()

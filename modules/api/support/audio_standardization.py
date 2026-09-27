@@ -93,7 +93,7 @@ def _contains_only_null_bytes(source_path: str, *, chunk_size: int = 1024 * 1024
                 if chunk.strip(b"\x00"):
                     return False
         return True
-    except tuple([OSError, IOError]):
+    except OSError:
         return False
 
 
@@ -104,7 +104,7 @@ def _is_file_corrupted(source_path: str) -> bool:
         if os.path.getsize(source_path) == 0:
             return False
         return _contains_only_null_bytes(source_path)
-    except tuple([OSError, IOError]):
+    except OSError:
         return False
 
 

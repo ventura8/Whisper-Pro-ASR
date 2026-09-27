@@ -13,6 +13,16 @@ from pathlib import Path
 from modules.core import boot_diagnostics
 from modules.core.config_helpers import has_amd_wsl_hardware
 
+# Library roots baked into the image per accelerator, and the boot-log reason each one reports.
+_WSL_LIB_DIR = "/usr/lib/wsl/lib"
+_LIBS_CPU = "/app/libs/cpu"
+_LIBS_INTEL = "/app/libs/intel"
+_LIBS_AMD = "/app/libs/amd"
+_LIBS_NVIDIA = "/app/libs/nvidia"
+_REASON_INTEL = "Intel OpenVINO"
+_REASON_AMD = "AMD ROCm"
+_REASON_NVIDIA = "NVIDIA CUDA"
+
 
 def initialize_hardware_path():
     """
@@ -35,10 +45,10 @@ def _ensure_wsl_library_path():
     # dynamic-library lookup for modules already loaded in the running Python
     # interpreter, so bootstrap still relies on early invocation and explicit
     # runtime path selection for in-process imports.
-    if os.path.exists("/usr/lib/wsl/lib"):
+    if os.path.exists(_WSL_LIB_DIR):
         ld_path = os.environ.get("LD_LIBRARY_PATH", "")
-        if "/usr/lib/wsl/lib" not in ld_path:
-            os.environ["LD_LIBRARY_PATH"] = f"/usr/lib/wsl/lib:{ld_path}" if ld_path else "/usr/lib/wsl/lib"
+        if _WSL_LIB_DIR not in ld_path:
+            os.environ["LD_LIBRARY_PATH"] = f"{_WSL_LIB_DIR}:{ld_path}" if ld_path else _WSL_LIB_DIR
 
 
 def _get_boot_logger():
@@ -201,7 +211,7 @@ def _check_explicit_preprocess_library(
     if normalized in ("", "auto"):
         return None
     if normalized == "cpu":
-        return "/app/libs/cpu", "CPU"
+        return _LIBS_CPU, "CPU"
     return _explicit_vendor_library(preprocess_device, is_nvidia_hw, is_intel_hw, is_amd_hw)
 
 
@@ -213,9 +223,9 @@ def _explicit_vendor_library(preprocess_device: str, is_nvidia_hw: bool, is_inte
     flow. None when the named device does not match any vendor present on this host.
     """
     vendors = (
-        (_should_use_intel_path(preprocess_device, is_intel_hw), "/app/libs/intel", "Intel OpenVINO"),
-        (_should_use_amd_path(preprocess_device, is_amd_hw), "/app/libs/amd", "AMD ROCm"),
-        (_should_use_nvidia_path(preprocess_device, is_nvidia_hw), "/app/libs/nvidia", "NVIDIA CUDA"),
+        (_should_use_intel_path(preprocess_device, is_intel_hw), _LIBS_INTEL, _REASON_INTEL),
+        (_should_use_amd_path(preprocess_device, is_amd_hw), _LIBS_AMD, _REASON_AMD),
+        (_should_use_nvidia_path(preprocess_device, is_nvidia_hw), _LIBS_NVIDIA, _REASON_NVIDIA),
     )
     return next(((path, label) for matched, path, label in vendors if matched), None)
 
@@ -235,32 +245,32 @@ def _check_dual_gpu_path(device: str, preprocess_device: str, is_nvidia_hw: bool
         return None
     if not is_nvidia_hw or not is_amd_hw:
         return None
-    if not os.path.exists("/app/libs/amd"):
+    if not os.path.exists(_LIBS_AMD):
         return None
-    return "/app/libs/amd", "AMD ROCm"
+    return _LIBS_AMD, _REASON_AMD
 
 
 def _check_nvidia_library(device: str, is_nvidia_hw: bool) -> tuple[str, str] | None:
     if _should_use_nvidia_path(device, is_nvidia_hw):
-        return "/app/libs/nvidia", "NVIDIA CUDA"
+        return _LIBS_NVIDIA, _REASON_NVIDIA
     return None
 
 
 def _check_amd_library(device: str, preprocess_device: str, is_amd_hw: bool) -> tuple[str, str] | None:
     if _should_use_amd_path(device, is_amd_hw) or _should_use_amd_path(preprocess_device, is_amd_hw):
-        return "/app/libs/amd", "AMD ROCm"
+        return _LIBS_AMD, _REASON_AMD
     return None
 
 
 def _check_intel_library(device: str, preprocess_device: str, is_intel_hw: bool) -> tuple[str, str] | None:
     if _should_use_intel_path(device, is_intel_hw) or _should_use_intel_path(preprocess_device, is_intel_hw):
-        return "/app/libs/intel", "Intel OpenVINO"
+        return _LIBS_INTEL, _REASON_INTEL
     return None
 
 
 def _check_cpu_library() -> tuple[str | None, str]:
-    if os.path.exists("/app/libs/cpu"):
-        return "/app/libs/cpu", "CPU Runtime"
+    if os.path.exists(_LIBS_CPU):
+        return _LIBS_CPU, "CPU Runtime"
     return None, "Default"
 
 
@@ -271,7 +281,7 @@ def _is_explicit_amd_device(normalized: str) -> bool:
 
 
 def _should_use_amd_path(device: str, is_amd_hw: bool) -> bool:
-    if not os.path.exists("/app/libs/amd"):
+    if not os.path.exists(_LIBS_AMD):
         return False
     normalized = device.lower()
     return _is_explicit_amd_device(normalized) or (normalized == "auto" and is_amd_hw)
@@ -280,7 +290,7 @@ def _should_use_amd_path(device: str, is_amd_hw: bool) -> bool:
 def _should_use_nvidia_path(device: str, is_nvidia_hw: bool) -> bool:
     # Per-vendor images may ship without this runtime; an explicit ASR_DEVICE=CUDA must
     # not claim a path that does not exist, or resolution returns before the CPU fallback.
-    if not os.path.exists("/app/libs/nvidia"):
+    if not os.path.exists(_LIBS_NVIDIA):
         return False
     normalized = device.lower()
     return _is_explicit_nvidia_device(normalized) or _can_use_auto_nvidia_path(normalized, is_nvidia_hw)
@@ -291,7 +301,7 @@ def _is_explicit_nvidia_device(normalized_device: str) -> bool:
 
 
 def _can_use_auto_nvidia_path(normalized_device: str, is_nvidia_hw: bool) -> bool:
-    return normalized_device == "auto" and is_nvidia_hw and os.path.exists("/app/libs/nvidia")
+    return normalized_device == "auto" and is_nvidia_hw and os.path.exists(_LIBS_NVIDIA)
 
 
 def _is_explicit_intel_device(normalized_device: str) -> bool:
@@ -301,7 +311,7 @@ def _is_explicit_intel_device(normalized_device: str) -> bool:
 def _should_use_intel_path(device: str, is_intel_hw: bool) -> bool:
     # Same guard as the NVIDIA path above: explicit intel/gpu/npu must not resolve to a
     # runtime the image does not carry.
-    if not os.path.exists("/app/libs/intel"):
+    if not os.path.exists(_LIBS_INTEL):
         return False
     normalized = device.lower()
     return _is_explicit_intel_device(normalized) or (normalized == "auto" and is_intel_hw)
@@ -337,7 +347,7 @@ def _activate_target_library(boot_logger, target_lib: str | None, context_reason
             return
     _prepend_to_sys_path(boot_logger, target_lib, context_reason)
     _reimport_onnxruntime(boot_logger, target_lib)
-    if context_reason == "Intel OpenVINO":
+    if context_reason == _REASON_INTEL:
         boot_diagnostics.log_intel_runtime_diagnostics(boot_logger)
 
 

@@ -215,7 +215,7 @@ def _run_diarization_safe(processed_path, raw_segments, *, info, min_speakers, m
             unit_id=unit_id,
         )
     except (ValueError, TypeError, KeyError, AttributeError, OSError, RuntimeError) as diarize_err:
-        logger.error("[Diarization] Diarization failed: %s. Falling back to non-diarized output.", diarize_err)
+        logger.exception("[Diarization] Diarization failed: %s. Falling back to non-diarized output.", diarize_err)
         results = []
         for s in raw_segments:
             seg_dict = {"start": round(s["start"], 2), "end": round(s["end"], 2), "text": s["text"].strip()}

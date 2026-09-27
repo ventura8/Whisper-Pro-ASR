@@ -332,10 +332,9 @@ def _labelled(gap_segments: list, gap_lang: str) -> list:
     ``ASR_SEGMENT_LANGUAGES`` off a response has one shape, no language on any segment, the
     decoded ones included.
     """
-    if not config.ASR_SEGMENT_LANGUAGES:
-        return gap_segments
-    for seg in gap_segments:
-        seg["language"] = gap_lang
+    if config.ASR_SEGMENT_LANGUAGES:
+        for seg in gap_segments:
+            seg["language"] = gap_lang
     return gap_segments
 
 

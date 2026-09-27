@@ -156,7 +156,7 @@ class FasterWhisperEngine(BaseASREngine):
 
             return True
         except (RuntimeError, ValueError, OSError, EOFError) as retry_err:
-            logger.error("[FasterWhisper] Retry after purge failed: %s", retry_err)
+            logger.exception("[FasterWhisper] Retry after purge failed: %s", retry_err)
             return False
 
     def transcribe(

@@ -83,7 +83,8 @@ def _unit_order_map(hardware_units: list[HardwareUnit]) -> dict[str, int]:
 def _idle_unit_ids(state: Any) -> list[str | None]:
     try:
         with state.hw_pool.mutex:
-            return [u.get("id") for u in list(state.hw_pool.queue) if isinstance(u, dict)]
+            # Iterated in place: every queue.Queue mutation holds this same mutex.
+            return [u.get("id") for u in state.hw_pool.queue if isinstance(u, dict)]
     except AttributeError:
         return []
 
@@ -291,14 +292,17 @@ def wait_for_pause_confirmation(state: Any, target_unit_id: Optional[str], expec
     """Wait until pause confirmation for the requested generation is observed."""
     last_wait_log_at = 0.0
     with state.cond:
-        while True:
-            if is_pause_confirmed(state, target_unit_id, expected_generation):
-                return True
-            if should_skip_pause_confirmation(state, target_unit_id):
-                return True
-
+        # Indefinite by design (priority wait semantics): the loop ends only once the pause is
+        # confirmed or no longer needed, so the result is always True.
+        while not _pause_wait_over(state, target_unit_id, expected_generation):
             last_wait_log_at = log_waiting_status_periodically(target_unit_id, expected_generation, last_wait_log_at)
             state.cond.wait(timeout=0.1)
+    return True
+
+
+def _pause_wait_over(state: Any, target_unit_id: Optional[str], expected_generation: int) -> bool:
+    """Whether the pause is confirmed for this generation, or waiting for it is moot."""
+    return is_pause_confirmed(state, target_unit_id, expected_generation) or should_skip_pause_confirmation(state, target_unit_id)
 
 
 def is_pause_confirmed(state, target_unit_id: Optional[str], expected_gen: int) -> bool:

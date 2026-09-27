@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 def is_path_writable(path: str) -> bool:
     """Return True when a directory allows create+delete operations."""
     try:
-        with tempfile.TemporaryFile(dir=path):
-            pass
+        # Creating the file proves create; leaving the block closes it, which deletes it
+        # (TemporaryFile semantics) and so proves delete. The flush is the only I/O needed.
+        with tempfile.TemporaryFile(dir=path) as probe:
+            probe.flush()
         return True
-    except (PermissionError, OSError):
+    except OSError:
         return False
 
 
@@ -24,7 +26,7 @@ def _try_candidate_dir(candidate: str) -> bool:
         return False
     try:
         os.makedirs(candidate, exist_ok=True)
-    except (PermissionError, OSError):
+    except OSError:
         return False
     return is_path_writable(candidate)
 
@@ -32,7 +34,7 @@ def _try_candidate_dir(candidate: str) -> bool:
 def _ensure_fallback_writable(label: str, fallback: str) -> str:
     try:
         os.makedirs(fallback, exist_ok=True)
-    except (PermissionError, OSError) as exc:
+    except OSError as exc:
         raise RuntimeError(f"[Config] {label} fallback directory {fallback} could not be created: {exc}") from exc
 
     if not is_path_writable(fallback):
@@ -65,7 +67,7 @@ def get_custom_mount_points() -> list[str]:
     try:
         system_roots = _system_mount_roots()
         return _read_custom_mount_points(system_roots)
-    except (FileNotFoundError, PermissionError, OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError):
         return []
 
 

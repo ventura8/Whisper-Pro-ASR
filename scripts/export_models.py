@@ -15,6 +15,7 @@ from pathlib import Path
 # a top-level import into the block above, which silently undoes it. This is the project's
 # sanctioned way to express a deliberately-placed import without an inline suppression.
 torchaudio = importlib.import_module("torchaudio")
+_BACKEND_COMMON = "torchaudio.backend.common"
 
 if not hasattr(torchaudio, "backend"):
     # Create or get backend
@@ -31,13 +32,13 @@ if not hasattr(torchaudio, "backend"):
     torchaudio.backend = backend_obj
 
     # Mock 'common' submodule which is often requested for AudioBackend types
-    if "torchaudio.backend.common" not in sys.modules:
-        mock_common = types.ModuleType("torchaudio.backend.common")
+    if _BACKEND_COMMON not in sys.modules:
+        mock_common = types.ModuleType(_BACKEND_COMMON)
         # Add common placeholder if a library checks for it
         mock_common.AudioBackend = object
         # Add AudioMetaData as it's often used (e.g., in DeepFilterNet)
         mock_common.AudioMetaData = getattr(torchaudio, "AudioMetaData", object)
-        sys.modules["torchaudio.backend.common"] = mock_common
+        sys.modules[_BACKEND_COMMON] = mock_common
         backend_obj.common = mock_common
 
 
@@ -71,7 +72,7 @@ def export_whisper(model_name):
         subprocess.run(cmd, check=True)
         logger.info("Whisper export successful.")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Whisper export failed: {e}")
+        logger.exception("Whisper export failed: %s", e)
         sys.exit(1)
 
 
@@ -99,9 +100,8 @@ def warmup_uvr():
             separator.load_model(model_name)
             logger.info("UVR/MDX-NET pre-cache successful.")
     except Exception as e:
-        logger.error(f"UVR/MDX-NET pre-cache failed: {e}")
         # Not exiting as the build can still proceed and download at runtime
-        pass
+        logger.exception("UVR/MDX-NET pre-cache failed: %s", e)
 
 
 if __name__ == "__main__":

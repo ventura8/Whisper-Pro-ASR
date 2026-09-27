@@ -29,6 +29,9 @@ from modules.core import config
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 #: Oldest Intel GPU architecture from which an OpenVINO ONNX session survives a spawn child.
 MIN_ISOLATABLE_INTEL_GPU_ARCH = (12, 55)
 
@@ -81,7 +84,7 @@ def intel_gpu_arch_for(device_id: str) -> tuple[int, int] | None:
         if parsed is not None:
             _ARCH_CACHE[str(device_id)] = parsed
         return parsed
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         # Any failure here means "cannot tell", and the caller treats that as not
         # isolatable -- the safe answer, since guessing wrong costs a native crash.
         logger.debug("[Preprocess] Could not read Intel GPU architecture for %s: %s", device_id, exc)

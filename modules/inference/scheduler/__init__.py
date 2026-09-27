@@ -300,7 +300,8 @@ def _reset_all_syncs_if_idle(keep_pause_for_backlog: bool, queued_priority_count
             u_sync["resume_event"].set()
             u_sync["pause_confirmed"].clear()
             u_sync["confirmed_generation"] = None
-        for unit_id in list(getattr(STATE, "unit_priority_requests", {}).keys()):
+        # Snapshot (tuple): concurrency.py inserts new unit keys under a different lock.
+        for unit_id in tuple(getattr(STATE, "unit_priority_requests", {})):
             STATE.unit_priority_requests[unit_id] = 0
 
 
@@ -381,7 +382,7 @@ def _finalize_registered_task(task_id):
         try:
             history_manager.log_completed_task(history_task)
         except (RuntimeError, OSError, ValueError, TypeError, KeyError, AttributeError) as err:
-            logger.error("[Scheduler] Failed to persist task history for %s: %s", task_id, err)
+            logger.exception("[Scheduler] Failed to persist task history for %s: %s", task_id, err)
 
 
 def finalize_stale_task(task_id):

@@ -243,9 +243,8 @@ def _task_matches_unit(task: dict[str, Any], device_type: str, unit_id: Any, idx
         return True
     if task.get("unit_type") != device_type:
         return False
-    if exclude_nvidia:
-        if "NVIDIA" in task.get("unit_name", ""):
-            return False
+    if exclude_nvidia and "NVIDIA" in task.get("unit_name", ""):
+        return False
     return _unit_index_matches(task.get("unit_id"), idx)
 
 

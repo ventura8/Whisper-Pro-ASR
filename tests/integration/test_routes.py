@@ -328,7 +328,7 @@ class TestASREndpoint:
         mock_request = mock.MagicMock()
         mock_request.query_params = {}
         mock_request.url.path = "/v1/audio/translations"
-        params = asyncio.run(get_request_params(mock_request, {}))
+        params = get_request_params(mock_request, {})
         assert params["task"] == "translate"
 
     def test_asr_post_no_input(self, routes_client):
@@ -478,11 +478,11 @@ class TestASREndpoint:
         mock_request = mock.MagicMock()
         mock_request.query_params = {"batch_size": "not_an_int"}
         mock_request.url.path = "/asr"
-        params = asyncio.run(get_request_params(mock_request, {}))
+        params = get_request_params(mock_request, {})
         assert params["batch_size"] == config.DEFAULT_BATCH_SIZE
 
         mock_request2 = mock.MagicMock()
         mock_request2.query_params = {"task": "translate"}
         mock_request2.url.path = "/asr"
-        params2 = asyncio.run(get_request_params(mock_request2, {}))
+        params2 = get_request_params(mock_request2, {})
         assert params2["task"] == "translate"

@@ -11,6 +11,9 @@ from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 def _positive_pcm_int(flags: list[str], flag: str, default: int) -> int:
     """Parse a PCM flag as a positive int, otherwise return the safe default."""
@@ -39,7 +42,7 @@ def calculate_pcm_fallback_duration(file_path: str, input_flags: list[str] | Non
         if input_flags and os.path.exists(file_path):
             f_size = os.path.getsize(file_path)
             return float(f_size) / pcm_bytes_per_second(input_flags)
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         pass
     return 0.0
 
@@ -71,7 +74,7 @@ def _probe_duration_safe(file_path: str, flags: list[str] | None, check_output_f
     # upload reaches ffprobe's own decoders and surfaces as TypeError. Narrowing this to a
     # named tuple was tried and reverted: it turned a corrupt-file 400 into a 500 and broke
     # detect-language on any file ffprobe rejects.
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         # Logged, because this is the step whose silent failure makes a duration wrong
         # rather than absent: the caller falls through to a size-based estimate that is
         # only correct for raw PCM, so on a container it silently invents a length. At

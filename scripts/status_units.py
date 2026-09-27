@@ -20,17 +20,24 @@ def _format(unit: dict) -> str:
     )
 
 
-def main() -> int:
-    """Print one row per hardware unit, or a reason no rows could be printed."""
+def _report_lines() -> list[str]:
+    """One row per hardware unit on stdin, or the reason no rows could be produced."""
     try:
         units = json.load(sys.stdin).get("hardware_units", [])
     except (ValueError, TypeError):
-        print("  /status was not readable -- no measured device evidence for this row")
-        return 0
+        return ["  /status was not readable -- no measured device evidence for this row"]
     if not units:
-        print("  /status reported no hardware units")
-    for unit in units:
-        print(_format(unit))
+        return ["  /status reported no hardware units"]
+    return [_format(unit) for unit in units]
+
+
+def main() -> int:
+    """Print one row per hardware unit, or a reason no rows could be printed.
+
+    Always exits 0: this only reports evidence, and a missing row is itself the finding.
+    """
+    for line in _report_lines():
+        print(line)
     return 0
 
 

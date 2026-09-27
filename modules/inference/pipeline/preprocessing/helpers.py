@@ -397,63 +397,88 @@ def _safe_load_model_data_using_hash(orig_load_hash, *args, **kwargs):
     return None
 
 
+def _verified_local_uvr_model(model_filename, model_path):
+    """The audio-separator model tuple for a verified local HQ_3 file, else None.
+
+    A local file that fails verification is purged, so the caller falls through to a
+    fresh download instead of serving it.
+    """
+    if not (os.path.exists(model_path) and model_filename == "UVR-MDX-NET-Inst_HQ_3.onnx"):
+        return None
+    # The same digest model_provisioning._validate_uvr checks. A size-only
+    # check accepted any sufficiently large file, so a truncated-then-padded
+    # download, or a partially rewritten one, was served as valid here while
+    # the provisioning path would have rejected and re-fetched it.
+    if model_integrity.verify_onnx_model_file(model_path, min_bytes=10 * 1024 * 1024, expected_sha256=model_integrity.UVR_MDX_HQ3_SHA256):
+        return (
+            model_filename,
+            "MDX",
+            "UVR-MDX-NET-Inst_HQ_3",
+            model_path,
+            None,
+        )
+    logger.warning(
+        "[UVR] Local model file %s failed integrity check. Purging...",
+        model_path,
+    )
+    model_integrity.purge_corrupted_path(model_path, description="UVR model file")
+    return None
+
+
+def _make_safe_download_model_files(orig_download):
+    def safe_download_model_files(self, model_filename):
+        model_path = os.path.join(self.model_file_dir, f"{model_filename}")
+        local_model = _verified_local_uvr_model(model_filename, model_path)
+        if local_model is not None:
+            return local_model
+        if orig_download:
+            return orig_download(self, model_filename)
+        raise FileNotFoundError(f"Model file {model_filename} not found at {model_path}")
+
+    return safe_download_model_files
+
+
+def _make_safe_load_model_data_using_hash(orig_load_hash):
+    def safe_load_model_data_using_hash(*args, **kwargs):
+        return _safe_load_model_data_using_hash(orig_load_hash, *args, **kwargs)
+
+    return safe_load_model_data_using_hash
+
+
+def _make_safe_separate(orig_separate):
+    def safe_separate(self, audio_file_path, custom_output_names=None):
+        if orig_separate:
+            out = orig_separate(self, audio_file_path, custom_output_names)
+            if not out:
+                raise RuntimeError(f"audio-separator failed to process file {audio_file_path} (returned empty stems)")
+            return out
+        raise RuntimeError("audio-separator separate() original implementation is missing; cannot perform vocal separation")
+
+    return safe_separate
+
+
+def _patch_separator_class(separator_cls) -> None:
+    logger.debug("Optimization: Patching Separator class detection logic...")
+    separator_cls.check_onnxruntime = lambda self: None
+
+    # Offline fallback for download_model_files and model parameters to prevent GitHub 429.
+    # Every original is read before any is replaced.
+    orig_download = getattr(separator_cls, "download_model_files", None)
+    orig_load_hash = getattr(separator_cls, "load_model_data_using_hash", None)
+    orig_separate = getattr(separator_cls, "separate", None)
+
+    separator_cls.download_model_files = _make_safe_download_model_files(orig_download)
+    separator_cls.load_model_data_using_hash = _make_safe_load_model_data_using_hash(orig_load_hash)
+    separator_cls.separate = _make_safe_separate(orig_separate)
+    separator_cls.is_patched = True
+
+
 def _patch_audio_separator_onnx_check():
     try:
         audio_separator = importlib.import_module("audio_separator.separator")
         separator_cls = audio_separator.Separator
         if getattr(separator_cls, "is_patched", False) is not True:
-            logger.debug("Optimization: Patching Separator class detection logic...")
-            separator_cls.check_onnxruntime = lambda self: None
-
-            # Offline fallback for download_model_files and model parameters to prevent GitHub 429
-            orig_download = getattr(separator_cls, "download_model_files", None)
-
-            def safe_download_model_files(self, model_filename):
-                model_path = os.path.join(self.model_file_dir, f"{model_filename}")
-                if os.path.exists(model_path) and model_filename == "UVR-MDX-NET-Inst_HQ_3.onnx":
-                    # The same digest model_provisioning._validate_uvr checks. A size-only
-                    # check accepted any sufficiently large file, so a truncated-then-padded
-                    # download, or a partially rewritten one, was served as valid here while
-                    # the provisioning path would have rejected and re-fetched it.
-                    if model_integrity.verify_onnx_model_file(
-                        model_path, min_bytes=10 * 1024 * 1024, expected_sha256=model_integrity.UVR_MDX_HQ3_SHA256
-                    ):
-                        return (
-                            model_filename,
-                            "MDX",
-                            "UVR-MDX-NET-Inst_HQ_3",
-                            model_path,
-                            None,
-                        )
-                    logger.warning(
-                        "[UVR] Local model file %s failed integrity check. Purging...",
-                        model_path,
-                    )
-                    model_integrity.purge_corrupted_path(model_path, description="UVR model file")
-                if orig_download:
-                    return orig_download(self, model_filename)
-                raise FileNotFoundError(f"Model file {model_filename} not found at {model_path}")
-
-            orig_load_hash = getattr(separator_cls, "load_model_data_using_hash", None)
-
-            def safe_load_model_data_using_hash(*args, **kwargs):
-
-                return _safe_load_model_data_using_hash(orig_load_hash, *args, **kwargs)
-
-            orig_separate = getattr(separator_cls, "separate", None)
-
-            def safe_separate(self, audio_file_path, custom_output_names=None):
-                if orig_separate:
-                    out = orig_separate(self, audio_file_path, custom_output_names)
-                    if not out:
-                        raise RuntimeError(f"audio-separator failed to process file {audio_file_path} (returned empty stems)")
-                    return out
-                raise RuntimeError("audio-separator separate() original implementation is missing; cannot perform vocal separation")
-
-            separator_cls.download_model_files = safe_download_model_files
-            separator_cls.load_model_data_using_hash = safe_load_model_data_using_hash
-            separator_cls.separate = safe_separate
-            separator_cls.is_patched = True
+            _patch_separator_class(separator_cls)
     except ImportError:
         pass
 

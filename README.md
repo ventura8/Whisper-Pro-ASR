@@ -252,8 +252,10 @@ reviewable line in a config file rather than an invisible comment:
   must mirror the real callee's keyword names even for parameters it ignores).
 - A deferred import uses `importlib.import_module(...)` rather than a function-level
   `import` statement, which neither ruff nor pylint flags.
-- A deliberately broad handler is written `except tuple([Exception])`, the same idiom
-  `modules/core/pcm_helpers.py` already used.
+- A deliberately broad handler catches through a module constant,
+  `_ANY_EXCEPTION = (Exception,)` (see `modules/core/pcm_helpers.py`). The earlier
+  `except tuple([Exception])` spelling satisfied pylint but is a SonarQube finding
+  (python:S7496), so it is gone from the tree.
 
 `.gitleaks.toml`, `.taplo.toml`, `.yamllint` and the checker's own `EXCLUDE_DIRS` share one
 exclusion set for the gitignored local caches (`.fixture-tooling/`, `model_cache/`,

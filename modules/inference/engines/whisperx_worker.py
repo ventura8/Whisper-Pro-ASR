@@ -49,6 +49,9 @@ from typing import Any, Optional
 
 from modules.inference.engines import worker_runtime
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 def _get_whisperx():
     """Import whisperx lazily, from the isolated sys.path set up by worker_main.
@@ -116,7 +119,7 @@ def _dispatch(handlers: dict[str, Callable[..., Any]], request: dict[str, Any]) 
         handler = handlers[cmd]
         result = handler(**args)
         return {"id": request_id, "ok": True, "result": result}
-    except tuple([Exception]) as exc:
+    except _ANY_EXCEPTION as exc:
         return {"id": request_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 

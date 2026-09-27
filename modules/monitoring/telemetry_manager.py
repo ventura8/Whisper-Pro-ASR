@@ -52,7 +52,7 @@ def record_snapshot(stats: dict[str, Any]) -> None:
             history = _prune_history(history)
             _atomic_write_history(history)
         except (OSError, TypeError, ValueError) as e:
-            logger.error("Failed to record telemetry atomically: %s", e)
+            logger.exception("Failed to record telemetry atomically: %s", e)
             raise
 
 
@@ -115,5 +115,5 @@ def clear_telemetry_history() -> None:
             if os.path.exists(TELEMETRY_FILE):
                 os.remove(TELEMETRY_FILE)
         except OSError as e:
-            logger.error("Failed to clear telemetry history: %s", e)
+            logger.exception("Failed to clear telemetry history: %s", e)
             raise

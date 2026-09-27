@@ -81,7 +81,7 @@ def test_update_log_retention_logs_error_on_invalid_value():
         mock.patch("modules.core.logging_setup.logger") as mock_logger,
     ):
         logging_setup.update_log_retention("not-an-int")
-        mock_logger.error.assert_called_once()
+        mock_logger.exception.assert_called_once()
 
 
 def test_openvino_device_and_probe_lines_error_paths():

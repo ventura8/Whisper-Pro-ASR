@@ -81,7 +81,8 @@ def shutdown_all() -> None:
     This is the reclamation the in-process path cannot achieve: killing the process
     returns the CUDA/ROCm/OpenVINO context's device memory to the OS outright.
     """
-    for engine_type, channel in list(_CHANNELS.items()):
+    # Snapshot (tuple) rather than live iteration: another thread may register a channel meanwhile.
+    for engine_type, channel in tuple(_CHANNELS.items()):
         logger.info("[Isolated] Shutting down %s worker", engine_type)
         channel.shutdown()
 

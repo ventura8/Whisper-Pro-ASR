@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 import urllib.request
+from pathlib import Path
 
 HEADER = """\
 # Audio-matrix fixture toolchain -- GENERATED, DO NOT EDIT BY HAND.
@@ -57,8 +58,26 @@ def _resolve_hash(package: dict) -> tuple[str, str]:
     return digest, f"# LOCAL: index published no hash; {state}"
 
 
+def _confined_paths(report_path: str, out_path: str) -> tuple[Path, Path]:
+    """Resolve both command-line paths, refusing any that stray from the work directory.
+
+    The report must be an existing ``.json`` file, and the lock is written beside it --
+    which is how regenerate_locks.sh uses this (both live in /work). A malformed argument
+    therefore cannot make this script overwrite a file elsewhere on the machine.
+    """
+    report = Path(report_path).resolve()
+    if report.suffix != ".json" or not report.is_file():
+        raise ValueError(f"{report_path!r} is not an existing pip --report .json file")
+    work_dir = report.parent
+    out = Path(out_path).resolve()
+    if not out.is_relative_to(work_dir) or out.parent != work_dir:
+        raise ValueError(f"{out_path!r} must sit directly beside the report in {work_dir}")
+    return report, out
+
+
 def main(report_path: str, out_path: str) -> int:
-    with open(report_path, encoding="utf-8") as handle:
+    report_file, out_file = _confined_paths(report_path, out_path)
+    with open(report_file, encoding="utf-8") as handle:
         report = json.load(handle)
     lines = [HEADER, ""]
     uncorroborated = []
@@ -72,7 +91,7 @@ def main(report_path: str, out_path: str) -> int:
             lines.append(note)
         lines.append(f"{package['metadata']['name']}=={package['metadata']['version']} \\")
         lines.append(f"    --hash=sha256:{digest}")
-    with open(out_path, "w", encoding="utf-8") as out:
+    with open(out_file, "w", encoding="utf-8") as out:
         out.write("\n".join(lines) + "\n")
     print(f"{out_path}: {len(report['install'])} packages pinned")
     if uncorroborated:

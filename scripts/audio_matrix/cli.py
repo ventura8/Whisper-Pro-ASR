@@ -254,7 +254,7 @@ def _try_build(section: str, entry: dict, context: dict, force: bool) -> str:
     try:
         return _build_one(section, entry, context, force)
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        logger.error("FAILED   %s: %s", entry["id"], _brief(error))
+        logger.exception("FAILED   %s: %s", entry["id"], _brief(error))
         return "failed"
 
 
@@ -376,7 +376,7 @@ def _build_one_longform(spec: dict, data: dict[str, Any], context: dict) -> int:
         # A language the spec names with nothing rendered for it: reported as this variant's
         # failure, like every other one, rather than as a traceback that loses the sections
         # and variants already built.
-        logger.error("FAILED   longform %s: %s", spec.get("id", "<no id>"), exc)
+        logger.exception("FAILED   longform %s: %s", spec.get("id", "<no id>"), exc)
         return 1
     if not sources:
         logger.error("FAILED   longform: no rendered source clips; generate the clips section first")
@@ -433,7 +433,7 @@ def _try_build_longform(spec: dict, sources: list[dict], context: dict) -> str:
         # the ground-truth sidecar described a timeline the audio did not have.
         timeline = longform.build(sources, dest, context, profile=spec.get("profile") or "stress", shape=spec.get("shape") or "film")
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        logger.error("FAILED   %s: %s", spec.get("id", "longform"), _brief(error))
+        logger.exception("FAILED   %s: %s", spec.get("id", "longform"), _brief(error))
         return "failed"
     cache.write_stamp(dest, digest, {"section": "longform"})
     logger.info("built    %s (%.1fs, %d utterances)", spec["id"], timeline["duration"], len(timeline["speech"]))

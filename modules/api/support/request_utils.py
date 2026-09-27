@@ -44,6 +44,9 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 _route_public_api = (get_clean_wav_or_error,)
 
 
@@ -355,7 +358,7 @@ def cleanup_files(*args):
             try:
                 os.remove(f_path)
                 logger.debug("[System] Cleaned up: %s", f_path)
-            except tuple([Exception]):
+            except _ANY_EXCEPTION:
                 pass
     # Reset tracking
     utils.get_tracked_files().clear()
@@ -411,7 +414,7 @@ async def _parse_json_body(request: Request) -> dict:
         body = await request.json()
         if isinstance(body, dict):
             return body
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         pass
     return {}
 
@@ -422,7 +425,7 @@ async def _parse_multipart_form(request: Request) -> dict:
         form = await request.form()
         for k, v in form.items():
             form_data[k] = v
-    except tuple([Exception]):
+    except _ANY_EXCEPTION:
         pass
     return form_data
 

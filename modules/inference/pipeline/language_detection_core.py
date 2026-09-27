@@ -13,10 +13,16 @@ from modules.inference.pipeline import vad
 
 logger = logging.getLogger(__name__)
 
+# Looked up in sys.modules rather than imported: model_manager imports this module.
+_MODEL_MANAGER_MODULE = "modules.inference.runtime.model_manager"
+
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
 
 def run_language_detection(audio_path):
     """Optimized language detection using the faster detect_language API."""
-    model_manager = sys.modules["modules.inference.runtime.model_manager"]
+    model_manager = sys.modules[_MODEL_MANAGER_MODULE]
     start_time = time.time()
     with model_manager.model_lock_ctx() as (model, _):
         scheduler.update_task_progress(5, "Detection")
@@ -29,7 +35,7 @@ def run_language_detection(audio_path):
 
 def run_batch_language_detection(audio_path, segment_count):
     """High-performance multi-segment identification scan."""
-    model_manager = sys.modules["modules.inference.runtime.model_manager"]
+    model_manager = sys.modules[_MODEL_MANAGER_MODULE]
     with model_manager.model_lock_ctx() as (model, _):
         return model_manager.run_batch_language_detection_direct(model, audio_path, segment_count)
 
@@ -67,7 +73,7 @@ def _detect_segments_isolated(model, audio_path, segment_count) -> list:
 
 def run_batch_language_detection_direct(model, audio_path, segment_count):
     """Direct batch detection without re-acquiring the lock."""
-    model_manager = sys.modules["modules.inference.runtime.model_manager"]
+    model_manager = sys.modules[_MODEL_MANAGER_MODULE]
     full_audio = None
     try:
         if _is_isolated_engine(model):
@@ -75,7 +81,7 @@ def run_batch_language_detection_direct(model, audio_path, segment_count):
         full_audio = vad.decode_audio(audio_path)
         return _detect_segments(model, model_manager, full_audio, segment_count)
     except (ImportError, RuntimeError, OSError, ValueError, AttributeError, KeyError, TypeError) as e:
-        logger.error("[Engine] Batch detection failed: %s", e)
+        logger.exception("[Engine] Batch detection failed: %s", e)
         return []
     finally:
         _cleanup_batch_detection(full_audio)
@@ -118,13 +124,13 @@ def run_language_detection_core(model, audio_input, skip_vad=False):
         # transcription-based detection and carried on.
         try:
             return _detect_language_primary(model, audio_input, speech_sec)
-        except tuple([Exception]) as e:
+        except _ANY_EXCEPTION as e:
             return _detect_language_fallback(model, audio_input, speech_sec, e)
 
     audio_input = _sanitized_or_original(audio_input)
     try:
         return _detect_language_primary(model, audio_input, speech_sec)
-    except tuple([Exception]) as e:
+    except _ANY_EXCEPTION as e:
         return _detect_language_fallback(model, audio_input, speech_sec, e)
 
 

@@ -51,7 +51,7 @@ def reload_onnxruntime_from_intel_path() -> bool:
 def is_openvino_target(device_type: str) -> bool:
     """Check if the requested device type targets the OpenVINO EP."""
     target = (device_type or "").upper()
-    return target.startswith("NPU") or target.startswith("GPU")
+    return target.startswith(("NPU", "GPU"))
 
 
 def has_openvino_provider(curr_ort) -> bool:
