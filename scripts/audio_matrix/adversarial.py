@@ -40,13 +40,14 @@ def _source(params: dict, context: dict) -> Path:
 
 def _inside_root(path: Path, context: dict) -> Path | None:
     """``path`` resolved, when it names a file directly in the matrix root; otherwise None."""
-    root = context["root"].resolve()
-    resolved = path.resolve()
-    if resolved.is_relative_to(root) and resolved.parent == root:
-        # Rebuilt from the root and the bare file name rather than returned as resolved:
-        # the check above already proves the two are the same file, and basename() is the
-        # sanitizer SonarQube's taint analysis recognises, where is_relative_to() is not.
-        return root / os.path.basename(resolved)
+    # Plain os.path strings and a startswith() prefix check, rather than Path.resolve()
+    # and is_relative_to(): both are correct, but only this form is a validator
+    # SonarQube's taint analysis recognises (pythonsecurity:S2083), and a manifest
+    # ``source`` flows from here into read_bytes() and ffmpeg.
+    root = os.path.realpath(context["root"])
+    candidate = os.path.realpath(path)
+    if candidate.startswith(root + os.sep) and os.path.dirname(candidate) == root:
+        return Path(candidate)
     return None
 
 
