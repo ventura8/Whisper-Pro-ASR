@@ -11,6 +11,7 @@ transcribe. It is to prove it fails *gracefully and promptly* rather than return
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -42,7 +43,10 @@ def _inside_root(path: Path, context: dict) -> Path | None:
     root = context["root"].resolve()
     resolved = path.resolve()
     if resolved.is_relative_to(root) and resolved.parent == root:
-        return resolved
+        # Rebuilt from the root and the bare file name rather than returned as resolved:
+        # the check above already proves the two are the same file, and basename() is the
+        # sanitizer SonarQube's taint analysis recognises, where is_relative_to() is not.
+        return root / os.path.basename(resolved)
     return None
 
 

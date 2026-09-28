@@ -327,7 +327,7 @@ class IntelWhisperEngine:
                 chunk_audio = audio_data[start_idx:end_idx]
 
                 # Skip completely silent/zeroed-out chunks if VAD is active
-                if vad_filter and np.all(chunk_audio == 0.0):
+                if vad_filter and not np.any(chunk_audio):
                     continue
 
                 # Update and lock language dynamically if auto-detected on the first chunk

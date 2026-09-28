@@ -448,7 +448,7 @@ function _pickLegacyUnitMetricByType(unitId, value) {
 function _resolveUnitIndex(unitId) {
     // The index is the last run of digits in the id (e.g. "CUDA:1" -> 1).
     const digitRuns = String(unitId || '').match(/\d+/g);
-    return digitRuns ? Number.parseInt(digitRuns[digitRuns.length - 1], 10) : 0;
+    return digitRuns ? Number.parseInt(digitRuns.at(-1), 10) : 0;
 }
 
 function _isNvidiaUnit(unit) {
