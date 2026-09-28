@@ -115,10 +115,20 @@ def build_tiny(dest: Path, params: dict, context: dict) -> None:
 def build_truncated_header(dest: Path, params: dict, context: dict) -> None:
     """A file that begins announcing itself as a WAV and then stops."""
     # dest derives from the manifest entry id, so it is confined like every source is.
-    target = _inside_root(dest, context)
-    if target is None:
+    if _inside_root(dest, context) is None:
         raise ValueError(f"fixture destination {dest} resolves outside the audio matrix root")
-    target.write_bytes(_source(params, context).read_bytes()[:TRUNCATED_HEADER_BYTES])
+    # The prefix checks are repeated next to the open() calls on purpose: SonarQube's taint
+    # analysis only credits a validator in the same flow as the sink (pythonsecurity:S2083),
+    # so the confinement done inside _inside_root/_source is invisible to it here.
+    root = os.path.realpath(context["root"]) + os.sep
+    source = os.path.realpath(_source(params, context))
+    target = os.path.realpath(dest)
+    if not (source.startswith(root) and target.startswith(root)):
+        raise ValueError(f"fixture paths for {dest} resolve outside the audio matrix root")
+    with open(source, "rb") as src:
+        header = src.read(TRUNCATED_HEADER_BYTES)
+    with open(target, "wb") as out:
+        out.write(header)
 
 
 def build_zero_byte(dest: Path, _params: dict, _context: dict) -> None:
