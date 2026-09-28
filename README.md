@@ -124,7 +124,7 @@ Keep `./model_cache` on a persistent volume; deleting it forces a fresh download
 
 ## Static Analysis
 
-SonarQube Cloud analyses every pull request, and both publish jobs depend on its quality gate, so a failed gate stops a release. `sonar-project.properties` holds the configuration and is shared with the local scanner, so a scan run before pushing applies the same rules to the same files:
+SonarQube Cloud analyses every pull request and `main`, and both publish jobs depend on its quality gate, so a failed gate stops a release. A release tag is not scanned itself (tag analysis is unavailable on this plan); its run requires `main`'s analysis of the same commit to have passed the gate, so tag only commits already on `main`. `sonar-project.properties` holds the configuration and is shared with the local scanner, so a scan run before pushing applies the same rules to the same files:
 
 ```bash
 read -rsp 'SonarQube token: ' SONAR_TOKEN && export SONAR_TOKEN && echo

@@ -505,6 +505,13 @@ jobs:
           fi
 
       - name: SonarQube Scan
+        # Not on a tag. The scanner analyses a tag push as a branch named "refs/tags/vX",
+        # and non-main branch analysis is not available on this plan: the upload succeeds,
+        # then the gate's status poll gets HTTP 403 ("Organization is not allowed to access
+        # data from non main branches"), and both publish jobs are skipped. That is why the
+        # v1.4.1 and v1.4.2 tags produced no images and no GitHub Release. A tag is cut from
+        # a commit main has already analysed, so the tag step below gates on that analysis.
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4  # v8.2.2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -518,7 +525,9 @@ jobs:
         # was a lint error upstream, which is noise standing exactly where the signal
         # should be. Skipping the gate here does not let anything through: every publish
         # job already depends on python-tests in its own right.
-        if: needs.python-tests.result == 'success' && needs.js-unit-tests.result == 'success'
+        if: >-
+          needs.python-tests.result == 'success' && needs.js-unit-tests.result == 'success' &&
+          !startsWith(github.ref, 'refs/tags/v')
         # Its own repository, not a sub-action of sonarqube-scan-action: that path does
         # not exist and the step failed to load in 4s, taking the job -- and with it both
         # publish jobs -- down with it.
@@ -526,6 +535,37 @@ jobs:
         timeout-minutes: 10
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: SonarQube Quality Gate (main analysis of the tagged commit)
+        # The release gate for a tag: main's own analysis must be OF this exact commit and
+        # must have passed. A tag on a commit main never analysed -- or analysed and failed --
+        # therefore still blocks publishing. The main push run for the same commit usually
+        # starts alongside this one, so its analysis may still be in flight; poll for it.
+        if: startsWith(github.ref, 'refs/tags/v')
+        timeout-minutes: 45
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PROJECT_KEY: ventura8_Whisper-Pro-ASR
+        run: |
+          for attempt in $(seq 1 80); do
+            status=$(curl -sf -u "${SONAR_TOKEN}:" \
+              "https://sonarcloud.io/api/project_branches/list?project=${PROJECT_KEY}" |
+              python3 -c 'import json,sys
+          main = next(b for b in json.load(sys.stdin)["branches"] if b.get("isMain"))
+          print(main.get("commit", {}).get("sha", ""), main.get("status", {}).get("qualityGateStatus", ""))') || status=""
+            sha="${status%% *}"
+            gate="${status##* }"
+            if [ "$sha" = "$GITHUB_SHA" ]; then
+              echo "main analysis of ${GITHUB_SHA}: quality gate ${gate}"
+              [ "$gate" = "OK" ] && exit 0
+              echo "Error: main's quality gate for the tagged commit is '${gate}', not OK." >&2
+              exit 1
+            fi
+            echo "attempt ${attempt}: main last analysed '${sha:-<unknown>}', waiting for ${GITHUB_SHA}"
+            sleep 30
+          done
+          echo "Error: main never reported an analysis of ${GITHUB_SHA}; tag a commit main has analysed." >&2
+          exit 1
 
   release-description-validation:
     name: Validate Release Metadata
