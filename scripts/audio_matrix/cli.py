@@ -6,6 +6,7 @@ import argparse
 import functools
 import importlib
 import logging
+import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -119,7 +120,7 @@ def _render_clip(entry: dict, dest: Path, context: dict) -> None:
         raw = Path(tmp) / "raw.wav"
         _synthesize(entry, raw, context)
         gain = float(entry.get("gain", 1.0))
-        if gain == 1.0:
+        if math.isclose(gain, 1.0):
             render.to_pcm16_mono(raw, dest, context["rate"])
         else:
             render.apply_gain(raw, dest, gain, context["rate"])

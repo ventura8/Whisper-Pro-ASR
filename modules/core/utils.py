@@ -179,36 +179,34 @@ def _get_required_context_value(var, name: str):
     return val
 
 
+# The attributes ContextVarProxy stores in dedicated context variables, each with the
+# value that deleting the attribute resets it to.
+_SPECIAL_CONTEXT_VARS = {
+    "tracked_files": (TRACKED_FILES_VAR, None),
+    "filename": (FILENAME_VAR, NOT_SET),
+    "source_path": (SOURCE_PATH_VAR, NOT_SET),
+    "input_flags": (INPUT_FLAGS_VAR, None),
+}
+
+
 def _set_special_context_attr(name, value) -> bool:
-    if name == "tracked_files":
-        TRACKED_FILES_VAR.set(value)
-        return True
-    if name == "filename":
-        FILENAME_VAR.set(value)
-        return True
-    if name == "source_path":
-        SOURCE_PATH_VAR.set(value)
-        return True
-    if name == "input_flags":
-        INPUT_FLAGS_VAR.set(value)
-        return True
-    return False
+    special = _SPECIAL_CONTEXT_VARS.get(name)
+    if special is None:
+        return False
+    special[0].set(value)
+    return True
 
 
 def _delete_special_context_attr(name) -> bool:
-    if name == "tracked_files":
-        TRACKED_FILES_VAR.set(None)
-        return True
-    if name == "filename":
-        FILENAME_VAR.set(NOT_SET)
-        return True
-    if name == "source_path":
-        SOURCE_PATH_VAR.set(NOT_SET)
-        return True
-    if name == "input_flags":
-        INPUT_FLAGS_VAR.set(None)
-        return True
-    return False
+    # A table lookup rather than an if-chain: SonarQube's symbolic execution misread the
+    # chain as always returning True and flagged the caller's fallback as unreachable
+    # (pythonbugs:S2583), which it is not -- any ordinary attribute takes that path.
+    special = _SPECIAL_CONTEXT_VARS.get(name)
+    if special is None:
+        return False
+    var, reset_value = special
+    var.set(reset_value)
+    return True
 
 
 # Global contextvars storage for request context (e.g. filename tracking, temp files)

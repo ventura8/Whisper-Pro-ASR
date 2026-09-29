@@ -124,3 +124,26 @@ def test_an_unsupported_code_reaches_the_pipeline_as_an_auto_detected_request():
 
     assert detect.call_args.args[0] is None, "the unsupported code was dropped before detection"
     assert calls == {"lang": "es", "auto_detected": True}
+
+
+def _logged_language(caplog, language):
+    caplog.clear()
+    with caplog.at_level("INFO", logger=asr.logger.name):
+        asr._log_task_start("Transcription", {"language": language, "output_format": "srt"})
+    return caplog.records[-1].getMessage().rsplit("Lang: ", 1)[1]
+
+
+def test_task_start_log_names_the_canonical_code(caplog):
+    """The log line carries the code dispatch will use, whatever spelling was sent."""
+    assert _logged_language(caplog, "EN-us") == "en"
+    assert _logged_language(caplog, "eng") == "en"
+
+
+def test_task_start_log_never_echoes_an_unsupported_language(caplog):
+    """Request text outside the closed set of codes never reaches the log (log injection)."""
+    assert _logged_language(caplog, "xx\nFAKE 200 OK") == "unrecognized"
+
+
+def test_task_start_log_without_a_language_says_auto_detect(caplog):
+    """No language requested means the engine detects it, and the log says so."""
+    assert _logged_language(caplog, None) == "auto-detect"

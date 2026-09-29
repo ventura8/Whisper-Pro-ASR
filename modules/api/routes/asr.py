@@ -546,15 +546,23 @@ def _resolve_task_type(params: RequestParams) -> str:
     return "Translation" if params.get("task") == "translate" else "Transcription"
 
 
+# Supported code -> the same code, as a constant. The log line looks the request's
+# language up here, so a request can only ever put one of these strings into the log.
+_LOGGABLE_LANGUAGES = {code: code for code in languages.LANGUAGES}
+
+
 def _log_task_start(task_type: str, params: RequestParams) -> None:
-    # Both values come from the request: the format is logged in its normalized (closed-set)
-    # form and the language with control characters stripped, so neither can forge log lines.
-    language = "".join(ch for ch in str(params.get("language") or "") if ch.isprintable())
+    # Both values come from the request and are logged only as members of a closed set
+    # (log injection, pythonsecurity:S5145): the normalized format, and the language's
+    # canonical code as dispatch resolves it -- anything unsupported logs "unrecognized".
+    requested = params.get("language")
+    code = _normalize_language(str(requested)) if requested else None
+    language = _LOGGABLE_LANGUAGES.get(code or "", "unrecognized") if requested else "auto-detect"
     logger.info(
         "    Task: %s | Format: %s | Lang: %s",
         task_type.upper(),
         _normalize_output_format(params.get("output_format", "srt")).upper(),
-        language or "auto-detect",
+        language,
     )
 
 

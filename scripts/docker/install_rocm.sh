@@ -4,7 +4,7 @@
 # 7.14.x and 10.x releases listed in AMD's docs are not in that apt repository.
 set -euo pipefail
 
-wget -q -O /tmp/rocm.gpg.key https://repo.radeon.com/rocm/rocm.gpg.key
+wget --https-only -q -O /tmp/rocm.gpg.key https://repo.radeon.com/rocm/rocm.gpg.key
 echo "2de99e2354646a90d9903e2a669fc4e36b02c1bbff7075c481e12d7edab2c88b  /tmp/rocm.gpg.key" | sha256sum -c -
 mkdir -p /etc/apt/keyrings
 gpg --dearmor -o /etc/apt/keyrings/rocm.gpg /tmp/rocm.gpg.key
@@ -61,7 +61,7 @@ fi
 
 # librocdxg enables AMD WSL detection (/opt/rocm/lib/librocdxg.so). WSL2's ROCm runtime
 # limitation means this supports detection and CPU fallback, not native ROCm inference.
-wget -q -O /tmp/rocdxg-roct.deb \
+wget --https-only -q -O /tmp/rocdxg-roct.deb \
 	"https://github.com/ROCm/librocdxg/releases/download/v1.2.1/rocdxg-roct_1.2.1_amd64.deb"
 echo "7889eef45a1132ed2dde88d8ea1356bf791ec9c05802a18940bc81b970e850e0  /tmp/rocdxg-roct.deb" | sha256sum -c -
 dpkg -i /tmp/rocdxg-roct.deb
