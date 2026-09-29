@@ -4,7 +4,7 @@
 # 7.14.x and 10.x releases listed in AMD's docs are not in that apt repository.
 set -euo pipefail
 
-wget --https-only -q -O /tmp/rocm.gpg.key https://repo.radeon.com/rocm/rocm.gpg.key
+wget --https-only --max-redirect=0 -q -O /tmp/rocm.gpg.key https://repo.radeon.com/rocm/rocm.gpg.key
 echo "2de99e2354646a90d9903e2a669fc4e36b02c1bbff7075c481e12d7edab2c88b  /tmp/rocm.gpg.key" | sha256sum -c -
 mkdir -p /etc/apt/keyrings
 gpg --dearmor -o /etc/apt/keyrings/rocm.gpg /tmp/rocm.gpg.key
@@ -61,8 +61,30 @@ fi
 
 # librocdxg enables AMD WSL detection (/opt/rocm/lib/librocdxg.so). WSL2's ROCm runtime
 # limitation means this supports detection and CPU fallback, not native ROCm inference.
-wget --https-only -q -O /tmp/rocdxg-roct.deb \
-	"https://github.com/ROCm/librocdxg/releases/download/v1.2.1/rocdxg-roct_1.2.1_amd64.deb"
+# GitHub serves release assets through a redirect to its asset storage, so this download
+# cannot run with redirects disabled like the two above. It goes through Python instead,
+# whose redirect handler below refuses any hop that leaves HTTPS -- the protection
+# SonarQube's shell:S6506 asks for, which wget has no flag to express. The sha256 check
+# that follows is what actually vouches for the bytes.
+python3 - "https://github.com/ROCm/librocdxg/releases/download/v1.2.1/rocdxg-roct_1.2.1_amd64.deb" /tmp/rocdxg-roct.deb <<'PYEOF'
+import shutil
+import sys
+import urllib.error
+import urllib.request
+
+
+class HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith("https://"):
+            raise urllib.error.URLError(f"refusing a redirect that leaves HTTPS: {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+url, dest = sys.argv[1], sys.argv[2]
+opener = urllib.request.build_opener(HttpsOnlyRedirects)
+with opener.open(url, timeout=120) as response, open(dest, "wb") as out:
+    shutil.copyfileobj(response, out)
+PYEOF
 echo "7889eef45a1132ed2dde88d8ea1356bf791ec9c05802a18940bc81b970e850e0  /tmp/rocdxg-roct.deb" | sha256sum -c -
 dpkg -i /tmp/rocdxg-roct.deb
 rm -f /tmp/rocdxg-roct.deb

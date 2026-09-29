@@ -4,7 +4,7 @@ set -euo pipefail
 
 CUDA_KEYRING=cuda-keyring_1.1-1_all.deb
 CUDA_KEYRING_SHA256=d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba
-wget --https-only --progress=dot:giga "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${CUDA_KEYRING}"
+wget --https-only --max-redirect=0 --progress=dot:giga "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${CUDA_KEYRING}"
 echo "${CUDA_KEYRING_SHA256}  ${CUDA_KEYRING}" | sha256sum --check --status
 dpkg -i "${CUDA_KEYRING}"
 # libcudnn9-cuda-13 below is UNPINNED, and that is a live hazard worth understanding before

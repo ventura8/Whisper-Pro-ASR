@@ -72,7 +72,8 @@ function filterTasks(type) {
     });
     const selectedBtn = document.getElementById(`filter-${normalizedType}`);
     if (selectedBtn) selectedBtn.classList.add('active-filter');
-    updateStats();
+    // updateStats catches its own failures, so its promise is not awaited here.
+    void updateStats();
 }
 
 function filterHistory(type) {
@@ -97,7 +98,7 @@ function toggleRefresh() {
         text.innerText = 'Live Refresh';
         btn.style.background = 'var(--md-sys-color-primary-container)';
         btn.style.color = 'var(--md-sys-color-primary)';
-        updateStats();
+        void updateStats();
         startRefreshInterval();
     } else {
         icon.innerText = 'sync_disabled';

@@ -312,7 +312,8 @@ function exportJson() {
 }
 
 window.onload = () => {
-    fetchAnalytics();
+    // fetchAnalytics handles its own errors; the first load is not awaited.
+    void fetchAnalytics();
     setInterval(fetchAnalytics, 10000); // refresh every 10 seconds
 
     if (window.matchMedia) {

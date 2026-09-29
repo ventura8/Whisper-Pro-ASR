@@ -486,9 +486,7 @@ def _banner_config_lines(cfg):
     ]
     lines.append("  [INTEL RUNTIME ENV]")
     lines.extend(cfg.get("intel_env", []))
-    lines.append("")
-    lines.append(cfg.get("openvino_devices", f"  {'OpenVINO devices':<{w}}: <unavailable>"))
-    lines.append("")
+    lines.extend(["", cfg.get("openvino_devices", f"  {'OpenVINO devices':<{w}}: <unavailable>"), ""])
     lines.extend(cfg.get("openvino_probe", []))
     if cfg.get("openvino_probe"):
         lines.append("")

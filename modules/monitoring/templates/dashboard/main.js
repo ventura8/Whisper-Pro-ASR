@@ -28,14 +28,18 @@ function showTab(tab) {
         }, 50);
     }
     if (tab === 'history') {
-        fetch('/history', { headers: getAuthHeaders() }).then(res => res.json()).then(data => {
-            globalThis.fullTaskHistory = data || [];
-            renderHistory();
-        });
+        fetch('/history', { headers: getAuthHeaders() })
+            .then(res => res.json())
+            .then(data => {
+                globalThis.fullTaskHistory = data || [];
+                renderHistory();
+            })
+            .catch(e => console.warn('[Dashboard] History fetch failed:', e));
     }
     if (tab === 'settings') {
         loadDashboardApiKeys();
-        loadRetentionSettings();
+        // Handles its own errors; the returned promise is deliberately not awaited.
+        void loadRetentionSettings();
     }
 }
 
@@ -106,7 +110,7 @@ function onAdminApiKeyChanged() {
     // actually entered (loadRetentionSettings's own userEdited guard still
     // protects any slider the user is already mid-editing).
     persistDashboardApiKeys();
-    loadRetentionSettings();
+    void loadRetentionSettings();
 }
 
 async function loadRetentionSettings() {
@@ -200,7 +204,8 @@ async function clearTelemetryMetrics() {
 
 window.onload = () => {
     loadDashboardApiKeys();
-    updateStats();
+    // updateStats catches its own failures; nothing to await at load time.
+    void updateStats();
     startRefreshInterval();
     showTab('active');
     bindToggleHandlers();
