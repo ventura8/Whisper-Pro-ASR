@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "whisper-pro-asr"
-version = "1.4.2"
+version = "1.4.3"
 description = "Enterprise-grade Whisper Automatic Speech Recognition web service"
 authors = ["DeepMind Team"]
 package-mode = false

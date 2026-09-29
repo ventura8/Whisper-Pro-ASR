@@ -975,7 +975,7 @@ describe("main.js", () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        version: "1.4.2",
+        version: "1.4.3",
         active_sessions: 1,
         queued_sessions: 0,
         uptime_sec: 12,
