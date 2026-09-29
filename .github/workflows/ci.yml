@@ -563,17 +563,37 @@ jobs:
                   return json.load(resp)
 
           def analysis_of_sha():
-              analyses = get("project_analyses/search", project=project, branch="main", ps=100)["analyses"]
-              return next((a["key"] for a in analyses if a.get("revision") == sha), None)
+              # Every page of main's history, not just the first: the tagged commit may be
+              # older than the most recent analyses. Capped so a runaway paging answer ends.
+              for page in range(1, 21):
+                  body = get("project_analyses/search", project=project, branch="main", ps=500, p=page)
+                  if not isinstance(body, dict) or not isinstance(body.get("analyses"), list):
+                      raise ValueError("malformed project_analyses/search response")
+                  for analysis in body["analyses"]:
+                      if isinstance(analysis, dict) and analysis.get("revision") == sha:
+                          return analysis.get("key")
+                  paging = body.get("paging") if isinstance(body.get("paging"), dict) else {}
+                  if page * int(paging.get("pageSize", 500)) >= int(paging.get("total", 0)):
+                      return None
+              return None
+
+          def gate_of(key):
+              body = get("qualitygates/project_status", analysisId=key)
+              status = body.get("projectStatus") if isinstance(body, dict) else None
+              if not isinstance(status, dict) or not status.get("status"):
+                  raise ValueError("malformed qualitygates/project_status response")
+              return status["status"]
 
           for attempt in range(1, 81):
+              # A proxy or error page can answer 200 with a body that is not the JSON asked
+              # for; that is retried like a network error rather than crashing the step.
               try:
                   key = analysis_of_sha()
-              except OSError as exc:
-                  key = None
-                  print(f"attempt {attempt}: SonarCloud request failed: {exc}")
-              if key:
-                  gate = get("qualitygates/project_status", analysisId=key)["projectStatus"]["status"]
+                  gate = gate_of(key) if key else None
+              except (OSError, ValueError, KeyError, TypeError) as exc:
+                  key = gate = None
+                  print(f"attempt {attempt}: SonarCloud lookup failed: {exc}")
+              if gate:
                   print(f"main analysis {key} of {sha}: quality gate {gate}")
                   sys.exit(0 if gate == "OK" else f"Error: quality gate for the tagged commit is {gate}, not OK.")
               print(f"attempt {attempt}: no main analysis of {sha} yet")
