@@ -71,10 +71,15 @@ def test_a_whitespace_only_language_is_dropped():
 
 
 def test_dropping_the_callers_language_is_logged(caplog):
-    """Silently ignoring a stated language changes what the request does, so it is reported."""
+    """Silently ignoring a stated language changes what the request does, so it is reported.
+
+    The value itself is request text and is not echoed (log injection); the warning says
+    that a stated language was dropped and what happens instead.
+    """
     with caplog.at_level("WARNING"):
         assert asr._normalize_language("klingon") is None
-    assert "klingon" in caplog.text
+    assert "unsupported language code" in caplog.text
+    assert "klingon" not in caplog.text
 
 
 def test_a_posix_style_locale_resolves_like_its_hyphenated_twin():
