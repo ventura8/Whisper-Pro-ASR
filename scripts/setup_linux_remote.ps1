@@ -25,27 +25,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-function Hdr($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
-function Show-Note($m) { Write-Host "  $m" }
-function Fail($m) { Write-Host "`nERROR: $m" -ForegroundColor Red; exit 1 }
+. (Join-Path $PSScriptRoot 'remote_setup_common.ps1')
 
 $repoRoot = Split-Path (Split-Path $PSCommandPath -Parent) -Parent
 
-if (-not (Test-Path $Key)) {
-    Show-Note "No identity at $Key -- generating a dedicated one."
-    New-Item -ItemType Directory -Force -Path (Split-Path $Key) | Out-Null
-    # PowerShell 7.3 changed how arguments are passed to native commands: the old
-    # workaround -N '""' now reaches ssh-keygen as a literal two-character passphrase, so
-    # the key it writes is encrypted with `""` -- and every later BatchMode=yes connection
-    # fails to read it, which looks exactly like an unauthorised key. Older hosts still
-    # need the quoted form, because a bare "" was dropped there entirely.
-    if ($PSVersionTable.PSVersion -ge [version]'7.3') {
-        ssh-keygen -t ed25519 -N "" -C 'whisper-pro-asr remote hardware validation' -f $Key | Out-Null
-    } else {
-        ssh-keygen -t ed25519 -N '""' -C 'whisper-pro-asr remote hardware validation' -f $Key | Out-Null
-    }
-}
-$pubKey = (Get-Content "$Key.pub" -Raw).Trim()
+$pubKey = Initialize-ValidationKey -Key $Key
 
 if (-not $VerifyOnly) {
     Hdr "One block to paste on the Linux machine"
@@ -91,32 +75,10 @@ fresh SSH session.
 if (-not $User) { $User = Read-Host 'Remote username (from the READY line)' }
 if (-not $User) { Fail 'a username is required' }
 
-# BatchMode turns a would-be password prompt into an immediate error rather than a hang.
-$sshOpts = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-o','StrictHostKeyChecking=accept-new','-o','IdentitiesOnly=yes')
-function Run([string]$cmd) {
-    $priorErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        & ssh -i $Key @sshOpts "$User@$RemoteHost" $cmd 2>$null
-    } finally {
-        $ErrorActionPreference = $priorErrorActionPreference
-    }
-}
+$remote = "$User@$RemoteHost"
+function Run([string]$cmd) { Invoke-RemoteCommand -Key $Key -Target $remote -Command $cmd }
 
-Hdr "Waiting for $User@$RemoteHost"
-$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-while ($true) {
-    $priorErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        & ssh -i $Key @sshOpts "$User@$RemoteHost" 'exit' 2>$null
-    } finally {
-        $ErrorActionPreference = $priorErrorActionPreference
-    }
-    if ($LASTEXITCODE -eq 0) { break }
-    if ((Get-Date) -gt $deadline) { Fail "no SSH after ${TimeoutSeconds}s. Check sshd is running and port 22 is reachable." }
-    Start-Sleep -Seconds 5
-}
+Wait-RemoteSsh -Key $Key -Target $remote -TimeoutSeconds $TimeoutSeconds -Hint "Check sshd is running and port 22 is reachable."
 Show-Note "ssh: OK ($(Run 'echo "$(whoami)@$(hostname) $(uname -m) kernel=$(uname -r)"'))"
 
 Hdr "Verifying"
@@ -133,7 +95,7 @@ $auditScript = Join-Path $repoRoot 'scripts\audit_hardware.sh'
 # a checkout may leave on each line as part of the command, failing with a baffling
 # "$'\r': command not found" on a script that is perfectly valid.
 $auditBody = (Get-Content $auditScript -Raw) -replace "`r`n", "`n"
-$audit = $auditBody | & ssh -i $Key @sshOpts "$User@$RemoteHost" 'bash -s -- --json'
+$audit = $auditBody | & ssh -i $Key @script:RemoteSshOptions $remote 'bash -s -- --json'
 Show-Note $audit
 
 $target = [regex]::Match($audit, '"recommended_target":"([^"]*)"').Groups[1].Value

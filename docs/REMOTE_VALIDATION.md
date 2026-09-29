@@ -62,6 +62,11 @@ to paste on the target. That command is plain text, so it can be produced from e
 operator shell; only the target needs PowerShell, and
 `scripts/setup_windows_remote.ps1` is what actually runs *there*.
 
+The two PowerShell operator scripts for Linux and macOS dot-source
+`scripts/remote_setup_common.ps1`, which holds the key generation, the BatchMode SSH
+wrapper and the wait-for-host loop they share; keep either file thin and fix those in one
+place.
+
 Each bootstrapper generates the SSH key if absent, prints exactly one block to paste,
 waits for the host to come up, verifies Docker is reachable, and finishes by printing the
 `remote_validate.sh` command to run next. The only manual steps are the two that need the

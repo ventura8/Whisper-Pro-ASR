@@ -22,25 +22,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-function Hdr($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
-function Show-Note($m) { Write-Host "  $m" }
-function Fail($m) { Write-Host "`nERROR: $m" -ForegroundColor Red; exit 1 }
+. (Join-Path $PSScriptRoot 'remote_setup_common.ps1')
 
-if (-not (Test-Path $Key)) {
-    Show-Note "No identity at $Key -- generating a dedicated one."
-    New-Item -ItemType Directory -Force -Path (Split-Path $Key) | Out-Null
-    # PowerShell 7.3 changed how arguments are passed to native commands: the old
-    # workaround -N '""' now reaches ssh-keygen as a literal two-character passphrase, so
-    # the key it writes is encrypted with `""` -- and every later BatchMode=yes connection
-    # fails to read it, which looks exactly like an unauthorised key. Older hosts still
-    # need the quoted form, because a bare "" was dropped there entirely.
-    if ($PSVersionTable.PSVersion -ge [version]'7.3') {
-        ssh-keygen -t ed25519 -N "" -C 'whisper-pro-asr remote hardware validation' -f $Key | Out-Null
-    } else {
-        ssh-keygen -t ed25519 -N '""' -C 'whisper-pro-asr remote hardware validation' -f $Key | Out-Null
-    }
-}
-$pubKey = (Get-Content "$Key.pub" -Raw).Trim()
+$pubKey = Initialize-ValidationKey -Key $Key
 
 if (-not $VerifyOnly) {
     Hdr "Steps on the Mac"
@@ -69,38 +53,10 @@ echo "READY user=`$(whoami) arch=`$(uname -m)"
 if (-not $User) { $User = Read-Host 'macOS username (from the READY line)' }
 if (-not $User) { Fail 'a username is required' }
 
-$sshOpts = @('-o','BatchMode=yes','-o','ConnectTimeout=5','-o','StrictHostKeyChecking=accept-new','-o','IdentitiesOnly=yes')
-# Guarded exactly as scripts/setup_linux_remote.ps1 does. With
-# $PSNativeCommandUseErrorActionPreference on and $ErrorActionPreference='Stop' (set at the
-# top of this file), a native command exiting non-zero *throws* -- so a probe that is
-# supposed to be retryable, or simply allowed to fail, aborted the whole bootstrapper
-# instead of letting the $LASTEXITCODE checks below do their job.
-function Run([string]$cmd) {
-    $priorErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        & ssh -i $Key @sshOpts "$User@$RemoteHost" $cmd 2>$null
-    } finally {
-        $ErrorActionPreference = $priorErrorActionPreference
-    }
-}
+$remote = "$User@$RemoteHost"
+function Run([string]$cmd) { Invoke-RemoteCommand -Key $Key -Target $remote -Command $cmd }
 
-Hdr "Waiting for $User@$RemoteHost"
-$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-while ($true) {
-    # Same guard: this loop exists to poll a host that is not up yet, so the failing exits
-    # it is waiting through must not be fatal.
-    $priorErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        & ssh -i $Key @sshOpts "$User@$RemoteHost" 'exit' 2>$null
-    } finally {
-        $ErrorActionPreference = $priorErrorActionPreference
-    }
-    if ($LASTEXITCODE -eq 0) { break }
-    if ((Get-Date) -gt $deadline) { Fail "no SSH after ${TimeoutSeconds}s. Confirm Remote Login is enabled and port 22 is reachable." }
-    Start-Sleep -Seconds 5
-}
+Wait-RemoteSsh -Key $Key -Target $remote -TimeoutSeconds $TimeoutSeconds -Hint "Confirm Remote Login is enabled and port 22 is reachable."
 Show-Note "ssh: OK ($(Run 'echo "$(whoami)@$(hostname -s) $(uname -m) macOS $(sw_vers -productVersion)"'))"
 
 Hdr "Verifying"

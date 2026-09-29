@@ -79,6 +79,14 @@ GitHub Release automatically via the preinstalled `gh` CLI
 file as release notes (not auto-generated notes). Tags that don't match
 `vMAJOR.MINOR.PATCH` fail validation before release creation.
 
+Tag only a commit that is already on `main` and that `main`'s own SonarQube Cloud
+analysis has covered with a passing quality gate. The tag run does not scan (tag
+analysis is not available on this plan -- scanning one failed the gate poll with
+HTTP 403 and skipped both publish jobs, which is why v1.4.1 and v1.4.2 published no
+images and no GitHub Release); it looks up `main`'s analysis of the tagged commit and
+publishes only if that gate is `OK`. A tag run uses the workflow file from its own
+commit, so a CI fix only helps tags cut after it has merged.
+
 ### 5. Consolidate Git Commit
 
 Before staging anything, record the session baseline so the release commit's
