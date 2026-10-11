@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from modules.api.support import security
-from modules.core import config, engine_registry, logging_setup, utils
+from modules.core import config, config_nemo, engine_registry, logging_setup, utils
 from modules.inference.runtime import model_manager
 from modules.monitoring import dashboard, history_manager, telemetry_manager
 
@@ -116,6 +116,25 @@ def _update_engine_metadata(stats: dict):
     stats["engines"].update(engine_meta)
     stats["asr_engine"] = engine_meta["selected"]
     stats["supported_asr_engines"] = engine_meta["supported"]
+    _add_nemo_metadata(stats["engines"])
+
+
+def _add_nemo_metadata(engines: dict):
+    """Which NeMo model and quantization run, when the engine is one of them.
+
+    Reported because the engine name alone does not say: PARAKEET may be v3 or the English
+    v2, and a benchmark report that records only the engine cannot be reproduced.
+    """
+    if not engine_registry.is_nemo_engine(config.ASR_ENGINE):
+        return
+    spec = config_nemo.model_spec(config.ASR_ENGINE)
+    engines["nemo"] = {
+        "model": spec.name,
+        "revision": spec.revision,
+        "quantization": config_nemo.NEMO_QUANTIZATION,
+        "companion_device": config_nemo.NEMO_COMPANION_DEVICE,
+        "languages": sorted(spec.languages),
+    }
 
 
 @router.get("/history")

@@ -76,3 +76,28 @@ def test_build_cache_export_is_not_max():
     cache_to = " ".join(str(entry) for entry in _service()["build"]["cache_to"])
     assert "mode=max" not in cache_to
     assert "BUILDX_CACHE_MODE:-min" in cache_to
+
+
+def test_model_settings_reach_the_container_from_the_environment():
+    """remote_validate.sh --env ASR_MODEL=... used to be silently ignored: the value was hardcoded."""
+    env = _env()
+    assert env["ASR_MODEL"] == "${ASR_MODEL:-Systran/faster-whisper-large-v3}"
+    assert env["ASR_COMPUTE_TYPE"] == "${ASR_COMPUTE_TYPE:-AUTO}"
+    assert env["MAX_NPU_UNITS"] == "${MAX_NPU_UNITS:-1}"
+
+
+def test_nemo_settings_are_forwarded_with_the_code_defaults():
+    """Each NEMO_* setting reaches the container, defaulting to what config_nemo defaults to."""
+    env = _env()
+    assert env["NEMO_MODEL"] == "${NEMO_MODEL:-}"
+    assert env["NEMO_QUANTIZATION"] == "${NEMO_QUANTIZATION:-AUTO}"
+    assert env["NEMO_MAX_CHUNK_SEC"] == "${NEMO_MAX_CHUNK_SEC:-20}"
+    assert env["NEMO_BATCH_SIZE"] == "${NEMO_BATCH_SIZE:-4}"
+    assert env["NEMO_COMPANION_DEVICE"] == "${NEMO_COMPANION_DEVICE:-AUTO}"
+    assert env["NEMO_GPU_MEM_LIMIT_MB"] == "${NEMO_GPU_MEM_LIMIT_MB:-0}"
+
+
+def test_the_cpu_target_honours_the_requested_engine():
+    """docker-compose.cpu.yml hardcoded AUTO, so --engine PARAKEET never reached a CPU run."""
+    override = yaml.safe_load((COMPOSE_PATH.parent / "docker-compose.cpu.yml").read_text(encoding="utf-8"))
+    assert "ASR_ENGINE=${ASR_ENGINE:-AUTO}" in override["services"]["whisper-pro-asr"]["environment"]

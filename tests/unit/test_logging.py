@@ -441,6 +441,31 @@ class TestHardwareInfo:
                 assert any("[DEVICE PROPERTIES]" in line for line in lines)
                 assert any("Prop1" in line for line in lines)
 
+    @pytest.mark.parametrize(("companion_device", "companion"), [("AUTO", "CUDA (Compute: float16)"), ("CPU", "CPU")])
+    def test_banner_config_lines_nemo(self, companion_device, companion):
+        """A NeMo engine names its model, quantization, companion, and both runtimes."""
+        cfg = {
+            "asr_display": "cuda:0",
+            "prep_display": "CPU",
+            "unique_props": [],
+            "model_status": "OK",
+            "cache_status": "OK",
+            "threads": "ASR=4",
+            "resource_pool": "cuda:0",
+        }
+        with (
+            mock.patch("modules.core.config.ASR_ENGINE", "PARAKEET"),
+            mock.patch("modules.core.config.DEVICE", "CUDA"),
+            mock.patch("modules.core.config.ASR_ENGINE_DEVICE", "cuda"),
+            mock.patch("modules.core.config.ASR_ENGINE_COMPUTE_TYPE", "float16"),
+            mock.patch("modules.core.config_nemo.NEMO_COMPANION_DEVICE", companion_device),
+        ):
+            lines = _banner_config_lines(cfg)
+        text = "\n".join(lines)
+        assert "NeMo Model" in text and "nemo-parakeet-tdt-0.6b-v3" in text
+        assert "Whisper Companion" in text
+        assert f"ONNX Runtime (CUDA) + CTranslate2 companion ({companion})" in text
+
 
 def test_sanitize_query_params():
     """Verify sanitize_query_params retains only safe fields and URL-encodes keys/values."""

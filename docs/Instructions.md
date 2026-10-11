@@ -75,6 +75,15 @@ The service is highly flexible and supports any **Faster-Whisper** compatible mo
 - **English-Only**: Add `.en` suffix for better performance (e.g., `medium.en`).
 - **Distil-Whisper**: Use `distil-whisper/distil-large-v3` for maximum speed (**English-only for all tasks**).
 
+**NVIDIA NeMo models.** `ASR_ENGINE=PARAKEET` or `ASR_ENGINE=CANARY` select a NeMo model
+instead, chosen with `NEMO_MODEL` from a fixed, revision-pinned catalog:
+`nemo-parakeet-tdt-0.6b-v3` (25 European languages, the PARAKEET default),
+`nemo-parakeet-tdt-0.6b-v2` (English only) and `nemo-canary-1b-v2` (25 languages plus
+translation to English, the CANARY default). `ASR_MODEL` then names the Whisper *companion*
+that handles language detection and every language the NeMo model does not cover. Nothing
+outside the catalog can be loaded through `NEMO_MODEL`, and `/system/settings` does not
+change it -- set it in the environment and restart.
+
 ## Hardware Support Details
 
 The service utilizes different backends for transcription and isolation:

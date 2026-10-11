@@ -12,4 +12,4 @@ services:
       - ASR_PREPROCESS_DEVICE=CPU
       # AUTO honors ASR_DEVICE, so this remains Faster-Whisper even if a host exposes
       # Intel devices through the base compose file.
-      - ASR_ENGINE=AUTO
+      - ASR_ENGINE=${ASR_ENGINE:-AUTO}

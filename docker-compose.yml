@@ -122,15 +122,32 @@ services:
       # or explicit: CPU, CUDA, GPU, NPU, AMD
       - ASR_DEVICE=${ASR_DEVICE:-AUTO}
       # Computation Precision: AUTO, int8, float16 (default: AUTO)
-      - ASR_COMPUTE_TYPE=AUTO
-      # Model Weight Source (Faster-Whisper ID or local path)
-      - ASR_MODEL=Systran/faster-whisper-large-v3
-      # ASR engine backend: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX
+      - ASR_COMPUTE_TYPE=${ASR_COMPUTE_TYPE:-AUTO}
+      # Model Weight Source (Faster-Whisper ID or local path). With PARAKEET or CANARY this
+      # is the Whisper *companion* that answers language detection and other languages.
+      - ASR_MODEL=${ASR_MODEL:-Systran/faster-whisper-large-v3}
+      # ASR engine backend: AUTO, FASTER-WHISPER, INTEL-WHISPER, OPENAI-WHISPER, WHISPERX,
+      # PARAKEET, CANARY.
       # AUTO resolves to FASTER-WHISPER on every host, whatever accelerators are present.
       # For accelerated ASR on Intel set INTEL-WHISPER; on AMD set OPENAI-WHISPER with the
       # amd-rocm-torch image. CTranslate2 has no OpenVINO or ROCm backend, so AUTO decodes
       # on the CPU there and the startup banner says so.
+      # PARAKEET / CANARY run NVIDIA NeMo models (onnx-asr) for 25 European languages, with
+      # a Whisper companion for language detection and everything else -- see README.
       - ASR_ENGINE=${ASR_ENGINE:-AUTO}
+      # NeMo engines only. NEMO_MODEL: nemo-parakeet-tdt-0.6b-v3 (PARAKEET default),
+      # nemo-parakeet-tdt-0.6b-v2 (English only), nemo-canary-1b-v2 (CANARY default).
+      - NEMO_MODEL=${NEMO_MODEL:-}
+      # AUTO = fp32 on CUDA / Intel GPU, int8 on the CPU. Or INT8 / FP32 everywhere.
+      - NEMO_QUANTIZATION=${NEMO_QUANTIZATION:-AUTO}
+      # Longest audio per model call (5-30 s) and chunks per call (1-32).
+      - NEMO_MAX_CHUNK_SEC=${NEMO_MAX_CHUNK_SEC:-20}
+      - NEMO_BATCH_SIZE=${NEMO_BATCH_SIZE:-4}
+      # Cap on ONNX Runtime's CUDA arena in MiB (0 = unbounded). On an 8 GB card set this
+      # (e.g. 3072) together with NEMO_COMPANION_DEVICE=CPU.
+      - NEMO_GPU_MEM_LIMIT_MB=${NEMO_GPU_MEM_LIMIT_MB:-0}
+      # AUTO = the companion shares the unit; CPU keeps it off a card too small for both.
+      - NEMO_COMPANION_DEVICE=${NEMO_COMPANION_DEVICE:-AUTO}
       # Off by default. On a host with BOTH a CUDA/AMD GPU and an Intel GPU/NPU, "true"
       # runs each unit's native engine in its own worker so both accelerators stay busy.
       # Opt-in because it makes the engine depend on which unit serves a request.
@@ -231,7 +248,7 @@ services:
       # Default: 1 (Safest for multi-service environments). Set to 'ALL' to use everything.
       - MAX_CUDA_UNITS=${MAX_CUDA_UNITS:-1}
       - MAX_GPU_UNITS=${MAX_GPU_UNITS:-1}
-      # - MAX_NPU_UNITS=1
+      - MAX_NPU_UNITS=${MAX_NPU_UNITS:-1}
       # - MAX_AMD_UNITS=1
       # - MAX_CPU_UNITS=1
 

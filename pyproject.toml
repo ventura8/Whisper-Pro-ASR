@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "whisper-pro-asr"
-version = "1.4.3"
+version = "1.5.0"
 description = "Enterprise-grade Whisper Automatic Speech Recognition web service"
 authors = ["DeepMind Team"]
 package-mode = false
@@ -68,6 +68,13 @@ audioread = "3.1.0"
 # so selecting it failed at load in every image. Unlike WhisperX it pins nothing, so it
 # resolves against the torch above rather than needing a segregated stack.
 openai-whisper = "20250625"
+# Backs ASR_ENGINE=PARAKEET and CANARY (NVIDIA NeMo models as ONNX exports). Its only hard
+# dependency is numpy; it is deliberately installed WITHOUT its [cpu]/[gpu]/[hub] extras.
+# ONNX Runtime comes from the per-vendor build each image already ships under
+# /app/libs/<vendor> (Dockerfile ort-builder), and huggingface-hub is pinned above. Its own
+# extras exclude onnxruntime 1.24.1 (hub-cache symlinks) -- irrelevant here, because
+# provisioning downloads into a plain directory of real files (model_provisioning).
+onnx-asr = "0.12.0"
 
 # WhisperX 3.8.6 (latest published release) hard-pins torch~=2.8.0,
 # torchaudio~=2.8.0, torchvision~=0.23.0 and huggingface-hub<1.0.0, which

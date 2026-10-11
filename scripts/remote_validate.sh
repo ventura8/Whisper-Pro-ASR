@@ -21,7 +21,7 @@
 #                   AUTO ranks CUDA > AMD > GPU > NPU, so pass NPU explicitly to test it.
 #   --full          Sync the tree, build the target, start it, and run the accuracy suite.
 #   --engine NAME   ASR_ENGINE for the run (FASTER-WHISPER|INTEL-WHISPER|OPENAI-WHISPER|
-#                   WHISPERX). Default: AUTO, which picks by hardware.
+#                   WHISPERX|PARAKEET|CANARY). Default: AUTO, which resolves to FASTER-WHISPER.
 #   --preprocess DEV  ASR_PREPROCESS_DEVICE for the run (AUTO|CPU|GPU|NPU|CUDA). UVR runs
 #                   here, which is independent of the ASR device: on Intel the NPU does
 #                   preprocessing well and cannot do ASR at all.
@@ -30,6 +30,9 @@
 #                     full (156 tests ~2h) | stress (full matrix + the 20-min clip)
 #                     longform (the 20-minute clip alone, NVIDIA only)
 #                     codeswitch (the six two-language clips, ~5min; one run per engine)
+#                     bench (engine evaluation: WER/CER, RTF, detection latency; ~30min.
+#                       Writes reports/engine_eval/ and copies it back to this machine
+#                       under reports/engine_eval/<host>/)
 #   --compose NAME  Which docker-compose.NAME.yml override starts the stack, when it is not
 #                   the target's own. The full image lists every vendor's devices and Compose
 #                   refuses to start it on a host missing one (/dev/kfd on a CUDA-only box),
@@ -51,6 +54,14 @@
 #                   Default distro: Ubuntu. Only NVIDIA reaches Linux containers there.
 #   --key PATH      SSH identity. Default: ~/.ssh/whisper_remote_validation (auto-created).
 #   --keep          Leave the remote stack running afterwards.
+#   --no-build      With --full, start the image already tagged for --target instead of
+#                   building it. For a host short of disk (an image build needs ~20-35G of
+#                   scratch) or one whose image was prepared another way; the banner and
+#                   /status still say what actually ran.
+#   --work-dir PATH Remote checkout to sync into and run from. Default: ~/whisper-pro-asr.
+#                   On a host whose production stack lives in ~/whisper-pro-asr, point this
+#                   elsewhere: the sync is `rsync --delete`, so the default replaces that
+#                   directory's files with this tree. .env is never synced either way.
 set -euo pipefail
 
 # Normally derived from this script's own location, but validation_matrix.sh runs a
@@ -101,6 +112,10 @@ EXTRA_ENV=()
 # `-`, not `:-`: an explicitly empty value is kept so the check below rejects it, and only an
 # unset variable takes the default.
 REAL_ASR_TIMEOUT="${REAL_ASR_TIMEOUT-900}"
+# The remote checkout. On the Intel NUC the default IS the production compose directory, so
+# a validation run there used to overwrite production's files -- see --work-dir.
+REMOTE_WORK_DIR="~/whisper-pro-asr"
+NO_BUILD=false
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -152,9 +167,9 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--engine)
 		ENGINE="${2:?--engine needs a value}"
-		case "$ENGINE" in AUTO | FASTER-WHISPER | INTEL-WHISPER | OPENAI-WHISPER | WHISPERX) ;;
+		case "$ENGINE" in AUTO | FASTER-WHISPER | INTEL-WHISPER | OPENAI-WHISPER | WHISPERX | PARAKEET | CANARY) ;;
 		*)
-			echo "unknown --engine '${ENGINE}' (AUTO|FASTER-WHISPER|INTEL-WHISPER|OPENAI-WHISPER|WHISPERX)" >&2
+			echo "unknown --engine '${ENGINE}' (AUTO|FASTER-WHISPER|INTEL-WHISPER|OPENAI-WHISPER|WHISPERX|PARAKEET|CANARY)" >&2
 			exit 2
 			;;
 		esac
@@ -177,9 +192,9 @@ while [[ $# -gt 0 ]]; do
 	--suite)
 		SUITE="${2:?--suite needs a value}"
 		case "$SUITE" in
-		accuracy | smoke | full | stress | longform | codeswitch) ;;
+		accuracy | smoke | full | stress | longform | codeswitch | bench) ;;
 		*)
-			echo "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform|codeswitch)" >&2
+			echo "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform|codeswitch|bench)" >&2
 			exit 2
 			;;
 		esac
@@ -235,6 +250,23 @@ while [[ $# -gt 0 ]]; do
 	--keep)
 		KEEP=true
 		shift
+		;;
+	--no-build)
+		NO_BUILD=true
+		shift
+		;;
+	--work-dir)
+		REMOTE_WORK_DIR="${2:?--work-dir needs a path}"
+		case "$REMOTE_WORK_DIR" in
+		*[!A-Za-z0-9_./~-]*)
+			echo "--work-dir accepts letters, digits and _ . / ~ - only, got: $REMOTE_WORK_DIR" >&2
+			exit 2
+			;;
+		*)
+			# A plain path: it is interpolated into remote shell commands below.
+			;;
+		esac
+		shift 2
 		;;
 	-h | --help)
 		grep '^#' "$0" | sed 's/^# \{0,1\}//' | sed '1d'
@@ -308,7 +340,7 @@ esac
 # The stages below all cd into the checkout. Remotely that is the synced copy; locally it
 # is the working tree itself, and hardcoding the remote path made every local stage cd
 # into a directory that does not exist.
-if [[ "$LOCAL" = true ]]; then WORK_DIR="$REPO_ROOT"; else WORK_DIR="~/whisper-pro-asr"; fi
+if [[ "$LOCAL" = true ]]; then WORK_DIR="$REPO_ROOT"; else WORK_DIR="$REMOTE_WORK_DIR"; fi
 # rsync's remote destination is NOT expanded by a login shell. In --wsl mode the remote half
 # runs as `wsl -d <distro> rsync`, with no shell in between, so a literal "~/whisper-pro-asr/"
 # was created as a directory actually NAMED "~" in the distro's working directory -- while
@@ -355,10 +387,15 @@ init_remote_home() {
 
 remote_dest() {
 	if [[ "$WSL" != true ]]; then
-		printf '%s' "~/whisper-pro-asr"
+		printf '%s' "$REMOTE_WORK_DIR"
 		return
 	fi
-	printf '%s/whisper-pro-asr' "$REMOTE_HOME"
+	# The leading ~ is spelled out against the resolved home, for the reason above; an
+	# absolute --work-dir is already a real path.
+	case "$REMOTE_WORK_DIR" in
+	"~/"*) printf '%s/%s' "$REMOTE_HOME" "${REMOTE_WORK_DIR#\~/}" ;;
+	*) printf '%s' "$REMOTE_WORK_DIR" ;;
+	esac
 }
 
 ssh_raw() {
@@ -697,6 +734,7 @@ else
 		--exclude '__pycache__' --exclude '.claude/worktrees' \
 		--exclude '.buildx-cache' --exclude '.cache' --exclude '*.log' \
 		--exclude '.venv' --exclude 'node_modules' --exclude '.pytest_cache' --exclude '.ruff_cache' \
+		--exclude '.env' --exclude 'reports' \
 		-e "ssh -i $KEY ${SSH_OPTS[*]}" \
 		"${REPO_ROOT}/" "${REMOTE}:$(remote_dest)/"
 	note "synced commit: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
@@ -757,17 +795,22 @@ esac
 #
 # which reads like a problem with this repo's Dockerfile rather than a stale builder left
 # over from the previous session. Bootstrapping proves it can actually start.
-if ! ssh_run 'docker buildx inspect --bootstrap whisper-builder >/dev/null 2>&1'; then
+if [[ "$NO_BUILD" = true ]]; then
+	hdr "Build ${TARGET} (skipped: --no-build)"
+	ssh_run "docker image inspect whisper-pro-asr:${TARGET} --format 'using {{.Id}} created {{.Created}}'" ||
+		die "--no-build: no whisper-pro-asr:${TARGET} image on ${REMOTE_HOST} to start"
+elif ! ssh_run 'docker buildx inspect --bootstrap whisper-builder >/dev/null 2>&1'; then
 	note "buildx builder is missing or cannot boot; recreating it"
 	ssh_run 'docker buildx rm -f whisper-builder >/dev/null 2>&1; true'
 	ssh_run 'docker buildx create --name whisper-builder --driver docker-container --bootstrap >/dev/null 2>&1' ||
 		die "could not create a working buildx builder on ${REMOTE_HOST}; check 'docker buildx ls' there"
 fi
-ssh_run 'docker buildx use whisper-builder' >/dev/null 2>&1 || true
-
-hdr "Build ${TARGET}"
-ssh_run "cd ${WORK_DIR} && BUILD_TARGET=${TARGET} docker compose ${COMPOSE_FILES} build" ||
-	die "remote build of ${TARGET} failed"
+if [[ "$NO_BUILD" != true ]]; then
+	ssh_run 'docker buildx use whisper-builder' >/dev/null 2>&1 || true
+	hdr "Build ${TARGET}"
+	ssh_run "cd ${WORK_DIR} && BUILD_TARGET=${TARGET} docker compose ${COMPOSE_FILES} build" ||
+		die "remote build of ${TARGET} failed"
+fi
 
 hdr "Start ${TARGET} (ASR_DEVICE=${DEVICE}, vocal separation=${SEPARATION})"
 # Clear any stack left by a previous run first. Without this, a run that died before its
@@ -782,7 +825,7 @@ for setting in ${EXTRA_ENV+"${EXTRA_ENV[@]}"}; do
 done
 ssh_run "cd ${WORK_DIR} && HOST_INTEL_RENDER_GID=${RENDER_GID} BUILD_TARGET=${TARGET} ASR_DEVICE=${DEVICE} \
   ASR_ENGINE=${ENGINE} ASR_PREPROCESS_DEVICE=${PREPROCESS} ENABLE_VOCAL_SEPARATION=${SEPARATION} \
-  ${extra_env_prefix}docker compose ${COMPOSE_FILES} up -d" || die "remote start failed"
+  ${extra_env_prefix}docker compose ${COMPOSE_FILES} up -d --no-build" || die "remote start failed"
 
 note "waiting for health..."
 ssh_run 'for i in $(seq 1 120); do curl -sf http://127.0.0.1:9000/status >/dev/null && exit 0; sleep 3; done; exit 1' ||
@@ -795,7 +838,7 @@ hdr "What actually loaded"
 # matches nothing, the --wsl path runs this under `set -o pipefail`, and the outer script's
 # `set -e` then aborts the run here -- after the header, with no banner and no explanation,
 # on a service that started perfectly well but logged a banner this pattern did not match.
-ssh_run 'docker logs whisper-pro-asr 2>&1 | grep -E "Whisper Pro ASR [0-9]|ASR Engine  |ASR Runtime|Preprocess Device|Resource Pool|OpenVINO devices" | tail -8 || true'
+ssh_run 'docker logs whisper-pro-asr 2>&1 | grep -E "Whisper Pro ASR [0-9]|ASR Engine  |ASR Runtime|NeMo |Whisper Companion|Preprocess Device|Resource Pool|OpenVINO devices" | tail -11 || true'
 
 hdr "Test image"
 # The accuracy suite runs inside the test image, which is separate from the shippable
@@ -859,9 +902,15 @@ codeswitch)
 	SUITE_ARGS="tests/real_audio/test_code_switched.py"
 	SUITE_ENV=""
 	;;
+# The engine evaluation behind docs/ASR_ENGINE_EVALUATION.md: it measures rather than asserts,
+# and writes its report into the checkout, which is copied back below.
+bench)
+	SUITE_ARGS="tests/real_audio/test_engine_benchmark.py -s"
+	SUITE_ENV="-e RUN_ASR_BENCHMARK=1 -e ASR_BENCH_OUT=reports/engine_eval -e ASR_BENCH_HOST=${REMOTE_HOST}"
+	;;
 # Unreachable: --suite is validated during argument parsing. Kept so a future tier added
 # to one list and not the other fails here rather than running with an empty selection.
-*) die "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform|codeswitch)" ;;
+*) die "unknown --suite '$SUITE' (accuracy|smoke|full|stress|longform|codeswitch|bench)" ;;
 esac
 
 hdr "Suite: ${SUITE} (engine=${ENGINE}, preprocess=${PREPROCESS}, real speech over HTTP)"
@@ -885,6 +934,16 @@ if [[ "$SUITE" = "stress" ]]; then
 			note "long-form stress reported failures (see above)"
 			SUITE_FAILED=true
 		}
+fi
+
+if [[ "$SUITE" = "bench" ]] && [[ "$LOCAL" != true ]]; then
+	hdr "Benchmark report <- ${REMOTE_HOST}"
+	mkdir -p "${REPO_ROOT}/reports/engine_eval/${REMOTE_HOST}"
+	rsync_path_args
+	rsync -az ${RSYNC_PATH_ARGS[@]+"${RSYNC_PATH_ARGS[@]}"} -e "ssh -i $KEY ${SSH_OPTS[*]}" \
+		"${REMOTE}:$(remote_dest)/reports/engine_eval/" "${REPO_ROOT}/reports/engine_eval/${REMOTE_HOST}/" ||
+		note "could not copy the benchmark report back; it is still on the remote under reports/engine_eval/"
+	note "reports: $(find "${REPO_ROOT}/reports/engine_eval/${REMOTE_HOST}" -name '*.md' | wc -l) markdown file(s)"
 fi
 
 # What the run *measured*, as opposed to what the startup banner predicted. These differ,

@@ -221,8 +221,9 @@ for testing was an integrated `gfx1036`, which upstream rocBLAS does not support
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| **ASR_MODEL** | `Systran/faster-whisper-large-v3` | Model ID (HuggingFace) or local path |
-| **ASR_ENGINE** | `AUTO` | Selects ASR backend engine: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX`. `AUTO` resolves to `FASTER-WHISPER` on every host |
+| **ASR_MODEL** | `Systran/faster-whisper-large-v3` | Model ID (HuggingFace) or local path; the Whisper companion under `PARAKEET`/`CANARY` |
+| **ASR_ENGINE** | `AUTO` | Selects ASR backend engine: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX`, `PARAKEET`, `CANARY`. `AUTO` resolves to `FASTER-WHISPER` on every host. `PARAKEET`/`CANARY` are opt-in NVIDIA NeMo models for 25 European languages, with a Whisper companion for language detection and everything else |
+| **NEMO_MODEL** / **NEMO_QUANTIZATION** / **NEMO_COMPANION_DEVICE** | *(default)* / `AUTO` / `AUTO` | NeMo engine tuning; see the README Configuration Reference |
 | **ASR_DEVICE** | `AUTO` | Device: `AUTO`, `CUDA`, or `CPU` |
 | **ASR_PREPROCESS_DEVICE** | `AUTO` | Device for Isolation: `AUTO`, `NPU`, `GPU`, `CUDA`, or `CPU` |
 | **ASR_SEGMENT_FIRST** | `true` | Detect the language per speech region before decoding, group regions into runs of one language, and decode each language in its own call, told its language outright -- so a decode window cannot span a language change and the decoder is never left to guess a language from one line. FASTER-WHISPER only; applies to auto-detected requests and to every translation (its output is English whatever was spoken, so a named language there is the main audio, not a constraint), and not to a transcription in a language the caller named. On a 20-minute multilingual clip this took wrong-language windows from 67/118 to 0/118 and hallucinated text in silence from 11/25 to 0/25; on 21 real monolingual films, decoding by region alone mislabelled a median 20% of the speech and the runs bring that to 1.1%, under the 2.7% of whole-file decoding |

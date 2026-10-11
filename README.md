@@ -357,6 +357,7 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 | `INTEL-WHISPER` (OpenVINO) | **On the iGPU.** The only engine that accelerates ASR on Intel, and ~1.7x faster than the CPU-fallback engines on the same box. |
 | `FASTER-WHISPER` | CPU (int8). CTranslate2 has no Intel GPU backend. |
 | `OPENAI-WHISPER` | CPU — unless you use the `intel-xpu` image, which adds the XPU torch build and runs it on the GPU. **Requires Arc (Alchemist) or newer**; on older iGPUs torch reports XPU as available and then fails to execute. |
+| `PARAKEET` / `CANARY` | NeMo model on the iGPU through ONNX Runtime's OpenVINO provider (fp32; measured 9x real time for Parakeet on UHD Graphics); the Whisper companion on the CPU. The NPU unit runs them on the CPU. |
 
 The **NPU accelerates vocal isolation (UVR)**, not ASR: with `ASR_PREPROCESS_DEVICE=NPU`,
 UVR runs on `Intel(R) AI Boost` while ASR goes to the iGPU or CPU per the table above.
@@ -393,8 +394,15 @@ The service is highly tunable via environment variables in `docker-compose.yml`.
 | **Runtime Control** | | |
 | `ASR_DEVICE` | `AUTO` | Inference target: `AUTO`, `CUDA`, or `CPU`. |
 | `ASR_PREPROCESS_DEVICE` | `AUTO` | Inference target: `AUTO`, `NPU`, `GPU`, or `CPU`. AUTO uses the next available Intel accelerator reported by OpenVINO and falls back to CPU when needed. |
-| `ASR_MODEL` | `Systran/faster-whisper-large-v3` | Model ID (HuggingFace) or local path. |
-| `ASR_ENGINE` | `AUTO` | Selects ASR backend engine. Options: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX`. `AUTO` resolves to `FASTER-WHISPER` on every host. Invalid values fail startup. |
+| `ASR_MODEL` | `Systran/faster-whisper-large-v3` | Model ID (HuggingFace) or local path. With `PARAKEET`/`CANARY` this is the **Whisper companion** that answers language detection and every language the NeMo model does not cover. |
+| `ASR_ENGINE` | `AUTO` | Selects ASR backend engine. Options: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX`, `PARAKEET`, `CANARY`. `AUTO` resolves to `FASTER-WHISPER` on every host. Invalid values fail startup. |
+| **NVIDIA NeMo engines** (`PARAKEET` / `CANARY` only) | | |
+| `NEMO_MODEL` | *(family default)* | `nemo-parakeet-tdt-0.6b-v3` (PARAKEET default, 25 languages), `nemo-parakeet-tdt-0.6b-v2` (English only), `nemo-canary-1b-v2` (CANARY default). Anything outside this pinned catalog, or from the other family, is refused and the default loads. |
+| `NEMO_QUANTIZATION` | `AUTO` | `AUTO` = fp32 on CUDA and Intel GPU, int8 on the CPU (accelerators are slower at int8, not faster: Parakeet int8 ran 7.6x real time on CUDA against 123x fp32, and the OpenVINO GPU plugin cannot execute the int8 graph). `INT8` / `FP32` force one everywhere. |
+| `NEMO_MAX_CHUNK_SEC` | `20` | Longest audio per model call (5-30 s). Longer speech is cut at its quietest point. |
+| `NEMO_BATCH_SIZE` | `4` | Chunks per model call (1-32). More is faster and needs more device memory. |
+| `NEMO_COMPANION_DEVICE` | `AUTO` | Where the Whisper companion runs: `AUTO` = the same unit; `CPU` keeps it off a card too small for both models. |
+| `NEMO_GPU_MEM_LIMIT_MB` | `0` | Cap on ONNX Runtime's CUDA arena (0 = unbounded). On an 8 GB card set e.g. `3072` together with `NEMO_COMPANION_DEVICE=CPU`. |
 | `HYBRID_ENGINES` | `false` | Off by default. On a host with both a CUDA/AMD GPU **and** an Intel GPU/NPU, `true` lets each unit run its native engine in its own worker so both accelerators stay busy -- at the cost of the engine depending on which unit serves a request. Ignored on single-vendor hosts. |
 | `VOCAL_SEPARATION_MODEL` | `UVR-MDX-NET-Voc_FT` | Model ID (HuggingFace) or local path |
 | `ASR_BATCH_SIZE` | `1` | Number of segments processed per pass. |
@@ -534,6 +542,12 @@ The service supports multiple ASR backend engines to run inference. You can conf
 - **`INTEL-WHISPER`**: Uses the OpenVINO-based Intel Whisper engine (`IntelWhisperEngine`) on Intel Integrated/Arc GPUs, and is **the only engine that accelerates ASR on Intel** -- set `ASR_ENGINE=INTEL-WHISPER` to use it, as `AUTO` will not select it for you. Intel NPU is a vocal-isolation target, not an ASR target; without an Intel GPU, ASR falls back to CPU.
 - **`OPENAI-WHISPER`**: Uses the reference OpenAI Whisper Python backend.
 - **`WHISPERX`**: Uses the WhisperX backend, supporting batch inference.
+- **`PARAKEET`** / **`CANARY`** (opt-in): NVIDIA NeMo models -- Parakeet-TDT-0.6B-v3 and Canary-1B-v2 -- run through [onnx-asr](https://github.com/istupakov/onnx-asr) on the ONNX Runtime build every image already ships. Both cover **25 European languages** (bg, cs, da, de, el, en, es, et, fi, fr, hr, hu, it, lt, lv, mt, nl, pl, pt, ro, ru, sk, sl, sv, uk) and neither has a language-identification head, so each engine carries a **Whisper companion** (`ASR_MODEL`, on Faster-Whisper) that:
+  - answers every language detection -- `/detect-language`, gap filling and per-region detection behave exactly as on `FASTER-WHISPER`;
+  - transcribes every language outside the 25, and every request whose language could not be determined;
+  - translates for Parakeet, which has no translation. Canary translates its 25 languages to English natively.
+
+  The routing is per decode call and logged as `[NeMo] route=nemo|whisper reason=...`. Parakeet is a transducer: much faster than Whisper and structurally free of Whisper's decoder loops; its token timings become word timestamps. Canary is an encoder-decoder with no timings in onnx-asr, so its lines are timed from the chunk they came from (approximate), one per sentence and at most 84 characters. Runs on CUDA and on an Intel GPU (OpenVINO execution provider); NPU and AMD units run it on the CPU. **Not the default**, and not a drop-in for Bazarr on multilingual libraries -- see [docs/ASR_ENGINE_EVALUATION.md](docs/ASR_ENGINE_EVALUATION.md) for why, and for the measurements.
 
 When `ASR_ENGINE` is set explicitly, unsupported values are rejected at startup with a clear validation error.
 
@@ -590,7 +604,16 @@ services:
       # AUTO always resolves to FASTER-WHISPER, on every host. Hardware detection is a
       # separate decision: it selects the execution UNIT (CUDA > AMD > Intel GPU > NPU >
       # CPU), not the engine. An explicit ASR_DEVICE constrains which unit is chosen.
+      # PARAKEET / CANARY: NVIDIA NeMo models for 25 European languages, with ASR_MODEL as
+      # their Whisper companion for language detection and every other language.
       - ASR_ENGINE=AUTO
+      # NeMo engines only (see the Configuration Reference).
+      - NEMO_MODEL=
+      - NEMO_QUANTIZATION=AUTO
+      - NEMO_MAX_CHUNK_SEC=20
+      - NEMO_BATCH_SIZE=4
+      - NEMO_COMPANION_DEVICE=AUTO
+      - NEMO_GPU_MEM_LIMIT_MB=0
       - INTEL_ASR_CHUNK_DURATION=300
       # --- [INFERENCE PARAMETERS] ---
       # Generation Search Breadth (Higher = more accurate, lower = faster)

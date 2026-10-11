@@ -155,6 +155,12 @@ The service supports multiple ASR backend engines to run inference. You can conf
 - **`INTEL-WHISPER`**: Uses the Intel Whisper engine (`IntelWhisperEngine`) on Intel Integrated/Arc GPUs. Intel NPUs accelerate vocal isolation only; ASR falls back to CPU when no Intel GPU is available.
 - **`OPENAI-WHISPER`**: Uses the reference OpenAI Whisper Python backend.
 - **`WHISPERX`**: Uses the WhisperX backend, supporting batch inference.
+- **`PARAKEET`** / **`CANARY`**: NVIDIA NeMo models on onnx-asr, with a Whisper companion for language detection and the languages they do not cover (see the README). Tuning knobs:
+  - `NEMO_BATCH_SIZE` (default 4): throughput against device memory. Parakeet on an RTX 3080 laptop ran 82x real time at 1 and 123x at 4; Canary-1B-v2 fp32 needs 6.6 GB at 1 and 7.8 GB at 2. It is also the longest a preemption waits, since the stream is checked between batches.
+  - `NEMO_MAX_CHUNK_SEC` (default 20): the longest item per call; the exports are not trained past ~30 s.
+  - `NEMO_QUANTIZATION`: leave on `AUTO`. int8 halves memory on the CPU at equal speed (4.0x vs 4.3x real time on an i9-11900H, 4 threads) but is 15x slower on CUDA and does not execute on the OpenVINO GPU plugin.
+  - `NEMO_COMPANION_DEVICE=CPU` and `NEMO_GPU_MEM_LIMIT_MB` for cards that cannot hold the NeMo model, the companion and CUDA vocal isolation at once (8 GB measured insufficient). A batch that runs out of device memory is retried one chunk at a time on the same device before the engine gives up the GPU.
+  - A smaller companion `ASR_MODEL` (e.g. `Systran/faster-whisper-small`) speeds up language detection where the companion runs on the CPU, at the cost of detection accuracy.
 
 Invalid explicit `ASR_ENGINE` values fail startup with a validation error listing supported values.
 

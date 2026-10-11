@@ -106,11 +106,13 @@ def _clipping_applies(follows_switches: bool) -> bool:
     language named, since its output is English from whatever was spoken. An engine that
     would silently drop the clips must never be handed them: WhisperX accepts arbitrary kwargs
     and forwards none, so clips there decode the whole file as one span while the pipeline
-    believes otherwise.
+    believes otherwise. The NeMo engines decode clips natively (their models take 20-30 s at
+    a time, so a decode is clips whatever it is given), and their Whisper companion is
+    Faster-Whisper, so a run routed to it takes the same clips.
     """
     if not (follows_switches and config.ASR_SEGMENT_FIRST):
         return False
-    return config.ASR_ENGINE == engine_registry.ENGINE_FASTER_WHISPER
+    return engine_registry.engine_takes_clips(config.ASR_ENGINE)
 
 
 def _regions_are_worth_clipping(regions: list) -> bool:

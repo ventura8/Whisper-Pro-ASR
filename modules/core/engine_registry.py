@@ -7,13 +7,36 @@ ENGINE_FASTER_WHISPER = "FASTER-WHISPER"
 ENGINE_INTEL_WHISPER = "INTEL-WHISPER"
 ENGINE_OPENAI_WHISPER = "OPENAI-WHISPER"
 ENGINE_WHISPERX = "WHISPERX"
+#: NVIDIA NeMo models served through onnx-asr on ONNX Runtime. Opt-in only: they cover 25
+#: European languages and have no language-identification head, so each carries a Whisper
+#: companion for detection and for everything outside that set (see nemo_onnx_engine).
+ENGINE_PARAKEET = "PARAKEET"
+ENGINE_CANARY = "CANARY"
 
+#: Order matters beyond display: config_resolution falls back to the first *installed*
+#: engine in this order when the requested one is missing, so the NeMo engines go last and
+#: an image without onnx-asr keeps degrading to Faster-Whisper.
 SUPPORTED_ASR_ENGINES = (
     ENGINE_FASTER_WHISPER,
     ENGINE_INTEL_WHISPER,
     ENGINE_OPENAI_WHISPER,
     ENGINE_WHISPERX,
+    ENGINE_PARAKEET,
+    ENGINE_CANARY,
 )
+
+#: The engines built on onnx-asr: one composite engine per unit, NeMo model plus Whisper
+#: companion.
+NEMO_ENGINES = frozenset({ENGINE_PARAKEET, ENGINE_CANARY})
+
+#: Engines that honour ``clip_timestamps``. The pipeline hands its speech regions to the
+#: decoder as clips only for these: an engine that silently dropped them would decode the
+#: whole file as one span while the pipeline believed otherwise (see speech_clips).
+CLIP_TIMESTAMP_ENGINES = frozenset({ENGINE_FASTER_WHISPER, ENGINE_PARAKEET, ENGINE_CANARY})
+
+#: Engines that execute ASR on an Intel GPU through OpenVINO -- Intel-Whisper natively, the
+#: NeMo engines through ONNX Runtime's OpenVINO execution provider.
+OPENVINO_ASR_ENGINES = frozenset({ENGINE_INTEL_WHISPER, ENGINE_PARAKEET, ENGINE_CANARY})
 
 # AUTO fallback order requested by product policy.
 #: The engine ASR_ENGINE=AUTO resolves to, on every host.
@@ -124,7 +147,45 @@ ENGINE_UNIT_SUPPORT: dict[str, tuple[str, ...]] = {
     # the CPU otherwise, which is the documented behaviour for the plain intel image.
     ENGINE_OPENAI_WHISPER: ("CUDA", "AMD", "GPU", "NPU", "CPU"),
     ENGINE_WHISPERX: ("CUDA", "CPU"),
+    # The NeMo engines follow ONNX Runtime: CUDA through the CUDA execution provider, an
+    # Intel GPU through the OpenVINO one. Not the NPU, whose compiler needs static shapes the
+    # NeMo encoders do not have, and not AMD, whose ROCm/MIGraphX providers onnx-asr has
+    # never been tested on and no host in this fleet can validate. Units of those types stay
+    # in the pool for vocal separation and run NeMo on the CPU execution provider.
+    ENGINE_PARAKEET: ("CUDA", "GPU", "CPU"),
+    ENGINE_CANARY: ("CUDA", "GPU", "CPU"),
 }
+
+
+def is_nemo_engine(engine: str) -> bool:
+    """Whether ``engine`` is one of the onnx-asr NeMo engines."""
+    return str(engine or "").strip().upper() in NEMO_ENGINES
+
+
+def engine_takes_clips(engine: str) -> bool:
+    """Whether ``engine`` decodes the ``clip_timestamps`` it is given instead of ignoring them."""
+    return str(engine or "").strip().upper() in CLIP_TIMESTAMP_ENGINES
+
+
+#: Unit type -> the ONNX Runtime build a NeMo worker for it must import. Intel GPU and NPU
+#: share one family because both load the OpenVINO build.
+_ORT_FAMILY_BY_UNIT_TYPE = {"CUDA": "CUDA", "GPU": "INTEL", "NPU": "INTEL", "AMD": "AMD"}
+
+
+def worker_key(engine: str, unit_type: str) -> str:
+    """The isolated-worker channel an engine on a unit of ``unit_type`` runs in.
+
+    One worker per engine type is the rule (see isolated_engine), and it holds for every
+    Whisper engine. The NeMo engines are the exception, because the runtime they need is
+    chosen by the *unit*: a CUDA unit needs onnxruntime-gpu, an Intel one
+    onnxruntime-openvino, and a process can import only one. Units load lazily on their first
+    task, so with one shared worker whichever unit arrived first would decide the runtime --
+    and the device-visibility overrides -- for every other unit. Keyed per family instead.
+    """
+    if not is_nemo_engine(engine):
+        return engine
+    family = _ORT_FAMILY_BY_UNIT_TYPE.get(str(unit_type or "").strip().upper(), "CPU")
+    return f"{engine}-{family}"
 
 
 def engine_supports_unit(engine: str, unit_type: str) -> bool:
@@ -147,6 +208,8 @@ ENGINE_REQUIRED_MODULE: dict[str, str] = {
     ENGINE_INTEL_WHISPER: "openvino_genai",
     ENGINE_OPENAI_WHISPER: "whisper",
     ENGINE_WHISPERX: "whisperx",
+    ENGINE_PARAKEET: "onnx_asr",
+    ENGINE_CANARY: "onnx_asr",
 }
 
 

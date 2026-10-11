@@ -8,7 +8,7 @@ import time
 from shutil import which
 from typing import Any, Callable
 
-from modules.core import config, process_exec
+from modules.core import config, config_nemo, engine_registry, process_exec
 from modules.inference import scheduler
 from modules.inference.pipeline import openvino_resolver
 from modules.inference.runtime import model_manager
@@ -111,8 +111,27 @@ def _is_task_using_accelerator(task: dict[str, Any], unit_type: str) -> bool:
     if _is_uvr_stage(stage):
         return _is_uvr_using_accelerator(task, unit_type)
     if _is_asr_stage(stage):
-        return _supports_asr_stage_on_unit(unit_type)
+        return _supports_asr_stage_on_unit(unit_type) and not _runs_on_nemo_companion_cpu(stage, unit_type)
     return False
+
+
+def _runs_on_nemo_companion_cpu(stage: str, unit_type: str) -> bool:
+    """Whether a NeMo engine's stage is language detection served by a CPU-bound companion.
+
+    Detection on PARAKEET/CANARY is answered by the Whisper companion (CTranslate2), which
+    has no OpenVINO backend: on an Intel unit it runs on the CPU, and with
+    NEMO_COMPANION_DEVICE=CPU it does so on a CUDA unit too. Counting it as accelerator load
+    would show the card busy while it is idle.
+    """
+    if not engine_registry.is_nemo_engine(config.ASR_ENGINE) or not _is_detection_stage(stage):
+        return False
+    return unit_type != "CUDA" or config_nemo.NEMO_COMPANION_DEVICE == "CPU"
+
+
+def _is_detection_stage(stage: str) -> bool:
+    # language_detection labels its stages "Detection" and "Inference (i/n segments)";
+    # transcription's is a bare "Inference" (lower-cased by the caller).
+    return "detect" in stage or stage.endswith("segments)")
 
 
 def _is_uvr_stage(stage: str) -> bool:
@@ -129,7 +148,11 @@ def _supports_asr_stage_on_unit(unit_type: str) -> bool:
     if unit_type in ["GPU", "NPU"]:
         if openvino_resolver.is_openvino_family_disabled(unit_type):
             return False
-        return config.ASR_ENGINE == "INTEL-WHISPER"
+        # OpenVINO ASR engines only, and only on a unit type the engine executes on: the NeMo
+        # engines reach an Intel GPU through ONNX Runtime's OpenVINO provider but run the NPU's
+        # share on the CPU, so their NPU load is not ASR load.
+        engine = config.ASR_ENGINE
+        return engine in engine_registry.OPENVINO_ASR_ENGINES and engine_registry.engine_supports_unit(engine, unit_type)
     return False
 
 

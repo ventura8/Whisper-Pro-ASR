@@ -40,6 +40,26 @@ Whisper Pro uses a **Hardware Resource Pool** to balance I/O-bound tasks, CPU-bo
 | `_POOL_LOCK` | `threading.Lock` | Global | Serializes model loading and unloading operations to prevent race conditions during engine state transitions. |
 | `_OPENVINO_INIT_LOCKS[family]` | `threading.Lock` | Accelerator-family or CPU slot | Serializes first-time OpenVINO UVR initialization per accelerator family (`GPU`, `NPU`) while allowing GPU and NPU first-load paths to proceed independently; CPU slots retain independent locks. The isolated-worker test suite also verifies terminal result, formatted error, cancellation, and heartbeat stream contracts deterministically. |
 
+### Which Idle Unit a Task Takes
+
+`STATE.hw_pool` is a FIFO, but `unit_choice.take_idle_unit` does not take its head blindly.
+Under the queue's own mutex, and with the same bookkeeping `Queue.get` performs, it takes:
+
+1. an idle unit the serving engine can drive (`engine_registry.engine_supports_unit`) in
+   preference to one it cannot, and
+2. among drivable idle units, the fastest kind by `AUTO_DEVICE_PRIORITY`
+   (CUDA > AMD > GPU > NPU > CPU), keeping FIFO order between units of the same kind.
+
+Only the choice among *idle* units changes; nothing waits longer, no lock is added, and a
+non-drivable or slower unit is still taken when it is the only one free -- the pool keeps
+every unit busy under load. Step 2 exists because PARAKEET/CANARY drive both a CUDA card and
+an Intel iGPU (123x vs 9x real time measured side by side); for INTEL-WHISPER on a GPU+NPU
+host it prefers an idle GPU to an idle NPU. Regression tests: `tests/inference/scheduler/test_unit_choice.py`.
+
+NeMo engines run in one isolated worker per ONNX Runtime family (`PARAKEET-CUDA`,
+`PARAKEET-INTEL`, ...) instead of one per engine type; each worker channel keeps the same
+single lock and finite call deadline as every other engine worker.
+
 ### Indefinite Wait Policy
 
 - Unit pause confirmation waits remain active until the expected unit generation token is confirmed.

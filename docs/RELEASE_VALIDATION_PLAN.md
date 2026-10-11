@@ -181,3 +181,25 @@ Phase 1 is dominated by the cold builds: 3-5 hours sequential on `local`. Phase 
 1 h on `local` (done), 2 h on `nuc` for the two long-form rows plus 15 min for N3, and 3 h on
 `win5090` -- the `full` tier alone is about 2 h. `nuc` and `win5090` run in parallel; nothing
 here shares hardware with anything else.
+
+---
+
+## NVIDIA NeMo engines (PARAKEET / CANARY) -- next release
+
+A new engine family, opt-in, plus one scheduler decision (the fastest idle drivable unit is
+taken; see docs/CONCURRENCY.md). Every row pairs the new engine with a FASTER-WHISPER baseline
+on the same host and suites, because the evaluation compares them. Status is per row; **a row
+not marked done has not been run.** Results go into `docs/ASR_ENGINE_EVALUATION.md`.
+
+| Row | Host | Target | Engine / settings | Suites | Proves | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| P1 | local | nvidia-intel | PARAKEET, `MAX_GPU_UNITS=0`, `NEMO_COMPANION_DEVICE=CPU`, `NEMO_GPU_MEM_LIMIT_MB=3072` | accuracy, codeswitch, bench, longform | ONNX Runtime CUDA EP on an 8 GB card; routing | **done 2026-10-10**: 9/9, 30/30, bench; long-form 30/44 (throughput only: per-region detection on the CPU companion) |
+| P2 | local | nvidia-intel | PARAKEET, `--device GPU --env MAX_CUDA_UNITS=0` | accuracy | OpenVINO EP on a pre-Arc iGPU | **done 2026-10-10**: 9/9, `ASR=Intel GPU measured` |
+| P3 | local | nvidia-intel | PARAKEET, hybrid pool (no MAX overrides) | accuracy | per-family workers; idle work lands on cuda:0 | **done 2026-10-10**: 9/9, all work on cuda:0 |
+| P4 | win5090 / xubuntu | nvidia (full build) | FASTER-WHISPER, PARAKEET, CANARY | accuracy, smoke, codeswitch, longform, bench | Blackwell; Canary VRAM headroom; the comparison | **done 2026-10-11** (`win5090`, `nvidia` built from this branch; every engine on `cuda:0`): PARAKEET accuracy 9/9, smoke 30/30, codeswitch 30/30, longform 44/44, bench 146 (+13 skipped); CANARY accuracy 8/9 ("whisperpro", as on `nuc`), smoke 30/30, codeswitch 30/30, bench 146, longform **42/44** -- `longform_film` 33 windows under 0.4 (limit 29) and `longform_film_mono` (ru) 48 (limit 27), not timing: a recurring Russian line misheard ("Кажем неправду" for "Скажи мне правду") and short foreign lines mislabelled by region detection, which CANARY translates into the run's language (see ASR_ENGINE_EVALUATION.md); FASTER-WHISPER baseline accuracy 9/9, smoke 30/30, codeswitch 30/30, longform 44/44 (16.6 min vs PARAKEET 7.4), bench 146. PARAKEET card load 14.9 GB / 94 % |
+| P5 | nuc | intel | INTEL-WHISPER baseline, PARAKEET, CANARY `--device GPU --work-dir ~/whisper-pro-asr-eval` | accuracy, codeswitch, bench, longform | OpenVINO EP on Arc; CPU RTF; detection latency with a CPU companion | **done 2026-10-10**: all on Intel GPU measured; Canary accuracy 8/9 ("whisperpro"); NUC CPU-only PARAKEET 9/9 |
+| P6 | nuc | intel | INTEL-WHISPER (GPU + NPU) | accuracy | the unit-choice change does not regress the shipped Intel config | **done 2026-10-10**: 9/9 |
+
+The NUC is the production Bazarr endpoint: back up the running image tag, `.env` and compose
+files, have Bazarr paused, run from a separate `--work-dir`, and hand the restore command to
+the operator (docs/REMOTE_VALIDATION.md).

@@ -26,6 +26,8 @@ Ensure stable containerized operation across CPU, Intel, NVIDIA, and AMD hosts.
    - With `ASR_ENGINE=AUTO`, an explicit `ASR_DEVICE` constrains engine
      resolution. `ASR_DEVICE=CPU` must select `FASTER-WHISPER`, regardless of
      Intel devices discovered in the container.
+   - `ASR_ENGINE=PARAKEET|CANARY` additionally reads the `NEMO_*` variables
+     (see `nemo_engine_skill.md`); `ASR_MODEL` then names the Whisper companion.
    - The base Compose file deliberately selects the pinned Ubuntu base for CPU
      compatibility. Every Intel-bearing override (`intel`, `intel-xpu`,
      `nvidia-intel`, and `full`) must explicitly restore the pinned OpenVINO base;

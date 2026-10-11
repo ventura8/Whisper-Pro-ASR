@@ -310,6 +310,23 @@ back. Confirm against a clean worktree before attributing a failure to your work
 git worktree add --detach /tmp/pristine HEAD
 ```
 
+## The NeMo engines (PARAKEET / CANARY)
+
+A green accuracy suite proves least here, because these engines fall back on purpose: a
+provider that cannot run the graph, or a card that runs out of memory, moves the NeMo model
+to the CPU and every request still succeeds. On the 3080 laptop the accuracy suite passed
+9/9 while `/status` read `ASR=CPU measured=True`. So, per run:
+
+- `/status` `asr_execution` for the unit must be the accelerator, measured;
+- the service log must show `[NeMo] ... ready on <unit> (device=cuda|GPU.x ...)` and no
+  `could not run on` / `mid-decode` errors;
+- `[NeMo] route=nemo` must appear for the covered-language requests (otherwise Whisper did
+  the work and you measured the companion);
+- sample the device during decode (`nvidia-smi`, `intel_gpu_top`), and check
+  `nvidia-smi --query-compute-apps` for processes that are not yours before trusting VRAM.
+
+On 8 GB cards run with `NEMO_COMPANION_DEVICE=CPU` and `NEMO_GPU_MEM_LIMIT_MB=3072`.
+
 ## Reporting
 
 State the target, what was proven, and what was not. Separate the two claims from the top

@@ -52,6 +52,26 @@ class TestStatusEndpoint:
             assert "whisper" not in data["engines"]
             assert "uvr" not in data["engines"]
 
+    def test_status_names_the_nemo_model_when_one_runs(self, routes_client):
+        """The engine name alone does not say whether PARAKEET is v3 or the English v2."""
+        with (
+            mock.patch("modules.api.routes.system.dashboard") as mock_db,
+            mock.patch.object(config, "ASR_ENGINE", "PARAKEET"),
+        ):
+            mock_db.get_status_data.return_value = {"active_sessions": 0, "queued_sessions": 0, "hardware": []}
+            data = json.loads(routes_client.get("/status").data)
+        nemo = data["engines"]["nemo"]
+        assert nemo["model"] == "nemo-parakeet-tdt-0.6b-v3"
+        assert len(nemo["revision"]) == 40 and len(nemo["languages"]) == 25
+        assert "PARAKEET" in data["supported_asr_engines"]
+
+    def test_status_has_no_nemo_block_for_whisper_engines(self, routes_client):
+        """Whisper engines have nothing to report there."""
+        with mock.patch("modules.api.routes.system.dashboard") as mock_db:
+            mock_db.get_status_data.return_value = {"active_sessions": 0, "queued_sessions": 0, "hardware": []}
+            data = json.loads(routes_client.get("/status").data)
+        assert "nemo" not in data["engines"]
+
 
 class TestDetectLanguageEndpoint:
     """Tests for /detect-language endpoint."""

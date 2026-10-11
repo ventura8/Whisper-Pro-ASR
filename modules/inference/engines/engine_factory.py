@@ -20,6 +20,9 @@ def create_engine(engine_type: str, model_id: str, unit: dict) -> BaseASREngine:
     """Factory method to instantiate the correct ASR engine wrapper."""
     engine_type = engine_registry.normalize_and_validate_engine(engine_type)
 
+    if engine_registry.is_nemo_engine(engine_type):
+        return _create_nemo_engine(engine_type, model_id, unit)
+
     if engine_type == engine_registry.ENGINE_INTEL_WHISPER:
         engine_type = _resolve_intel_whisper_engine(engine_type, unit)
 
@@ -130,8 +133,12 @@ _TORCH_DEVICE_PROBES = {
 
 
 def _coerce_cpu_compute_type(target_device: str, compute_type: str) -> str:
-    """Coerce float16 compute_type to int8 when running CTranslate2/WhisperX on CPU."""
-    if target_device == "cpu" and compute_type == "float16":
+    """Coerce a half-precision compute_type to int8 when running CTranslate2/WhisperX on CPU.
+
+    Covers the mixed types too (``int8_float16``, ``bfloat16``, ``int8_bfloat16``): they are
+    GPU types, and a CPU-placed NeMo companion inherits ASR_COMPUTE_TYPE chosen for the card.
+    """
+    if target_device == "cpu" and "float16" in compute_type:
         return "int8"
     return compute_type
 
@@ -186,3 +193,31 @@ def _create_whisperx_engine(model_id: str, unit: dict) -> WhisperXEngine:
     logger.info("[EngineFactory] Loading WhisperXEngine on %s (device=%s)", unit["name"], target_device)
     compute_type = _coerce_cpu_compute_type(target_device, config.COMPUTE_TYPE)
     return WhisperXEngine(model_id, device=target_device, compute_type=compute_type)
+
+
+#: Where a Whisper companion runs when NEMO_COMPANION_DEVICE=CPU, whatever the unit.
+_CPU_UNIT = {"type": "CPU", "id": "CPU", "name": "Host CPU"}
+
+# Deliberately broad handlers catch through this name: pylint flags a bare `except Exception` and inline disables are banned.
+_ANY_EXCEPTION: tuple[type[Exception], ...] = (Exception,)
+
+
+def _create_nemo_engine(engine_type: str, model_id: str, unit: dict) -> BaseASREngine:
+    """Build a PARAKEET or CANARY engine: its Whisper companion first, then the NeMo model.
+
+    ``model_id`` is the resolved Whisper weights (ASR_MODEL), which for these engines are the
+    companion's -- config_model_paths resolves the default to the CTranslate2 cache exactly as
+    it does for FASTER-WHISPER, and provisioning already downloads it. The companion is built
+    first and released if the NeMo model then fails to load, so a failed load does not leave
+    a large-v3 resident in a worker that has no engine to show for it.
+    """
+    config_nemo = importlib.import_module("modules.core.config_nemo")
+    companion_unit = _CPU_UNIT if config_nemo.NEMO_COMPANION_DEVICE == "CPU" else unit
+    logger.info("[EngineFactory] Loading %s on %s (Whisper companion on %s)", engine_type, unit["name"], companion_unit["name"])
+    companion = _create_faster_whisper_engine(model_id, companion_unit)
+    try:
+        nemo_engine = importlib.import_module("modules.inference.engines.nemo_onnx_engine")
+        return nemo_engine.NemoOnnxEngine(engine_type, unit, companion=companion, cache_root=config.OV_CACHE_DIR)
+    except _ANY_EXCEPTION:
+        companion.unload()
+        raise

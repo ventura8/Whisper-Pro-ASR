@@ -17,7 +17,7 @@ import shutil
 import tempfile
 import threading
 
-from modules.core import model_integrity
+from modules.core import config_nemo, engine_registry, model_integrity, nemo_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,71 @@ def ensure_openvino_whisper(target_dir, model_id=OV_MODEL_ID):
     )
 
 
+def ensure_nemo_onnx(target_dir, spec, quantizations):
+    """Ensure ``spec``'s ONNX export, at every quantization in ``quantizations``, is in ``target_dir``.
+
+    Downloaded here, at the pinned revision, rather than by onnx-asr: given a directory that
+    does not exist onnx-asr fetches the repository *head*, and given one that does it loads
+    offline. Provisioning the directory first means the engine only ever does the latter, so
+    what runs is what the catalog pins.
+
+    One directory holds every variant, and a variant that is merely absent -- a CPU unit's
+    int8 beside a CUDA unit's fp32 -- is fetched on its own before anything is treated as
+    corrupt. The retry helper purges a directory that fails validation, which would
+    otherwise throw away a valid 3 GB fp32 export to make room for a 650 MB int8 one.
+    """
+    required = nemo_catalog.required_files_for(spec, quantizations)
+
+    def _download():
+        hub = importlib.import_module("huggingface_hub")
+        hub.snapshot_download(
+            repo_id=spec.repo_id,
+            revision=spec.revision,
+            local_dir=target_dir,
+            allow_patterns=required,
+            max_workers=4,
+        )
+
+    def _validate(path):
+        return model_integrity.verify_nemo_onnx_dir(path, required)
+
+    if os.path.isdir(target_dir) and not _validate(target_dir):
+        _fill_in_missing_variant(_download, spec)
+
+    return model_integrity.download_with_integrity_retry(
+        download_fn=_download,
+        validator_fn=_validate,
+        target_path=target_dir,
+        max_retries=2,
+        description=f"NeMo {spec.name} ({', '.join(q or 'fp32' for q in quantizations)})",
+    )
+
+
+def _fill_in_missing_variant(download, spec) -> None:
+    """Fetch only the files a partial directory lacks; validation afterwards decides the rest."""
+    try:
+        download()
+    except _DOWNLOAD_ERRORS as exc:
+        logger.warning("[Provisioning] Could not complete %s in place (%s); it will be re-downloaded.", spec.name, exc)
+
+
+def _nemo_assets(config) -> list:
+    """The NeMo exports this deployment loads: one asset per model, covering every quantization its units need."""
+    assets = []
+    for engine in _engines_to_provision(config):
+        if not engine_registry.is_nemo_engine(engine):
+            continue
+        spec = config_nemo.model_spec(engine)
+        quantizations = config_nemo.quantizations_for(list(getattr(config, "HARDWARE_UNITS", []) or []))
+        target_dir = config_nemo.model_dir(config.OV_CACHE_DIR, spec)
+        assets.append((f"NeMo {spec.name}", _nemo_provisioner(target_dir, spec, quantizations)))
+    return assets
+
+
+def _nemo_provisioner(target_dir, spec, quantizations):
+    return lambda: ensure_nemo_onnx(target_dir, spec, quantizations)
+
+
 def _uvr_via_separator(target_dir, temp_root):
     """Load the UVR model through audio-separator, which fetches it if missing."""
     separator_mod = importlib.import_module("audio_separator.separator")
@@ -250,6 +315,9 @@ def _ct2_repo_id(config, engine: str) -> str:
 def _required_assets(config):
     """Return the (label, callable) provisioning steps required by the active config."""
     assets = [asset for asset in (_whisper_asset_for_engine(config, engine) for engine in _engines_to_provision(config)) if asset]
+    # After the Whisper weights, which a NeMo engine also needs -- as its companion -- and
+    # which are the smaller download, so a first start reaches language detection sooner.
+    assets.extend(_nemo_assets(config))
     if getattr(config, "ENABLE_VOCAL_SEPARATION", False):
         assets.append(("UVR", lambda: ensure_uvr_model(config.UVR_MODEL_DIR, config.PERSISTENT_TEMP_DIR)))
     return assets
