@@ -354,7 +354,7 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 
 | Engine | Where ASR actually runs on Intel |
 | :--- | :--- |
-| `INTEL-WHISPER` (OpenVINO) | **On the iGPU.** The only engine that accelerates ASR on Intel, and ~1.7x faster than the CPU-fallback engines on the same box. |
+| `INTEL-WHISPER` (OpenVINO) | **On the iGPU (and NPU).** The only *Whisper* engine that accelerates ASR on Intel in the standard image -- PARAKEET/CANARY below also reach the iGPU -- and ~1.7x faster than the CPU-fallback engines on the same box. |
 | `FASTER-WHISPER` | CPU (int8). CTranslate2 has no Intel GPU backend. |
 | `OPENAI-WHISPER` | CPU — unless you use the `intel-xpu` image, which adds the XPU torch build and runs it on the GPU. **Requires Arc (Alchemist) or newer**; on older iGPUs torch reports XPU as available and then fails to execute. |
 | `PARAKEET` / `CANARY` | NeMo model on the iGPU through ONNX Runtime's OpenVINO provider (fp32; measured 9x real time for Parakeet on UHD Graphics); the Whisper companion on the CPU. The NPU unit runs them on the CPU. |
