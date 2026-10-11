@@ -81,7 +81,8 @@ def test_canary_is_told_the_source_and_target_language():
     with mock.patch.object(nemo_chunking, "decode", return_value=speech(4.0)):
         segments, info = engine.transcribe("f.wav", language="de", task="translate", clip_timestamps=[0.0, 4.0], vad_filter=False)
         [segment] = list(segments)
-    assert model.calls[0]["language"] == "de" and model.calls[0]["target_language"] == "en"
+    assert model.calls[0]["language"] == "de"
+    assert model.calls[0]["target_language"] == "en"
     assert info.language == "de", "a translation reports its source language, as Whisper does"
     assert (segment.start, segment.end) == (0.0, 4.0)
 
@@ -123,7 +124,8 @@ def test_an_accelerator_failure_mid_decode_moves_the_engine_to_the_cpu(caplog):
     ):
         segments, _ = engine.transcribe("f.wav", language="en", clip_timestamps=[0.0, 2.0], vad_filter=False)
         assert list(segments)
-    assert engine.device == "cpu" and engine.model is cpu
+    assert engine.device == "cpu"
+    assert engine.model is cpu
     assert "continuing on the CPU" in caplog.text
 
 
@@ -172,7 +174,8 @@ def test_an_out_of_memory_batch_is_retried_chunk_by_chunk_on_the_same_device(cap
         segments, _ = engine.transcribe("f.wav", language="en", clip_timestamps=[0, 2, 3, 5], vad_filter=False)
         assert len(list(segments)) == 2
     cpu.assert_not_called()
-    assert engine.device == "cuda" and len(model.calls) == 3
+    assert engine.device == "cuda"
+    assert len(model.calls) == 3
     assert "one at a time" in caplog.text
 
 
@@ -196,7 +199,8 @@ def test_a_single_chunk_out_of_memory_decodes_that_chunk_on_the_cpu_and_stays_on
         segments, _ = engine.transcribe("f.wav", language="en", clip_timestamps=[0, 2, 3, 5], vad_filter=False)
         assert len(list(segments)) == 2
     cpu.assert_called_once()
-    assert engine.device == "cuda" and engine.model is not spare
+    assert engine.device == "cuda"
+    assert engine.model is not spare
     assert len(spare.calls) == 2
     assert "decoding it on the CPU" in caplog.text
 
@@ -224,7 +228,9 @@ def test_moving_to_the_cpu_for_good_reuses_the_spare_instead_of_loading_a_second
         segments, _ = engine.transcribe("f.wav", language="en", clip_timestamps=[0, 2, 3, 5], vad_filter=False)
         assert len(list(segments)) == 2
     cpu.assert_called_once()
-    assert engine.device == "cpu" and engine.model is spare and engine._cpu_spare is None
+    assert engine.device == "cpu"
+    assert engine.model is spare
+    assert engine._cpu_spare is None
 
 
 def test_cuda_memory_can_be_capped(monkeypatch):

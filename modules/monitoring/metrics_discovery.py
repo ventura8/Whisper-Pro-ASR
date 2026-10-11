@@ -110,9 +110,9 @@ def _is_task_using_accelerator(task: dict[str, Any], unit_type: str) -> bool:
     stage = task.get("stage", "").lower()
     if _is_uvr_stage(stage):
         return _is_uvr_using_accelerator(task, unit_type)
-    if _is_asr_stage(stage):
-        return _supports_asr_stage_on_unit(unit_type) and not _runs_on_nemo_companion_cpu(stage, unit_type)
-    return False
+    if not _is_asr_stage(stage) or _runs_on_nemo_companion_cpu(stage, unit_type):
+        return False
+    return _supports_asr_stage_on_unit(unit_type)
 
 
 def _runs_on_nemo_companion_cpu(stage: str, unit_type: str) -> bool:

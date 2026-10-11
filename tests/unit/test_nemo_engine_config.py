@@ -93,9 +93,13 @@ def test_every_catalog_entry_is_pinned_and_belongs_to_one_family():
 def test_canary_needs_a_language_and_has_no_token_times():
     """The two families' contracts, as measured."""
     canary = nemo_catalog.CATALOG["nemo-canary-1b-v2"]
-    assert canary.needs_language and canary.translates_to_english and not canary.word_timestamps
+    assert canary.needs_language
+    assert canary.translates_to_english
+    assert not canary.word_timestamps
     parakeet = nemo_catalog.CATALOG["nemo-parakeet-tdt-0.6b-v3"]
-    assert not parakeet.needs_language and parakeet.word_timestamps and not parakeet.translates_to_english
+    assert not parakeet.needs_language
+    assert parakeet.word_timestamps
+    assert not parakeet.translates_to_english
 
 
 def test_eu25_is_twenty_five_two_letter_codes():

@@ -70,8 +70,12 @@ def test_summary_groups_by_mode_and_bucket():
         _row("detect", "whisper-routed", error_rate=None, detect_correct=False, wall_sec=4.0),
     ]
     detect, transcribe = bench_metrics.summarize(records)
-    assert transcribe["mean_error_rate"] == 0.2 and transcribe["hallucinated"] == 1 and transcribe["median_rtf"] == 0.03
-    assert detect["detect_correct"] == 0.5 and detect["mean_error_rate"] is None and detect["median_wall_sec"] == 3.0
+    assert transcribe["mean_error_rate"] == 0.2
+    assert transcribe["hallucinated"] == 1
+    assert transcribe["median_rtf"] == 0.03
+    assert detect["detect_correct"] == 0.5
+    assert detect["mean_error_rate"] is None
+    assert detect["median_wall_sec"] == 3.0
 
 
 def test_report_files(tmp_path):
@@ -81,4 +85,5 @@ def test_report_files(tmp_path):
     assert "# Engine benchmark: PARAKEET on local" in markdown.read_text(encoding="utf-8")
     assert "| transcribe+lang | nemo-covered | 1 | 0.0 |" in markdown.read_text(encoding="utf-8")
     saved = json.loads((tmp_path / "out" / "PARAKEET-local.json").read_text(encoding="utf-8"))
-    assert saved["records"] == records and saved["summary"][0]["clips"] == 1
+    assert saved["records"] == records
+    assert saved["summary"][0]["clips"] == 1

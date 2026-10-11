@@ -462,7 +462,8 @@ class TestHardwareInfo:
         ):
             lines = _banner_config_lines(cfg)
         text = "\n".join(lines)
-        assert "NeMo Model" in text and "nemo-parakeet-tdt-0.6b-v3" in text
+        assert "NeMo Model" in text
+        assert "nemo-parakeet-tdt-0.6b-v3" in text
         assert "Whisper Companion" in text
         assert f"ONNX Runtime (CUDA) + CTranslate2 companion ({companion})" in text
 

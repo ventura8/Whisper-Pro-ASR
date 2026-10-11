@@ -134,10 +134,10 @@ def load(spec: Any, path: str, quantization: str | None, unit: dict) -> tuple[An
     _log_runtime(ort, providers, unit)
     try:
         model = _load_and_warm(spec, path, quantization, providers, ort)
-    except _ANY_EXCEPTION as exc:
+    except _ANY_EXCEPTION:
         if providers == [_CPU]:
             raise
-        logger.error("[NeMo] %s could not run on %s (%s); reloading on the CPU.", spec.name, unit.get("name", unit.get("id")), exc)
+        logger.exception("[NeMo] %s could not run on %s; reloading on the CPU.", spec.name, unit.get("name", unit.get("id")))
         model = load_on_cpu(spec, path, quantization)
     return model, actual_device(model, unit)
 

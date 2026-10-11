@@ -62,7 +62,8 @@ class TestStatusEndpoint:
             data = json.loads(routes_client.get("/status").data)
         nemo = data["engines"]["nemo"]
         assert nemo["model"] == "nemo-parakeet-tdt-0.6b-v3"
-        assert len(nemo["revision"]) == 40 and len(nemo["languages"]) == 25
+        assert len(nemo["revision"]) == 40
+        assert len(nemo["languages"]) == 25
         assert "PARAKEET" in data["supported_asr_engines"]
 
     def test_status_has_no_nemo_block_for_whisper_engines(self, routes_client):

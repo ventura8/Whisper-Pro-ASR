@@ -74,7 +74,8 @@ def test_plan_without_vad_decodes_every_sample_in_bounded_pieces():
     """vad_filter=False decodes the whole file, in pieces the model accepts."""
     audio = speech(45.0)
     spans = nemo_chunking.plan(audio, clip_timestamps=None, vad_filter=False, vad_parameters=None, max_sec=20.0)
-    assert spans[0][0] == 0.0 and spans[-1][1] == 45.0
+    assert spans[0][0] == 0.0
+    assert spans[-1][1] == 45.0
     assert all(end - start <= 20.0 for start, end in spans)
     assert all(a[1] == b[0] for a, b in zip(spans, spans[1:])), "no sample is skipped"
 
@@ -104,8 +105,10 @@ def test_samples_slice_one_span_as_contiguous_float32():
     """A span's samples are a contiguous float32 copy."""
     audio = np.arange(32000, dtype=np.float64)
     chunk = nemo_chunking.samples(audio, (0.5, 1.0))
-    assert chunk.dtype == np.float32 and chunk.flags["C_CONTIGUOUS"]
-    assert chunk[0] == 8000 and len(chunk) == 8000
+    assert chunk.dtype == np.float32
+    assert chunk.flags["C_CONTIGUOUS"]
+    assert chunk[0] == 8000
+    assert len(chunk) == 8000
 
 
 def test_decode_reads_a_path_and_passes_samples_through():

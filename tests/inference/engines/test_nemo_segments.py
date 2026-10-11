@@ -87,7 +87,8 @@ def test_segments_carry_words_only_when_asked():
     words = nemo_segments.words_from_result(FOX, 0.0, 2.0)
     with_words = nemo_segments.segments_from_words(words, keep_words=True)
     without = nemo_segments.segments_from_words(words, keep_words=False)
-    assert with_words[0].words and without[0].words is None
+    assert with_words[0].words
+    assert without[0].words is None
     assert with_words[0].text == " The quick brown fox."
 
 
@@ -101,7 +102,8 @@ def test_untimed_text_splits_a_long_chunk_by_sentence_share():
     """A long Canary chunk is divided between its sentences by length."""
     segments = nemo_segments.segments_from_text("Short one. A considerably longer second sentence.", 0.0, 20.0)
     assert len(segments) == 2
-    assert segments[0].start == 0.0 and segments[-1].end == 20.0
+    assert segments[0].start == 0.0
+    assert segments[-1].end == 20.0
     assert segments[0].end == segments[1].start
     assert segments[1].end - segments[1].start > segments[0].end - segments[0].start
 
