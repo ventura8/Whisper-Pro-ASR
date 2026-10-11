@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 MIN_CT2_BIN_BYTES = 10 * 1024 * 1024  # 10 MB
 MIN_OPENVINO_BIN_BYTES = 50 * 1024 * 1024  # 50 MB
 MIN_ONNX_MODEL_BYTES = 1 * 1024 * 1024  # 1 MB
+#: An external-weights file of a NeMo fp32 encoder. The real ones are 2.4-3.3 GB; anything
+#: under this is a truncated download.
+MIN_ONNX_DATA_BYTES = 100 * 1024 * 1024  # 100 MB
 
 UVR_MDX_HQ3_SHA256 = "317554b07fe1ea5279a77f2b1520a41ea4b93432560c4ffd08792c30fddf9adc"
 
@@ -146,6 +149,29 @@ def verify_onnx_model_file(
         return verify_file_sha256(path, expected_sha256)
 
     return True
+
+
+def _min_nemo_file_bytes(name: str) -> int:
+    """Smallest plausible size for one file of a NeMo ONNX export, by its kind."""
+    if name.endswith(".onnx.data"):
+        return MIN_ONNX_DATA_BYTES
+    if name.endswith(".onnx"):
+        return MIN_ONNX_MODEL_BYTES
+    return 1
+
+
+def verify_nemo_onnx_dir(dir_path: str | Path, required: list[str]) -> bool:
+    """Whether every file onnx-asr will open is present and plausibly complete.
+
+    ``required`` comes from nemo_catalog, which knows which files an architecture and
+    quantization need. onnx-asr loads offline from an existing directory and raises on the
+    first missing file, so a gap found here is a gap the engine would have hit at load.
+    """
+    path = Path(dir_path)
+    missing = [name for name in required if not verify_file_min_size(path / name, _min_nemo_file_bytes(name))]
+    if missing:
+        logger.warning("[Integrity] NeMo model at %s is missing or has truncated: %s", path, ", ".join(missing))
+    return not missing
 
 
 def purge_corrupted_path(target_path: str | Path, description: str = "asset") -> bool:

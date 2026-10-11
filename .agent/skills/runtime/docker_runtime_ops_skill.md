@@ -26,6 +26,8 @@ Ensure stable containerized operation across CPU, Intel, NVIDIA, and AMD hosts.
    - With `ASR_ENGINE=AUTO`, an explicit `ASR_DEVICE` constrains engine
      resolution. `ASR_DEVICE=CPU` must select `FASTER-WHISPER`, regardless of
      Intel devices discovered in the container.
+   - `ASR_ENGINE=PARAKEET|CANARY` additionally reads the `NEMO_*` variables
+     (see `nemo_engine_skill.md`); `ASR_MODEL` then names the Whisper companion.
    - The base Compose file deliberately selects the pinned Ubuntu base for CPU
      compatibility. Every Intel-bearing override (`intel`, `intel-xpu`,
      `nvidia-intel`, and `full`) must explicitly restore the pinned OpenVINO base;
@@ -33,7 +35,7 @@ Ensure stable containerized operation across CPU, Intel, NVIDIA, and AMD hosts.
      install unavailable Ubuntu packages.
 5. Confirm compose build cache configuration remains enabled (`build.cache_from/cache_to` using `.buildx-cache`) and `.dockerignore` excludes volatile artifacts **including** `.docker-build-cache`, `.buildx-cache`, `.docker-build-cache.new`, and `.docker-build-cache.old` (local BuildKit cache dirs under the project root must never enter the build context).
 6. Confirm build-time integrity checks:
-   - Production (`Dockerfile`) and test (`Dockerfile.test`) images use the same signed upstream FFmpeg source release, currently pinned to **9.0.1**. Keep both `FFMPEG_VERSION` arguments synchronized whenever updating it.
+   - Production (`Dockerfile`) and test (`Dockerfile.test`) images use the same signed upstream FFmpeg source release, currently pinned to **9.0.2**. Keep both `FFMPEG_VERSION` arguments synchronized whenever updating it.
    - ROCm apt repository key is checksum-validated before dearmor/install.
    - UVR model + Silero VAD ONNX downloads are SHA-256 verified before replacing target files.
    - Streaming HTTP responses are deterministically closed (preload scripts use `requests.get(..., stream=True)` inside a context manager).

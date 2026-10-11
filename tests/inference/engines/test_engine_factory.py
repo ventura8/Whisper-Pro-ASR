@@ -1,5 +1,6 @@
 """Tests for modules/inference/engines/engine_factory.py."""
 
+import importlib
 import os
 from unittest import mock
 
@@ -487,3 +488,76 @@ def test_create_faster_whisper_engine_coercion():
             assert args[0] == "test-model-id"
             assert kwargs["device"] == "cpu"
             assert kwargs["compute_type"] == "int8"
+
+
+@pytest.mark.parametrize(
+    ("device", "compute_type", "expected"),
+    [
+        ("cpu", "int8_float16", "int8"),
+        ("cpu", "bfloat16", "int8"),
+        ("cpu", "int8_bfloat16", "int8"),
+        ("cpu", "int8", "int8"),
+        ("cpu", "float32", "float32"),
+        ("cuda", "int8_float16", "int8_float16"),
+    ],
+)
+def test_cpu_coercion_covers_every_half_precision_type(device, compute_type, expected):
+    """A CPU-placed companion inherits a GPU compute type; every half-precision one becomes int8."""
+    assert engine_factory._coerce_cpu_compute_type(device, compute_type) == expected
+
+
+class TestNemoEngines:
+    """PARAKEET / CANARY: the companion is built first, on the unit or on the CPU."""
+
+    UNIT = {"id": "cuda:0", "type": "CUDA", "name": "NVIDIA GPU"}
+
+    def _create(self, monkeypatch, *, companion_device="AUTO"):
+        """Build PARAKEET with a mocked companion and NeMo module; return all the parts."""
+        config_nemo = importlib.import_module("modules.core.config_nemo")
+        monkeypatch.setattr(config_nemo, "NEMO_COMPANION_DEVICE", companion_device)
+        companion = mock.MagicMock()
+        nemo_module = mock.MagicMock()
+        real_import = importlib.import_module
+
+        def _import(name, *args):
+            """Serve the mocked NeMo module, and everything else for real."""
+            return nemo_module if name == "modules.inference.engines.nemo_onnx_engine" else real_import(name, *args)
+
+        with (
+            mock.patch.object(engine_factory, "_create_faster_whisper_engine", return_value=companion) as build_companion,
+            mock.patch("importlib.import_module", side_effect=_import),
+        ):
+            engine = engine_factory.create_engine("PARAKEET", "/cache/whisper", self.UNIT)
+        return engine, companion, build_companion, nemo_module
+
+    def test_the_companion_shares_the_unit_by_default(self, monkeypatch):
+        """AUTO puts the companion on the NeMo model's own unit."""
+        engine, companion, build_companion, nemo_module = self._create(monkeypatch)
+        build_companion.assert_called_once_with("/cache/whisper", self.UNIT)
+        nemo_module.NemoOnnxEngine.assert_called_once_with("PARAKEET", self.UNIT, companion=companion, cache_root=config.OV_CACHE_DIR)
+        assert engine is nemo_module.NemoOnnxEngine.return_value
+
+    def test_the_companion_can_be_kept_off_the_card(self, monkeypatch):
+        """NEMO_COMPANION_DEVICE=CPU keeps the card for the NeMo model."""
+        _, _, build_companion, _ = self._create(monkeypatch, companion_device="CPU")
+        assert build_companion.call_args.args[1]["type"] == "CPU"
+
+    def test_a_failed_nemo_load_releases_the_companion(self, monkeypatch):
+        """A failed NeMo load does not leave a Whisper model resident."""
+        failing = mock.MagicMock(side_effect=RuntimeError("no such file"))
+        config_nemo = importlib.import_module("modules.core.config_nemo")
+        monkeypatch.setattr(config_nemo, "NEMO_COMPANION_DEVICE", "AUTO")
+        companion = mock.MagicMock()
+        real_import = importlib.import_module
+
+        def _import(name, *args):
+            """Serve the mocked NeMo module, and everything else for real."""
+            return mock.MagicMock(NemoOnnxEngine=failing) if name.endswith("nemo_onnx_engine") else real_import(name, *args)
+
+        with (
+            mock.patch.object(engine_factory, "_create_faster_whisper_engine", return_value=companion),
+            mock.patch("importlib.import_module", side_effect=_import),
+            pytest.raises(RuntimeError, match="no such file"),
+        ):
+            engine_factory.create_engine("CANARY", "/cache/whisper", self.UNIT)
+        companion.unload.assert_called_once()

@@ -418,6 +418,35 @@ def test_is_task_using_accelerator_intel_engine():
         assert _is_task_using_accelerator(task_asr, "GPU") is True
 
 
+@pytest.mark.parametrize(("unit_type", "expected"), [("GPU", True), ("NPU", False), ("CUDA", True)])
+def test_nemo_asr_counts_as_accelerator_work_only_where_onnx_runtime_reaches(unit_type, expected):
+    """PARAKEET reaches an Intel GPU through OpenVINO, but runs an NPU unit's share on the CPU."""
+    from modules.core import config
+    from modules.monitoring.metrics_discovery import _supports_asr_stage_on_unit
+
+    with mock.patch.object(config, "ASR_ENGINE", "PARAKEET"):
+        assert _supports_asr_stage_on_unit(unit_type) is expected
+
+
+@pytest.mark.parametrize(
+    ("unit_type", "companion", "stage", "expected"),
+    [
+        ("GPU", "AUTO", "Inference (2/8 segments)", False),
+        ("GPU", "AUTO", "Inference", True),
+        ("CUDA", "AUTO", "Inference (2/8 segments)", True),
+        ("CUDA", "CPU", "Inference (2/8 segments)", False),
+        ("CUDA", "CPU", "Inference", True),
+    ],
+)
+def test_nemo_detection_counts_only_where_the_whisper_companion_runs(unit_type, companion, stage, expected):
+    """Detection on a NeMo engine is the CTranslate2 companion's work, which never reaches an Intel unit."""
+    from modules.core import config, config_nemo
+    from modules.monitoring.metrics_discovery import _is_task_using_accelerator
+
+    with mock.patch.object(config, "ASR_ENGINE", "PARAKEET"), mock.patch.object(config_nemo, "NEMO_COMPANION_DEVICE", companion):
+        assert _is_task_using_accelerator({"stage": stage}, unit_type) is expected
+
+
 def test_is_task_using_accelerator_faster_engine():
     """Faster Whisper should fall back to CPU for NPU/GPU accelerators."""
     from modules.core import config

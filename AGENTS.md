@@ -76,6 +76,15 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 - **Forwarding**: `initial_prompt`, `vad_filter`, and `word_timestamps` parameters from the API must be forwarded to `model.transcribe()` in `model_manager.run_transcription()`.
 - **Subtitle Layout**: `max_line_width` and `max_line_count` parameters control text wrapping in SRT/VTT formatters via `_wrap_text()` in `modules/utils.py`.
 
+## NVIDIA NeMo Engines (PARAKEET / CANARY)
+
+- **Opt-in, never AUTO**: `AUTO_DEFAULT_ENGINE` stays `FASTER-WHISPER`. The default NeMo models (Parakeet v3, Canary v2) cover 25 European languages -- the optional Parakeet v2 English only -- and none has a language-ID head; making them the default is a separate, data-backed decision recorded in `docs/ASR_ENGINE_EVALUATION.md`.
+- **Whisper companion contract**: every `detect_language()` goes to the companion, and `nemo_routing.choose()` sends every call with no language, a language outside the model's set, or a translation the model cannot do to the companion with its arguments untouched. Never let a NeMo model transcribe an uncovered language -- it does not fail, it produces confident wrong-language text.
+- **Pinned catalog**: `NEMO_MODEL` may only name an entry of `modules/core/nemo_catalog.py`; weights are downloaded by provisioning at the pinned revision, and onnx-asr only loads from that directory. Do not let onnx-asr download (it follows the repository head).
+- **Lazy runtime imports**: `onnx_asr` and `onnxruntime` are imported through `importlib` inside functions only; ONNX Runtime is the per-vendor build under `/app/libs/<vendor>`, never a pip dependency. Tests inject fakes per test (`tests/inference/engines/nemo_fixtures.py`).
+- **Explicit providers and honest device**: always pass providers explicitly, report the encoder session's real provider as `.device`, and fall back to the CPU (logged as an error) rather than fail; device memory exhaustion is retried chunk by chunk on the same device first.
+- **Hardware validation**: a NeMo change needs the real-engine suites with `--engine PARAKEET`/`CANARY` on the host owning the accelerator, and `/status` `asr_execution` read for a CPU fallback -- 8 GB cards need `NEMO_COMPANION_DEVICE=CPU`.
+
 ## Endpoint Taxonomy Contract
 
 - `/asr`, `/v1/audio/transcriptions`, and `/v1/audio/translations` are one standard-priority ASR execution class.

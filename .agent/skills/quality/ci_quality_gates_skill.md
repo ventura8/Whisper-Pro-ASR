@@ -15,7 +15,7 @@ Maintain a zero-regression quality baseline.
 5. Full test suite pass (executed inside the Docker test image).
 6. No lint suppressions added as workaround.
 7. Frontend quality gate pass (`npm run quality:frontend`), including HTML lint, executed exclusively inside the Docker image.
-8. Frontend security audit pass: `npm audit --audit-level=low`, executed inside the Docker image.
+8. Frontend security audit pass: `npm audit --audit-level=low`, executed inside the Docker image. `braces` is overridden to `vendor/npm/braces`, a vendored 3.0.3 with a nesting-depth limit, because GHSA-vfj7-8cjw-p6xm has no patched release; `Dockerfile.test` copies `vendor/npm` before `npm ci`. Drop the directory and the override once upstream ships a fix -- never by allowlisting the advisory.
 9. Frontend Playwright E2E pass (`npm run test:e2e`), executed inside the Docker image.
 10. JS per-file coverage threshold enforced at `>= 90%` for lines/statements on monitored dashboard files.
 11. SonarQube Cloud quality gate pass on every pull request. `sonar-project.properties` holds the analysis configuration and is shared by CI and `scripts/sonar_scan_local.sh`, so a local scan applies the same rules to the same files. Three points are load-bearing and were each found the hard way:

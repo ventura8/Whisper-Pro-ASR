@@ -295,6 +295,44 @@ ssh-copy-id -i ~/.ssh/whisper_remote_validation.pub <user>@<host>
 - OpenVINO enumeration is authoritative: if the banner's `OpenVINO devices` lists no
   `NPU`, the device node alone does not make it usable and no NPU claim can be made.
 
+## Engine evaluation runs, and validating on a production host
+
+Four runner options exist for the NeMo engine evaluation (`docs/ASR_ENGINE_EVALUATION.md`):
+
+- `--engine PARAKEET` / `--engine CANARY` select the NVIDIA NeMo engines. The banner then
+  shows `NeMo Model`, `NeMo Quantization` and `Whisper Companion`, and `ASR Runtime` names
+  both runtimes. In the service log, `[NeMo] ONNX Runtime <ver> from <path> ... requested
+  [...]` is the provider evidence and `[NeMo] route=nemo|whisper reason=...` shows which
+  model served each call. `/status` `asr_execution` must read the accelerator, measured -- a
+  `cpu` there is the engine's own fallback, and a passing suite says nothing about it.
+- `--suite bench` runs `tests/real_audio/test_engine_benchmark.py` (WER/CER split into the
+  languages the NeMo models cover and the ones routed to Whisper, translation, detection,
+  RTF) and copies `reports/engine_eval/` back to `reports/engine_eval/<host>/` here.
+- `--no-build` starts the image already tagged for `--target` instead of building it -- for a
+  host short of the ~20-35 GB an image build needs as scratch.
+- `--work-dir PATH` syncs into and runs from a different checkout than `~/whisper-pro-asr`.
+  It must be a dedicated subdirectory: the sync uses `rsync --delete`, so a path that resolves
+  (on the target) to `/`, the remote home or any ancestor of it is refused before anything
+  is created or synced.
+
+`.env` is never synced (nor `reports/`). It used to be: the sync is `rsync --delete` of this
+tree, so a remote whose compose directory is the default work dir had its `.env` replaced by
+the laptop's -- which is how the NUC's production `.env` came to hold the laptop's render GID.
+
+**The NUC is a production host** (Bazarr's endpoint). Validation replaces its running
+container for the duration, because the container name and image tag are shared. Runbook:
+
+1. Read-only inventory: `docker inspect whisper-pro-asr` for the image, the compose working
+   directory and files, and the `ASR_*`/`MAX_*` environment.
+2. The operator pauses Bazarr's Whisper provider.
+3. Back up: tag the running image `whisper-pro-asr:prod-backup-<UTC>`, copy `.env` and the
+   compose files out, and write a `restore.env` with the image, working dir and files.
+4. Run with `--work-dir ~/whisper-pro-asr-eval` (symlink its `model_cache` to production's
+   to avoid re-downloading).
+5. Restore: re-tag the backup to the production tag, put `.env` back, `docker compose ... up -d
+   --no-build` in the production directory, poll `/status`, and confirm the engine. The
+   operator then resumes Bazarr and triggers one subtitle search.
+
 ## Reporting
 
 A remote result carries its provenance: host, image tag, source commit. "Decoding worked"

@@ -11,7 +11,9 @@
 # engine      ASR_ENGINE for the run
 # preprocess  ASR_PREPROCESS_DEVICE (AUTO | CPU | GPU | NPU | CUDA) -- UVR runs here, and
 #             it is independent of the ASR device
-# suite       accuracy | smoke | full | stress | longform
+# suite       accuracy | smoke | full | stress | longform | codeswitch | bench
+#             (bench = the engine evaluation; its report is copied back under
+#             reports/engine_eval/<host>/)
 # transport   `linux` (default), `wsl`, or `wsl:<distro>`. Windows SSH lands in cmd.exe,
 #             so a Windows host must be driven through its WSL2 distro.
 #
@@ -34,12 +36,16 @@
 #   INTEL-WHISPER   OpenVINO     -> Intel GPU (the NPU cannot execute Whisper's dynamic IR)
 #   OPENAI-WHISPER  torch        -> CUDA, Intel XPU (intel-xpu image), or ROCm
 #   WHISPERX        torch        -> CUDA
+#   PARAKEET/CANARY ONNX Runtime -> CUDA, or Intel GPU via OpenVINO; NPU/AMD units run them on
+#                                   the CPU. Their Whisper companion follows FASTER-WHISPER.
 # A combination outside that table would silently run on the CPU and report a clean pass.
 
 # nuc|user@10.0.0.5|intel|INTEL-WHISPER|NPU|full
 # nuc|user@10.0.0.5|intel|INTEL-WHISPER|GPU|smoke
 # gpubox|user@10.0.0.6|nvidia|FASTER-WHISPER|AUTO|stress
 # gpubox|user@10.0.0.6|nvidia|WHISPERX|AUTO|smoke
+# gpubox|user@10.0.0.6|nvidia|PARAKEET|AUTO|bench
+# nuc|user@10.0.0.5|intel|PARAKEET|NPU|smoke
 
 # A Windows host is driven through WSL2. Only NVIDIA reaches a Linux container there --
 # Intel GPU/NPU are not exposed at all, and AMD appears via /dev/dxg but falls back to the

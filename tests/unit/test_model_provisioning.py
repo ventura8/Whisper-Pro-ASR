@@ -513,3 +513,87 @@ class TestTheUvrDownloadRecoveryPath:
         interrupt = KeyboardInterrupt()
         with pytest.raises(KeyboardInterrupt):
             self._run_download(tmp_path, interrupt)
+
+
+class TestNemoProvisioning:
+    """PARAKEET / CANARY need the Whisper companion's weights *and* the NeMo export."""
+
+    UNITS = [{"type": "CUDA", "id": "cuda:0"}, {"type": "CPU", "id": "CPU"}]
+
+    def test_a_nemo_engine_provisions_the_companion_then_the_export(self, monkeypatch):
+        """Companion first, then the export, at every quantization the pool needs."""
+        monkeypatch.delenv("NEMO_MODEL", raising=False)
+        config = _config(ASR_ENGINE="PARAKEET", engines_in_use=lambda: ["PARAKEET"], HARDWARE_UNITS=self.UNITS, OV_CACHE_DIR="/cache")
+        order = []
+        with (
+            mock.patch.object(model_provisioning, "ensure_ct2_whisper", side_effect=lambda *a: order.append("whisper") or True),
+            mock.patch.object(model_provisioning, "ensure_nemo_onnx", side_effect=lambda *a: order.append(a) or True) as ensure_nemo,
+        ):
+            assert model_provisioning.provision_models(config) is True
+
+        target_dir, spec, quantizations = ensure_nemo.call_args.args
+        assert order[0] == "whisper", "the companion is the smaller download and answers detection"
+        assert (target_dir, spec.name) == ("/cache/nemo/nemo-parakeet-tdt-0.6b-v3", "nemo-parakeet-tdt-0.6b-v3")
+        assert quantizations == [None, "int8"], "fp32 for the card, int8 for the CPU unit"
+
+    def test_a_whisper_engine_never_downloads_a_nemo_export(self):
+        """Three or more gigabytes nobody will load."""
+        with (
+            mock.patch.object(model_provisioning, "ensure_ct2_whisper", return_value=True),
+            mock.patch.object(model_provisioning, "ensure_nemo_onnx") as ensure_nemo,
+        ):
+            model_provisioning.provision_models(_config(engines_in_use=lambda: ["FASTER-WHISPER"]))
+        ensure_nemo.assert_not_called()
+
+    @staticmethod
+    def _spec():
+        """The default Parakeet export."""
+        return model_provisioning.nemo_catalog.CATALOG["nemo-parakeet-tdt-0.6b-v3"]
+
+    @pytest.fixture(autouse=True)
+    def _small_minimums(self, monkeypatch):
+        """Real exports are gigabytes; the size floors are what is under test, scaled down."""
+        monkeypatch.setattr(model_provisioning.model_integrity, "MIN_ONNX_MODEL_BYTES", 4)
+        monkeypatch.setattr(model_provisioning.model_integrity, "MIN_ONNX_DATA_BYTES", 8)
+
+    @staticmethod
+    def _write(directory, names):
+        """Create ``names`` in ``directory``, each comfortably above the scaled-down floors."""
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (directory / name).write_bytes(b"x" * 16)
+
+    def test_a_complete_directory_is_not_downloaded_again(self, tmp_path):
+        """A warm start costs a validation pass, not a network round trip."""
+        spec = self._spec()
+        self._write(tmp_path / "p", model_provisioning.nemo_catalog.required_files(spec, "int8"))
+        hub = mock.MagicMock()
+        with mock.patch("importlib.import_module", return_value=hub):
+            assert model_provisioning.ensure_nemo_onnx(str(tmp_path / "p"), spec, ["int8"]) is True
+        hub.snapshot_download.assert_not_called()
+
+    def test_a_missing_variant_is_filled_in_place_at_the_pinned_revision(self, tmp_path):
+        """The fp32 export already present must survive the int8 one being added."""
+        spec = self._spec()
+        target = tmp_path / "p"
+        self._write(target, model_provisioning.nemo_catalog.required_files(spec, None))
+        int8 = model_provisioning.nemo_catalog.required_files(spec, "int8")
+        hub = mock.MagicMock()
+        hub.snapshot_download.side_effect = lambda **kw: self._write(target, int8)
+        with mock.patch("importlib.import_module", return_value=hub):
+            assert model_provisioning.ensure_nemo_onnx(str(target), spec, [None, "int8"]) is True
+        kwargs = hub.snapshot_download.call_args.kwargs
+        assert (kwargs["repo_id"], kwargs["revision"]) == (spec.repo_id, spec.revision)
+        assert "encoder-model.int8.onnx" in kwargs["allow_patterns"]
+        assert (target / "encoder-model.onnx.data").exists(), "the fp32 export was not purged"
+
+    def test_a_failed_fill_in_falls_through_to_a_clean_download(self, tmp_path, caplog):
+        """A fill-in that cannot complete is logged and the ordinary purge-and-retry takes over."""
+        spec = self._spec()
+        target = tmp_path / "p"
+        self._write(target, ["config.json"])
+        hub = mock.MagicMock()
+        hub.snapshot_download.side_effect = OSError("network down")
+        with mock.patch("importlib.import_module", return_value=hub):
+            assert model_provisioning.ensure_nemo_onnx(str(target), spec, ["int8"]) is False
+        assert "could not complete" in caplog.text.lower()

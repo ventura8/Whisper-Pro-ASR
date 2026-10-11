@@ -12,7 +12,7 @@ import sys
 import threading
 from logging.handlers import TimedRotatingFileHandler
 
-from modules.core import config, utils
+from modules.core import config, config_nemo, engine_registry, utils
 from modules.core.constants import INTEL_ENV_KEYS
 
 # Thread-safe global log buffer for dashboard visibility
@@ -455,14 +455,26 @@ def _unique_device_props(asr_props, prep_props):
     return seen[:10]
 
 
+def _asr_runtime_value():
+    """What decodes, for the banner's ASR Runtime row.
+
+    A NeMo engine names both runtimes: the NeMo model on ONNX Runtime, and the Whisper
+    companion on CTranslate2 that serves language detection -- on the CPU when
+    NEMO_COMPANION_DEVICE says so, whatever the unit is.
+    """
+    if config.ASR_ENGINE == "INTEL-WHISPER":
+        return f"OpenVINO ({config.DEVICE})"
+    ct2 = f"{config.ASR_ENGINE_DEVICE.upper()} (Compute: {config.ASR_ENGINE_COMPUTE_TYPE})"
+    if not engine_registry.is_nemo_engine(config.ASR_ENGINE):
+        return ct2
+    companion = "CPU" if config_nemo.NEMO_COMPANION_DEVICE == "CPU" else ct2
+    return f"ONNX Runtime ({config.DEVICE}) + CTranslate2 companion ({companion})"
+
+
 def _banner_config_lines(cfg):
     """Build the configuration details block for the startup banner."""
     w = _LABEL_WIDTH
-    if config.ASR_ENGINE == "INTEL-WHISPER":
-        asr_runtime_val = f"OpenVINO ({config.DEVICE})"
-    else:
-        asr_runtime_val = f"{config.ASR_ENGINE_DEVICE.upper()} (Compute: {config.ASR_ENGINE_COMPUTE_TYPE})"
-
+    asr_runtime_val = _asr_runtime_value()
     preprocess_val = f"Vocals={config.ENABLE_VOCAL_SEPARATION} | LD-Pre={config.ENABLE_LD_PREPROCESSING}"
     lines = [
         _BANNER_RULE,
@@ -473,6 +485,7 @@ def _banner_config_lines(cfg):
         f"  {'Vocal Separator Model ID':<{w}}: {_get_vocal_separator_model_display()}",
         f"  {'ASR Engine':<{w}}: {config.ASR_ENGINE}",
         f"  {'ASR Engine Source':<{w}}: {getattr(config, 'ASR_ENGINE_SOURCE', 'explicit')}",
+        *(f"  {label:<{w}}: {value}" for label, value in config_nemo.banner_lines(config.ASR_ENGINE, _get_real_model_name())),
         f"  {'Beam Size':<{w}}: {config.DEFAULT_BEAM_SIZE}",
         f"  {'Threads':<{w}}: {cfg['threads']}",
         f"  {'Preprocess Flags':<{w}}: {preprocess_val}",

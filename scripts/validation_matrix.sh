@@ -19,6 +19,8 @@
 #   INTEL-WHISPER   OpenVINO     -> Intel GPU (the NPU cannot execute Whisper's dynamic IR)
 #   OPENAI-WHISPER  torch        -> CUDA, or Intel XPU in the intel-xpu image
 #   WHISPERX        torch        -> CUDA
+#   PARAKEET/CANARY ONNX Runtime -> CUDA, or Intel GPU via OpenVINO; NPU/AMD units run them on
+#                                   the CPU. Their Whisper companion follows FASTER-WHISPER.
 # A combination outside that table would silently run on the CPU and report a clean pass.
 #
 # Usage:
@@ -165,7 +167,7 @@ PLAN="$(printf '%s\n' "$PLAN" | awk -F'|' 'NF {
 # device is reachable from the image the row builds.
 engine_is_known() {
 	case "$1" in
-	FASTER-WHISPER | INTEL-WHISPER | OPENAI-WHISPER | WHISPERX) return 0 ;;
+	FASTER-WHISPER | INTEL-WHISPER | OPENAI-WHISPER | WHISPERX | PARAKEET | CANARY) return 0 ;;
 	*) ;; # Anything else falls through to the rejection below.
 	esac
 	return 1
@@ -234,7 +236,7 @@ validate_plan() {
 			echo "${m}: invalid target '${target}' (no docker-compose.${target}.yml)" >&2
 			problems=$((problems + 1))
 		fi
-		case "$suite" in accuracy | smoke | full | stress | longform) ;;
+		case "$suite" in accuracy | smoke | full | stress | longform | codeswitch | bench) ;;
 		*)
 			echo "${m}: invalid suite '${suite}'" >&2
 			problems=$((problems + 1))

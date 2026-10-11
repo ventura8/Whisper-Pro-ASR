@@ -36,6 +36,13 @@ unit whose work landed on the CPU), and `measured` (read from a loaded engine, r
 resolved from configuration). A unit in the pool is where a task is *dispatched*; these say
 where it executed, which differs whenever the engine has no backend for that silicon.
 
+`asr_engine` names the engine and `supported_asr_engines` lists every accepted value,
+including `PARAKEET` and `CANARY`. When a NeMo engine runs, `engines.nemo` says which model:
+`model` (e.g. `nemo-parakeet-tdt-0.6b-v3`), its pinned `revision`, `quantization`,
+`companion_device`, and the `languages` it transcribes itself -- everything else goes to its
+Whisper companion. The engine name alone does not identify the model, so benchmark reports
+record this block.
+
 **Ordering Guarantee**: Returned task lists are sorted by task start/arrival time (`start_time`, then `task_id`) so dashboard and API consumers observe a stable FIFO chronology.
 
 ### `POST /detect-language`

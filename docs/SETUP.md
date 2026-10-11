@@ -626,6 +626,23 @@ An explicit `ASR_DEVICE` still constrains which tier is chosen.
 | Intel NPU | CPU fallback for ASR; use NPU for vocal isolation |
 | AMD Radeon (ROCm) | `ASR_ENGINE=OPENAI-WHISPER` with the `amd-rocm-torch` image |
 
+**NVIDIA NeMo engines (opt-in).** `ASR_ENGINE=PARAKEET` (Parakeet-TDT-0.6B-v3) or
+`ASR_ENGINE=CANARY` (Canary-1B-v2) run NeMo models through onnx-asr on the ONNX Runtime build
+the image already carries -- no extra image target. They accelerate on CUDA and on an Intel
+GPU (OpenVINO execution provider); NPU and AMD units run them on the CPU. The default models
+cover 25 European languages (the optional `nemo-parakeet-tdt-0.6b-v2`, English only) and
+cannot identify a language, so each loads a Whisper companion
+(`ASR_MODEL`) that answers language detection and transcribes everything else; see the
+routing table in the README and [ASR_ENGINE_EVALUATION.md](ASR_ENGINE_EVALUATION.md).
+
+Device memory is the constraint to plan for. The NeMo model, its companion and -- with
+`ENABLE_LD_PREPROCESSING` on -- a CUDA vocal-isolation worker share the card. On an 8 GB card
+(RTX 3080 laptop) the three did not fit: set `NEMO_COMPANION_DEVICE=CPU` and
+`NEMO_GPU_MEM_LIMIT_MB=3072`. Canary-1B-v2 alone needs ~6.6 GB at fp32 and wants a 12 GB+
+card. Weights are downloaded on first start into `model_cache/nemo/<model>` (Parakeet
+fp32 2.5 GB + int8 0.7 GB; Canary 4 GB + 1 GB), at the revision pinned in
+`modules/core/nemo_catalog.py`.
+
 **Hybrid engines.** `HYBRID_ENGINES` is `false` by default. On a host carrying both a
 CUDA/AMD GPU *and* an Intel GPU/NPU, setting it to `true` lets each unit run its native
 engine in its own worker process, so both accelerators work at once. It is opt-in because

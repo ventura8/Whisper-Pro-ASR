@@ -94,3 +94,21 @@ def test_the_channel_is_given_a_finite_call_deadline(clean_channels):
     timeout = built.call_args.kwargs.get("call_timeout_sec")
     assert timeout is not None, "no deadline was passed; a hung call would never be broken"
     assert timeout > 0, f"call_timeout_sec={timeout} disables the deadline, which is the defect"
+
+
+def test_nemo_engines_get_one_channel_per_onnx_runtime_build(clean_channels):
+    """A CUDA unit needs onnxruntime-gpu and an Intel one onnxruntime-openvino; one process
+    can import only one, so PARAKEET on both kinds of unit must not share a worker."""
+    with (
+        mock.patch.object(isolated_engine.worker_channel, "WorkerChannel", side_effect=lambda *a, **k: mock.MagicMock()),
+        mock.patch.object(isolated_engine.IsolatedEngine, "_load", return_value=("h", 0)),
+        mock.patch.object(isolated_engine.IsolatedEngine, "_worker_device", return_value="cuda"),
+    ):
+        cuda = isolated_engine.IsolatedEngine("PARAKEET", "m", {"id": "cuda:0", "type": "CUDA", "name": "card"})
+        intel = isolated_engine.IsolatedEngine("PARAKEET", "m", {"id": "GPU.0", "type": "GPU", "name": "igpu"})
+        faster = isolated_engine.IsolatedEngine("FASTER-WHISPER", "m", {"id": "cuda:0", "type": "CUDA", "name": "card"})
+
+    assert set(isolated_engine._CHANNELS) == {"PARAKEET-CUDA", "PARAKEET-INTEL", "FASTER-WHISPER"}
+    assert cuda._channel is not intel._channel
+    assert faster._channel is isolated_engine._CHANNELS["FASTER-WHISPER"]
+    assert cuda.engine_type == "PARAKEET", "the worker is still told the engine, not the channel key"

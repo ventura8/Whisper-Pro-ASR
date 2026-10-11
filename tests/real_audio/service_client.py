@@ -99,6 +99,13 @@ def detect(path: Path) -> dict:
     return post_audio_json(path, "/detect-language")
 
 
+def status() -> dict:
+    """The live service's ``/status`` payload, asserting a 200: what ran, where, and on what."""
+    response = _httpx().get(f"{BASE_URL}/status", timeout=HEALTH_TIMEOUT_SEC)
+    assert response.status_code == 200, f"{response.status_code}: {response.text}"
+    return response.json()
+
+
 def post_promptly(path: Path, endpoint: str = "/v1/audio/transcriptions?output=json", field: str = "audio_file"):
     """Upload ``path`` under the tight adversarial budget, failing the test on a hang.
 

@@ -29,7 +29,7 @@ All core runtime modules are consolidated under `modules/core/` for improved org
 
 | Component | Responsibility |
 | :--- | :--- |
-| `modules/inference/` | Inference stack grouped by concern: `runtime/` (`model_manager`, `concurrency`, segment consumption), `scheduler/` (nesting-safe locking via non-locking "_direct" sub-stage entry points, state/order/task helpers), `pipeline/` (`preprocessing/` package with orchestrator in `__init__.py` plus `helpers.py`, `provider.py`, `execution.py`, alongside `vad`, `language_detection`, `diarization`, `post_processing`), and `engines/` (`base`, `engine_factory`, `faster_whisper_engine`, `openai_whisper_engine`, `whisperx_engine`, `intel_engine`). |
+| `modules/inference/` | Inference stack grouped by concern: `runtime/` (`model_manager`, `concurrency`, segment consumption), `scheduler/` (nesting-safe locking via non-locking "_direct" sub-stage entry points, state/order/task helpers), `pipeline/` (`preprocessing/` package with orchestrator in `__init__.py` plus `helpers.py`, `provider.py`, `execution.py`, alongside `vad`, `language_detection`, `diarization`, `post_processing`), and `engines/` (`base`, `engine_factory`, `faster_whisper_engine`, `openai_whisper_engine`, `whisperx_engine`, `intel_engine`, and the `nemo_*` modules behind `PARAKEET`/`CANARY`). |
 | `modules/api/` | FastAPI application layer grouped by concern: `routes/` (`asr`, `detect`, `system`) and `support/` (`request_utils`, `upload_extraction`, `local_path`, `security`) for shared request/materialization/path-approval/security logic. |
 | `modules/monitoring/` | `dashboard` & `dashboard_ui` (Material Design UI renderer loading manifest-ordered modules from `templates/dashboard_js_files.txt`), `analytics_ui` (analytics dashboard loaded from `templates/analytics_js_files.txt`), `telemetry` & `telemetry_manager` (persistent telemetry history), `history_manager` (task history with dual-tier storage), and `metrics_discovery` (hardware metrics). |
 
@@ -110,6 +110,17 @@ graph LR
 **WhisperX Process Isolation & Packaging**: `whisperx` is not imported in the main service process. WhisperX 3.8.6 hard-pins a torch/torchaudio/torchvision/huggingface-hub stack that is incompatible with the versions the rest of the application uses, and that stack cannot be safely reloaded inside one live interpreter. `whisperx_engine.py` instead calls `whisperx_worker_client.call(...)` / `call_with_generation(...)`, which lazily spawns and owns a dedicated child process (`whisperx_worker.py`, launched via `multiprocessing.get_context("spawn")` against the isolated install at `WHISPERX_LIB_PATH`). Spawn re-imports app `__main__` as `__mp_main__`; `whisper_pro_asr.py` skips FastAPI/torch construction on that path, and `modules` / `modules.inference.engines` package inits stay lazy so importing `whisperx_worker` does not pull the main stack before `_activate_isolated_lib_path()` runs. `diarization.py` talks to alignment/diarization models through this client using opaque handles instead of live Python objects. `ALIGN_POOL`/`DIARIZE_POOL` still track per-unit handles in the main process; the underlying models live in the worker. Load paths that cache handles use `call_with_generation(...)`, which returns `(result, generation)` under the same `_LOCK` so the stamped generation cannot race a mid-load worker respawn. Parent-side access remains serialized under one shared `_LOCK` (a deliberate single-worker design for this isolation layer; concurrent WhisperX across distinct scheduler hardware units is not multiplexed yet). Callers that block beyond `WHISPERX_WORKER_LOCK_WARN_SEC` (default 5s) emit an operational warning identifying the waiting operation (`call`/`generation`/`shutdown`) without changing lock semantics. RPC calls carry a finite deadline of 1800 seconds (`WHISPERX_WORKER_CALL_TIMEOUT_SEC`, default `1800`); set `0` to disable it. The isolated install is pinned with hashes via `requirements/whisperx.lock.txt` (`pip install --require-hashes`), and ships in the `full` and `nvidia-whisperx` targets (`full` is ~29.8 GB uncompressed); every other target (`cpu`, `intel`, `intel-xpu`, `nvidia`, `nvidia-intel`, `amd`, `amd-rocm-torch`) omits this layer entirely. The lock pins a CPU torch, but that copy is **deleted** from the isolated directory at build time so the import falls through to the CUDA torch stack the image already carries via `deps-cuda`/`sys-full` -- WhisperX therefore runs on the GPU, and the ~1.2 GB duplicate does not ship. What stays segregated is the older `transformers`/`huggingface-hub` pair, which is the actual reason for the separate directory. If diarization is invoked on a non-`full` image or when `WHISPERX_LIB_PATH` is absent, `run_diarization()` cleanly falls back to unlabeled segments with an operational notice without raising an exception. Releasing GPU/VRAM for these models (`unload_models()` / idle cleanup) shuts down and respawns the worker rather than just dropping references. A `WhisperXWorkerError` from the client falls back to unlabeled segments rather than failing the whole transcription.
 
 The `full` image size cited for disk planning is ~29.8 GB uncompressed on disk, measured locally with `docker images`; registry transfer sizes may be lower because layers are compressed. On an RPC timeout the worker is shut down, and the next alignment or diarization request respawns it.
+
+### NVIDIA NeMo Engines (PARAKEET / CANARY)
+
+`NemoOnnxEngine` is one engine object per hardware unit, so the scheduler, `MODEL_POOL` and the decode pipeline are unchanged. It holds two models in the same isolated worker:
+
+- the NeMo model, loaded by onnx-asr from `<OV_CACHE_DIR>/nemo/<model>` -- weights the provisioner downloads at the revision pinned in `nemo_catalog`, so onnx-asr only ever loads offline -- on the ONNX Runtime build bootstrap activated for that worker (CUDA EP, OpenVINO EP for an Intel GPU, CPU EP otherwise);
+- a Whisper **companion**, a `FasterWhisperEngine` on `ASR_MODEL`, built by the same factory path as `FASTER-WHISPER` (on the unit, or on the CPU with `NEMO_COMPANION_DEVICE=CPU`).
+
+`detect_language()` always goes to the companion, so every detection path behaves as on `FASTER-WHISPER`. `transcribe()` is routed per call by `nemo_routing`: a language outside the model's set, no language at all, or a translation Parakeet cannot do goes to the companion with its arguments untouched; anything else is decoded by the NeMo model. Because `run_decoding` already issues one call per language run with `language=` forced, a code-switched file is split between the two models run by run. The NeMo path honours `clip_timestamps` (so decoding by speech region and `resumable_decode`'s pause/resume work unchanged), splits anything over `NEMO_MAX_CHUNK_SEC` at its quietest frame, and yields segments lazily a batch at a time. A batch that exhausts device memory is retried chunk by chunk on the same device; any other accelerator failure moves the engine to the CPU, which it then reports.
+
+NeMo workers are keyed per ONNX Runtime family (`PARAKEET-CUDA`, `PARAKEET-INTEL`, `PARAKEET-CPU`, `engine_registry.worker_key`) rather than per engine: a process can import only one vendor's ONNX Runtime, and units load lazily, so a shared worker would let whichever unit arrived first choose the runtime for all of them. The scheduler's `unit_choice` prefers the fastest idle drivable unit (`AUTO_DEVICE_PRIORITY`), so on a CUDA + Intel host idle work lands on the card rather than rotating onto the iGPU.
 
 ### Priority Detection Flow (/detect-language)
 
@@ -288,7 +299,9 @@ graph TD
 │   │   ├── config.py        # Global settings (DIARIZATION_HF_TOKEN, MODEL_IDLE_TIMEOUT, etc.)
 │   │   ├── config_helpers.py # Hardware detection helpers (AMD, Intel, CUDA state)
 │   │   ├── constants.py     # Shared constants
-│   │   ├── engine_registry.py # AUTO default engine + device ordering
+│   │   ├── engine_registry.py # AUTO default engine + device ordering, NeMo engine tables
+│   │   ├── nemo_catalog.py  # Pinned NeMo ONNX models (Parakeet/Canary) and their files
+│   │   ├── config_nemo.py   # NEMO_* settings
 │   │   ├── logging_setup.py # Task-specific logging
 │   │   ├── process_exec.py  # Subprocess execution helpers
 │   │   ├── subtitles.py     # Subtitle formatting (SRT/VTT wrapping, promo card)
@@ -334,7 +347,12 @@ graph TD
 │   │       ├── intel_engine.py
 │   │       ├── whisperx_engine.py
 │   │       ├── whisperx_worker.py         # Isolated child-process entrypoint (spawn)
-│   │       └── whisperx_worker_client.py  # Parent-side client that owns the worker
+│   │       ├── whisperx_worker_client.py  # Parent-side client that owns the worker
+│   │       ├── nemo_onnx_engine.py  # PARAKEET/CANARY: NeMo model + Whisper companion
+│   │       ├── nemo_routing.py      # Which model serves a call
+│   │       ├── nemo_chunking.py     # Clips / VAD / quiet-point splitting to <=20 s
+│   │       ├── nemo_segments.py     # Token times -> words -> subtitle lines
+│   │       └── nemo_runtime.py      # ONNX Runtime provider choice, warm-up, CPU fallback
 │   └── monitoring/          # Dashboard, Telemetry & Metrics
 │       ├── dashboard.py     # Dashboard entry point
 │       ├── dashboard_ui.py  # Material Design dashboard renderer (loads from templates)

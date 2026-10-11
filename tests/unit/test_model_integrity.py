@@ -268,3 +268,21 @@ def test_vad_preload_download_failure_handling(tmp_path: Path):
     )
     assert res is False
     assert not target_file.exists()
+
+
+def test_verify_nemo_onnx_dir_checks_every_required_file_by_kind(tmp_path: Path, monkeypatch, caplog):
+    """A NeMo export is graph files, an external-weights file and two small text files."""
+    monkeypatch.setattr(model_integrity, "MIN_ONNX_MODEL_BYTES", 10)
+    monkeypatch.setattr(model_integrity, "MIN_ONNX_DATA_BYTES", 100)
+    required = ["config.json", "vocab.txt", "encoder-model.onnx", "encoder-model.onnx.data"]
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "vocab.txt").write_text("a 0")
+    (tmp_path / "encoder-model.onnx").write_bytes(b"x" * 10)
+    (tmp_path / "encoder-model.onnx.data").write_bytes(b"x" * 50)
+
+    assert model_integrity.verify_nemo_onnx_dir(tmp_path, required) is False
+    assert "encoder-model.onnx.data" in caplog.text, "a truncated weights file is named"
+
+    (tmp_path / "encoder-model.onnx.data").write_bytes(b"x" * 100)
+    assert model_integrity.verify_nemo_onnx_dir(tmp_path, required) is True
+    assert model_integrity.verify_nemo_onnx_dir(tmp_path, [*required, "decoder_joint-model.onnx"]) is False

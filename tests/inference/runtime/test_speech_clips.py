@@ -76,6 +76,12 @@ class TestWhenRegionsAreChosen:
         assert not speech_clips.regions_for("clip.wav", True)
         vad.get_speech_timestamps_from_path.assert_not_called()
 
+    @pytest.mark.parametrize("engine", ["PARAKEET", "CANARY"])
+    def test_the_nemo_engines_receive_clips(self, vad, monkeypatch, engine):
+        """They decode clips natively, and their Whisper companion is Faster-Whisper."""
+        monkeypatch.setattr(speech_clips.config, "ASR_ENGINE", engine)
+        assert speech_clips.regions_for("clip.wav", True)
+
     def test_the_split_uses_its_own_settings_not_the_decode_vad(self, vad):
         """A clip boundary decides where the language may change, not what is transcribed."""
         speech_clips.regions_for("clip.wav", True)

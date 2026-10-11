@@ -17,6 +17,15 @@ The v1.3.0 decision to keep the non-drivable unit in the pool stands: when the d
 unit is busy, a task landing on the other one still finishes, and two tasks run where one
 did. What changes is only the case where a drivable unit is *idle* -- it is preferred, so
 the CPU fallback happens under load and never by rotation.
+
+Among drivable idle units the fastest kind wins (engine_registry.AUTO_DEVICE_PRIORITY), with
+FIFO order kept between units of the same kind. That matters once an engine can drive more
+than one vendor: PARAKEET runs on the CUDA card *and* on the Intel iGPU through OpenVINO, and
+plain rotation would hand every other task to the iGPU -- measured at 9x real time there
+against 123x on the card beside it (RTX 3080 laptop + UHD Graphics, 2026-10-09). It is the
+same reasoning as above, one step further: the pool still uses every unit under load, and
+idle work goes where it runs fastest. For INTEL-WHISPER on a GPU+NPU host it means an idle
+GPU is preferred to an idle NPU, which the same priority order already states.
 """
 
 import queue
@@ -35,7 +44,9 @@ def take_idle_unit(pool: queue.Queue) -> dict:
         units = list(pool.queue)
         if not units:
             raise queue.Empty
-        chosen = next((unit for unit in units if _drivable(unit)), units[0])
+        drivable = [unit for unit in units if _drivable(unit)]
+        # min() returns the first of equal keys, so same-type units keep their FIFO rotation.
+        chosen = min(drivable, key=_speed_rank) if drivable else units[0]
         pool.queue.remove(chosen)
         pool.not_full.notify()
     return chosen
@@ -45,3 +56,10 @@ def _drivable(unit: dict) -> bool:
     """Whether the engine that would serve on ``unit`` can actually execute there."""
     engine = config.engine_for_unit(unit)
     return engine_registry.engine_supports_unit(engine, unit.get("type", ""))
+
+
+def _speed_rank(unit: dict) -> int:
+    """Position of the unit's type in the hardware preference order; unknown types last."""
+    unit_type = str(unit.get("type") or "").upper()
+    order = engine_registry.AUTO_DEVICE_PRIORITY
+    return order.index(unit_type) if unit_type in order else len(order)

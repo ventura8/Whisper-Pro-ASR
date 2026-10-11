@@ -101,7 +101,10 @@ class IsolatedEngine(BaseASREngine):
         self.engine_type = engine_type
         self.model_id = model_id
         self.unit = unit
-        self._channel = channel_for(engine_type)
+        # Through importlib for the reason _worker_env gives: a module-level import of
+        # modules.core here closes an import cycle at load.
+        registry = importlib.import_module("modules.core.engine_registry")
+        self._channel = channel_for(registry.worker_key(engine_type, unit.get("type", "")))
         self.handle, self._generation = self._load()
         #: The device the worker's engine actually settled on. Read once per load rather
         #: than per call: execution_status prefers a loaded engine's own answer over a

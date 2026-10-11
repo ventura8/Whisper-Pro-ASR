@@ -18,12 +18,12 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV PYTHONUNBUFFERED=1
 
-ARG POETRY_VERSION=2.4.3
+ARG POETRY_VERSION=2.5.1
 # Keep in sync with PIP_VERSION in scripts/ci/dependencies.env
 ARG PIP_VERSION=26.2.1
 ARG SETUPTOOLS_VERSION=84.0.0
-ARG NPM_VERSION=12.0.2
-ARG FFMPEG_VERSION=9.0.1
+ARG NPM_VERSION=12.2.0
+ARG FFMPEG_VERSION=9.0.2
 ARG FFMPEG_TARBALL=ffmpeg-${FFMPEG_VERSION}.tar.xz
 ARG FFMPEG_URL=https://ffmpeg.org/releases/${FFMPEG_TARBALL}
 ARG FFMPEG_SIG_URL=${FFMPEG_URL}.asc
@@ -128,6 +128,8 @@ ENV XDG_CACHE_HOME=/var/cache/whisper-pro-asr-tools/xdg
 
 # Copy frontend dependency manifests first so npm install is source-change resistant.
 COPY package.json package-lock.json ./
+# Vendored npm packages the lockfile resolves by path (vendor/npm/braces: GHSA-vfj7-8cjw-p6xm).
+COPY vendor/npm ./vendor/npm
 
 # Install frontend and markdown tooling dependencies used by quality gates executed inside tests/run_suite.sh
 RUN --mount=type=cache,id=whisper-pro-asr-npm,target=/root/.npm,sharing=locked \

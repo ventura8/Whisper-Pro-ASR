@@ -69,16 +69,56 @@ class TestPreferringADrivableUnit:
 
 
 class TestHybridEngines:
-    """With an engine per unit, every unit is drivable by its own engine and the head wins."""
+    """With an engine per unit, every unit is drivable, and the fastest kind of unit wins."""
 
-    def test_the_head_is_taken_when_each_unit_has_its_own_engine(self):
-        """HYBRID_ENGINES: the Intel unit runs INTEL-WHISPER, so it is drivable and first."""
+    def test_an_idle_cuda_unit_beats_an_intel_unit_that_its_own_engine_drives(self):
+        """HYBRID_ENGINES: the Intel unit runs INTEL-WHISPER, so both are drivable.
+
+        This used to take the head -- FIFO among drivable units. It now takes the CUDA unit,
+        by AUTO_DEVICE_PRIORITY: once two vendors can both decode, rotation alone hands every
+        other idle task to the slower one.
+        """
 
         def per_unit(unit):
             return "INTEL-WHISPER" if unit["type"] in ("GPU", "NPU") else "FASTER-WHISPER"
 
         with mock.patch.object(unit_choice.config, "engine_for_unit", side_effect=per_unit):
             pool = _pool(INTEL, CUDA)
+            assert unit_choice.take_idle_unit(pool) is CUDA
+            assert list(pool.queue) == [INTEL]
+
+
+class TestFastestDrivableUnit:
+    """An engine that drives more than one vendor: PARAKEET on CUDA *and* the Intel GPU."""
+
+    @pytest.fixture(name="parakeet_everywhere")
+    def _parakeet_everywhere(self):
+        """Every unit runs PARAKEET."""
+        with mock.patch.object(unit_choice.config, "engine_for_unit", return_value="PARAKEET"):
+            yield
+
+    def test_the_cuda_unit_is_preferred_to_the_intel_gpu(self, parakeet_everywhere):
+        """Measured 123x real time on the card against 9x on the iGPU beside it."""
+        pool = _pool(INTEL, CUDA)
+        assert unit_choice.take_idle_unit(pool) is CUDA
+
+    def test_the_intel_gpu_still_serves_when_the_card_is_busy(self, parakeet_everywhere):
+        """With the card taken, the iGPU is the best idle unit."""
+        pool = _pool(INTEL, NPU)
+        assert unit_choice.take_idle_unit(pool) is INTEL, "GPU is drivable; the NPU is not (CPU EP)"
+
+    def test_units_of_one_type_keep_their_fifo_rotation(self, parakeet_everywhere):
+        """Two cards still rotate between themselves."""
+        second_card = {"id": "cuda:1", "type": "CUDA", "name": "NVIDIA GPU 1"}
+        pool = _pool(INTEL, second_card, CUDA)
+        assert unit_choice.take_idle_unit(pool) is second_card
+        assert list(pool.queue) == [INTEL, CUDA]
+
+    def test_an_unknown_unit_type_ranks_last(self, parakeet_everywhere):
+        """A type outside the priority order loses to any known one."""
+        odd = {"id": "x", "type": "QPU", "name": "?"}
+        with mock.patch.object(unit_choice.engine_registry, "engine_supports_unit", return_value=True):
+            pool = _pool(odd, INTEL)
             assert unit_choice.take_idle_unit(pool) is INTEL
 
 
