@@ -35,7 +35,7 @@ Inside `tests/run_suite.sh`, the gates are:
 6. JS tests + coverage: `npm run test:js`
 7. Playwright E2E (fixture-mock backend): `npm run test:e2e`
 8. Playwright E2E (real backend — `tests/e2e/real/`, runs against the actual FastAPI app via `tests/e2e/real_backend/serve_real_app.py` with only ASR inference/language-detection patched): `npm run test:e2e:real`. `playwright.real.config.cjs` single-sources `ADMIN_API_KEY` from `tests/e2e/real/helpers.js`, pins `WHISPER_E2E_PORT` via one shared port constant, and sets `WHISPER_E2E_FAKE_DELAY_SEC=3.0` so lifecycle UI assertions can observe in-flight tasks.
-9. Frontend security audit: `npm audit --audit-level=low`
+9. Frontend security audit: `npm audit --audit-level=low` `braces` is overridden to `vendor/npm/braces`, a vendored 3.0.3 with a nesting-depth limit, because GHSA-vfj7-8cjw-p6xm has no patched release; `Dockerfile.test` copies `vendor/npm` before `npm ci`. Drop the directory and the override once upstream ships a fix -- never by allowlisting the advisory.
 10. Aggregate gate: `npm run quality:frontend`
 
 Note: `npm run quality:frontend` runs both gate 7 (fixture-mock) and gate 8 (real backend). `tests/run_suite.sh` runs each gate individually rather than invoking the aggregate script directly, but covers the same steps; gate 8 requires `WHISPER_PRO_ASR_TEST_IMAGE=1` (from `Dockerfile.test` target `test`), with `SKIP_REAL_E2E=1` as the opt-out.

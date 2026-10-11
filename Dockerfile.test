@@ -128,6 +128,8 @@ ENV XDG_CACHE_HOME=/var/cache/whisper-pro-asr-tools/xdg
 
 # Copy frontend dependency manifests first so npm install is source-change resistant.
 COPY package.json package-lock.json ./
+# Vendored npm packages the lockfile resolves by path (vendor/npm/braces: GHSA-vfj7-8cjw-p6xm).
+COPY vendor/npm ./vendor/npm
 
 # Install frontend and markdown tooling dependencies used by quality gates executed inside tests/run_suite.sh
 RUN --mount=type=cache,id=whisper-pro-asr-npm,target=/root/.npm,sharing=locked \
