@@ -11,7 +11,8 @@ Use when touching `ASR_ENGINE=PARAKEET|CANARY`, `NEMO_*` settings, or any module
   (`FasterWhisperEngine` on `ASR_MODEL`). The companion answers every `detect_language`
   call and transcribes whatever `nemo_routing.choose()` sends to Whisper. `ASR_MODEL` keeps
   naming Whisper weights; for these engines they are the companion's.
-- `nemo_routing.py` decides per call: no language, a language outside `nemo_catalog.EU25`,
+- `nemo_routing.py` decides per call: no language, a language outside the selected model's
+  `spec.languages` (`EU25` for the defaults, English only for `nemo-parakeet-tdt-0.6b-v2`),
   or translation on Parakeet go to Whisper; Canary translates X->en natively. Never route
   an unknown language to NeMo: the models silently transcribe it into the nearest language
   they know.
@@ -20,7 +21,8 @@ Use when touching `ASR_ENGINE=PARAKEET|CANARY`, `NEMO_*` settings, or any module
 
 - **Supply chain**: `NEMO_MODEL` may only name an entry in `modules/core/nemo_catalog.py`,
   each pinned to one Hugging Face revision and downloaded by `model_provisioning`, never by
-  onnx-asr itself.
+  onnx-asr itself. `nemo_runtime._require_provisioned` re-checks the files at every load and
+  fails closed: onnx-asr given a model *name* would otherwise download the repo head.
 - **Providers are explicit** (`nemo_runtime.providers_for`): onnx-asr's default is every
   provider the imported ONNX Runtime build offers, which on the OpenVINO build silently
   moves a CPU unit onto OpenVINO. `actual_device()` reports what the encoder really runs on.
@@ -42,6 +44,8 @@ Use when touching `ASR_ENGINE=PARAKEET|CANARY`, `NEMO_*` settings, or any module
   target, so a region mislabelled by detection comes back translated, not transcribed.
   Parakeet takes no language prompt. Weigh this before routing more work to Canary.
 - **GPU memory**: CUDA out-of-memory on load falls back to the CPU (`_is_out_of_memory`).
+  Mid-decode an OOM batch is retried chunk by chunk; a lone chunk that still fails is decoded
+  on a lazily loaded CPU spare, never by moving the whole engine off the card.
   On small cards pair `NEMO_GPU_MEM_LIMIT_MB` with `NEMO_COMPANION_DEVICE=CPU`.
 
 ## Validation

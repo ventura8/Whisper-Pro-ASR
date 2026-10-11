@@ -222,7 +222,7 @@ for testing was an integrated `gfx1036`, which upstream rocBLAS does not support
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | **ASR_MODEL** | `Systran/faster-whisper-large-v3` | Model ID (HuggingFace) or local path; the Whisper companion under `PARAKEET`/`CANARY` |
-| **ASR_ENGINE** | `AUTO` | Selects ASR backend engine: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX`, `PARAKEET`, `CANARY`. `AUTO` resolves to `FASTER-WHISPER` on every host. `PARAKEET`/`CANARY` are opt-in NVIDIA NeMo models for 25 European languages, with a Whisper companion for language detection and everything else |
+| **ASR_ENGINE** | `AUTO` | Selects ASR backend engine: `AUTO`, `FASTER-WHISPER`, `INTEL-WHISPER`, `OPENAI-WHISPER`, `WHISPERX`, `PARAKEET`, `CANARY`. `AUTO` resolves to `FASTER-WHISPER` on every host. `PARAKEET`/`CANARY` are opt-in NVIDIA NeMo models for 25 European languages (the optional Parakeet v2: English only), with a Whisper companion for language detection and everything else |
 | **NEMO_MODEL** / **NEMO_QUANTIZATION** / **NEMO_COMPANION_DEVICE** | *(default)* / `AUTO` / `AUTO` | NeMo engine tuning; see the README Configuration Reference |
 | **ASR_DEVICE** | `AUTO` | Device: `AUTO`, `CUDA`, or `CPU` |
 | **ASR_PREPROCESS_DEVICE** | `AUTO` | Device for Isolation: `AUTO`, `NPU`, `GPU`, `CUDA`, or `CPU` |

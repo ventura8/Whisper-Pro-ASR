@@ -56,7 +56,7 @@ def _ids(clips: list[dict]) -> list[str]:
 def _report(service_ready):
     """Write the report after the last measurement, whatever happened to the ones before it."""
     yield
-    status = service_client.status()
+    status = _final_status()
     engines = status.get("engines") or {}
     meta = {
         "engine": status.get("asr_engine"),
@@ -67,9 +67,25 @@ def _report(service_ready):
         "units": [unit.get("id") for unit in status.get("hardware_units", []) if isinstance(unit, dict)],
         "status": status,
     }
-    stem = f"{meta['engine']}-{HOST_LABEL}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+    # Under pytest-xdist each worker holds only its own records and writes its own report;
+    # the worker id keeps two reports cut in the same second from overwriting each other.
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    stem = f"{meta['engine']}-{HOST_LABEL}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}" + (f"-{worker}" if worker else "")
     path = bench_metrics.write_report(OUT_DIR, stem, _RECORDS, meta)
     print(f"\n[benchmark] {len(_RECORDS)} records -> {path}\n{path.read_text(encoding='utf-8')}")
+
+
+def _final_status() -> dict:
+    """The service's status for the report header; a service that stopped still gets one.
+
+    The records are the point of the run. Losing every measurement because the last status
+    request failed would defeat the fixture, so the error is recorded instead.
+    """
+    unreachable = (AssertionError, ValueError, service_client._httpx().HTTPError)
+    try:
+        return service_client.status()
+    except unreachable as exc:
+        return {"status_error": f"{type(exc).__name__}: {exc}"}
 
 
 def _timed(call):

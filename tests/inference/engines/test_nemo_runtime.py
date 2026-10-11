@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from modules.core import config, nemo_catalog
+from modules.core import config, model_integrity, nemo_catalog
 from modules.inference.engines import nemo_runtime
 from tests.inference.engines.nemo_fixtures import FakeModel, fake_onnx_asr, fake_onnxruntime
 
@@ -15,6 +15,12 @@ CANARY = nemo_catalog.CATALOG["nemo-canary-1b-v2"]
 CUDA_UNIT = {"type": "CUDA", "id": "cuda:1", "name": "RTX"}
 GPU_UNIT = {"type": "GPU", "id": "GPU.0", "name": "Arc"}
 CPU_UNIT = {"type": "CPU", "id": "CPU", "name": "Host CPU"}
+
+
+@pytest.fixture(autouse=True)
+def _provisioned(monkeypatch):
+    """The model files are present unless a test says otherwise."""
+    monkeypatch.setattr(model_integrity, "verify_nemo_onnx_dir", lambda path, required: True)
 
 
 def _names(providers):
@@ -149,3 +155,16 @@ def test_actual_device_reads_the_encoder_session(provider, expected):
 def test_actual_device_tolerates_an_onnx_asr_without_the_private_session():
     """A moved private name reads as the CPU, never as a crash."""
     assert nemo_runtime.actual_device(SimpleNamespace(), CUDA_UNIT) == "cpu"
+
+
+def test_an_unprovisioned_model_is_refused_before_onnx_asr_can_download_it(monkeypatch):
+    """Missing pinned files fail the load; onnx-asr is never asked, so never fetches the repo head."""
+    asr = fake_onnx_asr(FakeModel("CPUExecutionProvider"))
+    monkeypatch.setitem(sys.modules, "onnx_asr", asr)
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_onnxruntime(["CPUExecutionProvider"]))
+    seen = []
+    monkeypatch.setattr(model_integrity, "verify_nemo_onnx_dir", lambda path, required: seen.append(required) or False)
+    with pytest.raises(RuntimeError, match="not provisioned"):
+        nemo_runtime.load(PARAKEET, "/cache/nemo/p", "int8", CPU_UNIT)
+    assert asr.load_model.call_count == 0
+    assert seen == [nemo_catalog.required_files(PARAKEET, "int8")]

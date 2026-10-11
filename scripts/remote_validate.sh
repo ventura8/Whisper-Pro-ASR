@@ -385,6 +385,15 @@ init_remote_home() {
 	[[ -n "$REMOTE_HOME" ]] || die "could not resolve the remote HOME inside WSL distro '${WSL_DISTRO}'"
 }
 
+# The sync below runs rsync --delete into the work dir, so a --work-dir that resolves to the
+# remote home ("~", ".", "..") or to / would delete everything there the repository does not
+# have -- ~/.ssh included. Resolve it on the target, after ~ and WSL expansion, and refuse
+# the root, the home and every ancestor of the home: only a dedicated subdirectory is safe.
+guard_work_dir() {
+	ssh_run "d=\$(realpath -m ${WORK_DIR}) && [ \"\$d\" != / ] && case \"\$HOME/\" in \"\$d\"/*) exit 3 ;; esac" ||
+		die "--work-dir ${REMOTE_WORK_DIR} resolves to / or to the remote home (or above it); rsync --delete there would remove files. Use a dedicated subdirectory such as ~/whisper-pro-asr."
+}
+
 remote_dest() {
 	if [[ "$WSL" != true ]]; then
 		printf '%s' "$REMOTE_WORK_DIR"
@@ -724,6 +733,7 @@ else
 	init_remote_home
 	# Weights and caches are deliberately excluded: they are large and are provisioned on the
 	# remote at first start.
+	guard_work_dir
 	ssh_run "mkdir -p ${WORK_DIR}"
 	# Build caches are the trap here: .buildx-cache is 75G of local Docker layer cache that is
 	# worthless on the remote, and rsync will happily push all of it across the network and

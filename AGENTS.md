@@ -78,7 +78,7 @@ Any change to scheduling, preemption, or monitoring MUST preserve correctness an
 
 ## NVIDIA NeMo Engines (PARAKEET / CANARY)
 
-- **Opt-in, never AUTO**: `AUTO_DEFAULT_ENGINE` stays `FASTER-WHISPER`. The NeMo models cover 25 European languages and have no language-ID head; making them the default is a separate, data-backed decision recorded in `docs/ASR_ENGINE_EVALUATION.md`.
+- **Opt-in, never AUTO**: `AUTO_DEFAULT_ENGINE` stays `FASTER-WHISPER`. The default NeMo models (Parakeet v3, Canary v2) cover 25 European languages -- the optional Parakeet v2 English only -- and none has a language-ID head; making them the default is a separate, data-backed decision recorded in `docs/ASR_ENGINE_EVALUATION.md`.
 - **Whisper companion contract**: every `detect_language()` goes to the companion, and `nemo_routing.choose()` sends every call with no language, a language outside the model's set, or a translation the model cannot do to the companion with its arguments untouched. Never let a NeMo model transcribe an uncovered language -- it does not fail, it produces confident wrong-language text.
 - **Pinned catalog**: `NEMO_MODEL` may only name an entry of `modules/core/nemo_catalog.py`; weights are downloaded by provisioning at the pinned revision, and onnx-asr only loads from that directory. Do not let onnx-asr download (it follows the repository head).
 - **Lazy runtime imports**: `onnx_asr` and `onnxruntime` are imported through `importlib` inside functions only; ONNX Runtime is the per-vendor build under `/app/libs/<vendor>`, never a pip dependency. Tests inject fakes per test (`tests/inference/engines/nemo_fixtures.py`).

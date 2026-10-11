@@ -62,7 +62,6 @@ on every host class:
   the onnx-asr fp32 export, and that alone decides whether the companion fits beside it on
   8 GB cards.
 - A real-speech benchmark set per language (FLEURS or VoxPopuli) next to the TTS matrix.
-- The RTX 5090 rows, with the companion on the GPU.
 
 ## How the engines work
 
@@ -313,8 +312,8 @@ Whisper, and say little about natural speech, long-form audio or non-speech. Any
 decision must rest on real-speech data per language. A synthetic WER gap alone is not
 enough in either direction.
 
-Still to fill in: the RTX 5090 comparison, where both models fit with the companion on the GPU. See
-`docs/RELEASE_VALIDATION_PLAN.md`, rows P1–P6.
+The RTX 5090 comparison, with both models and the companion on the GPU, is recorded above. Every
+host's runs are tracked in `docs/RELEASE_VALIDATION_PLAN.md`, rows P1–P6.
 
 **What the 3080 runs already establish:**
 

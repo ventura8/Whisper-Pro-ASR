@@ -629,8 +629,9 @@ An explicit `ASR_DEVICE` still constrains which tier is chosen.
 **NVIDIA NeMo engines (opt-in).** `ASR_ENGINE=PARAKEET` (Parakeet-TDT-0.6B-v3) or
 `ASR_ENGINE=CANARY` (Canary-1B-v2) run NeMo models through onnx-asr on the ONNX Runtime build
 the image already carries -- no extra image target. They accelerate on CUDA and on an Intel
-GPU (OpenVINO execution provider); NPU and AMD units run them on the CPU. They cover 25
-European languages and cannot identify a language, so each loads a Whisper companion
+GPU (OpenVINO execution provider); NPU and AMD units run them on the CPU. The default models
+cover 25 European languages (the optional `nemo-parakeet-tdt-0.6b-v2`, English only) and
+cannot identify a language, so each loads a Whisper companion
 (`ASR_MODEL`) that answers language detection and transcribes everything else; see the
 routing table in the README and [ASR_ENGINE_EVALUATION.md](ASR_ENGINE_EVALUATION.md).
 

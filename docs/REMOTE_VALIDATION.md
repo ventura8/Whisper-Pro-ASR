@@ -311,6 +311,9 @@ Four runner options exist for the NeMo engine evaluation (`docs/ASR_ENGINE_EVALU
 - `--no-build` starts the image already tagged for `--target` instead of building it -- for a
   host short of the ~20-35 GB an image build needs as scratch.
 - `--work-dir PATH` syncs into and runs from a different checkout than `~/whisper-pro-asr`.
+  It must be a dedicated subdirectory: the sync uses `rsync --delete`, so a path that resolves
+  (on the target) to `/`, the remote home or any ancestor of it is refused before anything
+  is created or synced.
 
 `.env` is never synced (nor `reports/`). It used to be: the sync is `rsync --delete` of this
 tree, so a remote whose compose directory is the default work dir had its `.env` replaced by

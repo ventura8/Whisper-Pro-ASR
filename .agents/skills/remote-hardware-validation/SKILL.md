@@ -272,7 +272,8 @@ an unsupported device is a result, not a failure to report around.
 ## Engine evaluation runs (PARAKEET / CANARY)
 
 `scripts/remote_validate.sh` takes `--engine PARAKEET|CANARY`, `--suite bench` (report copied
-back under `reports/engine_eval/<host>/`), `--no-build` and `--work-dir PATH`; `.env` is never
+back under `reports/engine_eval/<host>/`), `--no-build` and `--work-dir PATH` (a dedicated subdirectory -- the
+sync is `rsync --delete`, so a path resolving to `/` or the remote home is refused); `.env` is never
 synced. Before a NUC run follow the production runbook in docs/REMOTE_VALIDATION.md (Bazarr
 paused, image/.env/compose backed up, separate work dir, restore command handed over), and
 coordinate GPU time with any other session benchmarking on the same machine.

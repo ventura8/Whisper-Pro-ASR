@@ -45,6 +45,7 @@ class NemoOnnxEngine(BaseASREngine):
         self._companion = companion
         self._quantization = config_nemo.quantization_for(unit.get("type", ""))
         self._path = config_nemo.model_dir(cache_root, self.spec)
+        self._cpu_spare: Any = None
         self.model, self.device = nemo_runtime.load(self.spec, self._path, self._quantization, unit)
         logger.info(
             "[NeMo] %s ready on %s (device=%s, quantization=%s); Whisper companion on %s",
@@ -124,7 +125,9 @@ class NemoOnnxEngine(BaseASREngine):
            shared with the companion and vocal isolation that is the usual failure: an RTX
            3080 laptop (8 GB) failed a 4 x 20 s Parakeet batch in the arena allocator while
            one chunk at a time fits (2026-10-09). Leaving the GPU for that would trade a
-           transient shortage for a 30x slowdown for the life of the worker.
+           transient shortage for a 30x slowdown for the life of the worker. A single chunk
+           that still does not fit is decoded on a CPU copy of the model, and the engine
+           stays on the accelerator.
         3. Anything else on an accelerator -- a plugin that rejects a later input shape the
            warm-up never exercised -- moves the engine to the CPU for good, and it reports so.
         """
@@ -137,13 +140,28 @@ class NemoOnnxEngine(BaseASREngine):
 
     def _recover(self, exc: Exception, chunks: list, recognize_kwargs: dict) -> list:
         """Steps 2 and 3 of :meth:`_recognize`, for a batch that failed on an accelerator."""
-        if _is_out_of_memory(exc) and len(chunks) > 1:
-            logger.warning("[NeMo] %s ran out of memory on %s; retrying %d chunks one at a time.", self.spec.name, self.device, len(chunks))
-            return [result for chunk in chunks for result in self._recognize([chunk], recognize_kwargs)]
+        if _is_out_of_memory(exc):
+            return self._recover_out_of_memory(chunks, recognize_kwargs)
         logger.error("[NeMo] %s failed on %s mid-decode (%s); continuing on the CPU.", self.spec.name, self.device, exc)
         self.model = nemo_runtime.load_on_cpu(self.spec, self._path, self._quantization)
         self.device = "cpu"
         return list(self.model.recognize(chunks, **recognize_kwargs))
+
+    def _recover_out_of_memory(self, chunks: list, recognize_kwargs: dict) -> list:
+        """Step 2 of :meth:`_recognize`: a device-memory shortage never leaves the accelerator."""
+        if len(chunks) > 1:
+            logger.warning("[NeMo] %s ran out of memory on %s; retrying %d chunks one at a time.", self.spec.name, self.device, len(chunks))
+            return [result for chunk in chunks for result in self._recognize([chunk], recognize_kwargs)]
+        # A single chunk that still does not fit is a momentary shortage, not a graph the
+        # device cannot run: decode just this chunk on the CPU and keep the accelerator.
+        logger.warning("[NeMo] %s ran out of memory on %s for one chunk; decoding it on the CPU.", self.spec.name, self.device)
+        return list(self._cpu_model().recognize(chunks, **recognize_kwargs))
+
+    def _cpu_model(self) -> Any:
+        """A CPU copy of the model for one-off chunks, loaded on first use and then reused."""
+        if self._cpu_spare is None:
+            self._cpu_spare = nemo_runtime.load_on_cpu(self.spec, self._path, self._quantization)
+        return self._cpu_spare
 
     def detect_language(self, audio: Any):
         """Whisper's language identification, via the companion. The NeMo models have none."""
@@ -156,6 +174,7 @@ class NemoOnnxEngine(BaseASREngine):
             companion.unload()
         if hasattr(self, "model"):
             del self.model
+        self._cpu_spare = None
         gc.collect()
 
 

@@ -176,6 +176,31 @@ def test_an_out_of_memory_batch_is_retried_chunk_by_chunk_on_the_same_device(cap
     assert "one at a time" in caplog.text
 
 
+class _OutOfMemoryAlways(FakeModel):
+    """A card so full that even one chunk does not fit."""
+
+    def recognize(self, waveform, **kwargs):
+        """Fail every call with the arena allocator's message."""
+        self.calls.append({"waveform": waveform, **kwargs})
+        raise RuntimeError("BFCArena::AllocateRawInternal Failed to allocate memory for requested buffer")
+
+
+def test_a_single_chunk_out_of_memory_decodes_that_chunk_on_the_cpu_and_stays_on_the_card(caplog):
+    """One transient shortage must not move the engine to the CPU for the life of the worker."""
+    engine, _, _ = _engine(model=_OutOfMemoryAlways("CUDAExecutionProvider"))
+    spare = FakeModel("CPUExecutionProvider")
+    with (
+        mock.patch.object(nemo_chunking, "decode", return_value=speech(10.0)),
+        mock.patch.object(nemo_runtime, "load_on_cpu", return_value=spare) as cpu,
+    ):
+        segments, _ = engine.transcribe("f.wav", language="en", clip_timestamps=[0, 2, 3, 5], vad_filter=False)
+        assert len(list(segments)) == 2
+    cpu.assert_called_once()
+    assert engine.device == "cuda" and engine.model is not spare
+    assert len(spare.calls) == 2
+    assert "decoding it on the CPU" in caplog.text
+
+
 def test_cuda_memory_can_be_capped(monkeypatch):
     """NEMO_GPU_MEM_LIMIT_MB becomes ONNX Runtime's gpu_mem_limit, in bytes."""
     monkeypatch.setattr(config_nemo, "NEMO_GPU_MEM_LIMIT_MB", 3072)

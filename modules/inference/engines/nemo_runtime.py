@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from modules.core import config, config_nemo
+from modules.core import config, config_nemo, model_integrity, nemo_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,7 @@ def load_on_cpu(spec: Any, path: str, quantization: str | None) -> Any:
 
 
 def _load_and_warm(spec: Any, path: str, quantization: str | None, providers: list, ort: Any) -> Any:
+    _require_provisioned(spec, path, quantization)
     onnx_asr = importlib.import_module("onnx_asr")
     model = onnx_asr.load_model(spec.name, path, quantization=quantization, providers=providers, sess_options=session_options(ort))
     if spec.word_timestamps:
@@ -155,6 +156,19 @@ def _load_and_warm(spec: Any, path: str, quantization: str | None, providers: li
     warmup = {"language": "en", "target_language": "en"} if spec.needs_language else {}
     model.recognize(np.zeros(_WARMUP_SAMPLES, dtype=np.float32), **warmup)
     return model
+
+
+def _require_provisioned(spec: Any, path: str, quantization: str | None) -> None:
+    """Refuse to load unless provisioning left the pinned files at ``path``.
+
+    onnx-asr is handed a full model name, and for a name it downloads whatever is missing
+    from the Hugging Face repository head. A failed or purged provisioning would then load
+    an unpinned graph, so the catalog revision -- the supply-chain guard -- has to be
+    enforced here, at load, rather than trusted from an earlier step.
+    """
+    required = nemo_catalog.required_files(spec, quantization)
+    if not model_integrity.verify_nemo_onnx_dir(path, required):
+        raise RuntimeError(f"{spec.name} is not provisioned at {path}; refusing to let onnx-asr download an unpinned copy.")
 
 
 def actual_device(model: Any, unit: dict) -> str:
