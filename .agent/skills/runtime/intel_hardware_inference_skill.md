@@ -33,6 +33,7 @@ Enforce robust OpenVINO execution on long media streams by testing VAD-guided au
 - **VAD Split Identification**: Uses global Voice Activity Detection (VAD) via `find_split_points()` to split chunks precisely in speech gaps instead of hard time boundaries.
 - **Language Lock**: Auto-detects the source language on the first chunk and forces it on subsequent chunks to prevent language drift.
 - **Silent Masking**: Quiet chunks are skipped, while chunks containing speech are padded/masked to preserve timing alignment.
+- **Language ID Window**: `IntelWhisperEngine.detect_language()` passes only the first 30s window (`_LANGUAGE_ID_WINDOW_SAMPLES`) to `WhisperPipeline.generate()`. With `max_new_tokens=1`, OpenVINO GenAI never returns on audio longer than 30s (CPU and GPU alike), so any longer input -- the full-file detection fallback, a long gap -- hangs the unit and starves the queue. faster-whisper and openai-whisper (`pad_or_trim`) detect on the same first window. Keep the cut in place until upstream fixes long-form + `max_new_tokens=1`.
 
 ---
 
