@@ -143,7 +143,9 @@ class NemoOnnxEngine(BaseASREngine):
         if _is_out_of_memory(exc):
             return self._recover_out_of_memory(chunks, recognize_kwargs)
         logger.error("[NeMo] %s failed on %s mid-decode (%s); continuing on the CPU.", self.spec.name, self.device, exc)
-        self.model = nemo_runtime.load_on_cpu(self.spec, self._path, self._quantization)
+        # The spare a one-off OOM chunk loaded becomes the engine's model: never two CPU copies.
+        self.model = self._cpu_model()
+        self._cpu_spare = None
         self.device = "cpu"
         return list(self.model.recognize(chunks, **recognize_kwargs))
 

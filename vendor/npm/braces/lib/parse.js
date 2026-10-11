@@ -43,7 +43,7 @@ const parse = (input, options = {}) => {
 
   // Whisper Pro ASR patch (GHSA-vfj7-8cjw-p6xm): compile, expand and stringify walk the
   // tree recursively, so unbounded nesting exhausts the call stack. Refuse it here instead.
-  const maxDepth = typeof opts.maxDepth === 'number' ? Math.min(MAX_DEPTH, opts.maxDepth) : MAX_DEPTH;
+  const maxDepth = Number.isFinite(opts.maxDepth) ? Math.min(MAX_DEPTH, opts.maxDepth) : MAX_DEPTH;
 
   const ast = { type: 'root', input, nodes: [] };
   const stack = [ast];

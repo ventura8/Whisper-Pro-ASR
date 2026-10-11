@@ -201,6 +201,32 @@ def test_a_single_chunk_out_of_memory_decodes_that_chunk_on_the_cpu_and_stays_on
     assert "decoding it on the CPU" in caplog.text
 
 
+class _OutOfMemoryThenBroken(FakeModel):
+    """One chunk out of memory, then a provider that cannot run the graph at all."""
+
+    def recognize(self, waveform, **kwargs):
+        """First call: arena exhausted; every later call: a non-memory provider error."""
+        self.calls.append({"waveform": waveform, **kwargs})
+        if len(self.calls) == 1:
+            raise RuntimeError("BFCArena::AllocateRawInternal Failed to allocate memory for requested buffer")
+        raise RuntimeError("provider rejected the input shape")
+
+
+def test_moving_to_the_cpu_for_good_reuses_the_spare_instead_of_loading_a_second_copy():
+    """A spare loaded for one OOM chunk becomes the engine's model; the CPU never holds two."""
+    engine, _, _ = _engine(model=_OutOfMemoryThenBroken("CUDAExecutionProvider"))
+    spare = FakeModel("CPUExecutionProvider")
+    with (
+        mock.patch.object(nemo_chunking, "decode", return_value=speech(10.0)),
+        mock.patch.object(nemo_runtime, "load_on_cpu", return_value=spare) as cpu,
+        mock.patch.object(config_nemo, "NEMO_BATCH_SIZE", 1),
+    ):
+        segments, _ = engine.transcribe("f.wav", language="en", clip_timestamps=[0, 2, 3, 5], vad_filter=False)
+        assert len(list(segments)) == 2
+    cpu.assert_called_once()
+    assert engine.device == "cpu" and engine.model is spare and engine._cpu_spare is None
+
+
 def test_cuda_memory_can_be_capped(monkeypatch):
     """NEMO_GPU_MEM_LIMIT_MB becomes ONNX Runtime's gpu_mem_limit, in bytes."""
     monkeypatch.setattr(config_nemo, "NEMO_GPU_MEM_LIMIT_MB", 3072)
