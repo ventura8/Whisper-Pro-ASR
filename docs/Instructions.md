@@ -141,7 +141,7 @@ The Docker test image runs all lint/security gates first (including Radon rank-A
 # Verify poetry.lock first when dependency metadata changed.
 # CI fails if poetry.lock is missing or out of sync.
 # Local parity scripts can regenerate when missing/stale.
-docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace python:3.12-slim /bin/bash -lc 'export HOME=/tmp && export PATH="/tmp/.local/bin:$PATH" && export PIP_ROOT_USER_ACTION=ignore && python -m pip install --quiet --user --upgrade "pip==26.2.1" && python -m pip install --quiet --user "poetry==2.4.1" && if [ ! -f poetry.lock ] || ! python -m poetry check --lock; then echo "poetry.lock is missing or out of sync. Please run poetry lock locally and commit the changes." && exit 1; fi'
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace python:3.12-slim /bin/bash -lc 'export HOME=/tmp && export PATH="/tmp/.local/bin:$PATH" && export PIP_ROOT_USER_ACTION=ignore && python -m pip install --quiet --user --upgrade "pip==26.2.1" && python -m pip install --quiet --user "poetry==2.5.1" && if [ ! -f poetry.lock ] || ! python -m poetry check --lock; then echo "poetry.lock is missing or out of sync. Please run poetry lock locally and commit the changes." && exit 1; fi'
 
 # Build the test image (cached layers from production are used automatically)
 docker build -t whisper-npu-test -f Dockerfile.test .

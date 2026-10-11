@@ -7,8 +7,8 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.14"
-fastapi = "0.141.1"
-uvicorn = { version = "0.53.0", extras = ["standard"] }
+fastapi = "0.143.0"
+uvicorn = { version = "0.54.0", extras = ["standard"] }
 python-multipart = "0.0.32"
 colorlog = "6.12.0"
 pyyaml = "6.0.3"
@@ -18,17 +18,17 @@ psutil = "7.2.2"
 tqdm = "4.70.1"
 soundfile = "0.14.0"
 ffmpeg-python = "0.2.0"
-# OpenVINO 2026.4.0 declares numpy<2.6.0,>=1.16.6 -- checked against its published metadata
-# on 2026-09-22. This comment previously said "<2.5.0" and held numpy a minor behind for a
+# OpenVINO 2026.4.1 declares numpy<2.6.0,>=1.16.6 -- checked against its published metadata
+# on 2026-10-11. This comment previously said "<2.5.0" and held numpy a minor behind for a
 # constraint that did not exist.
-numpy = "2.5.3"
+numpy = "2.5.4"
 
 [tool.poetry.group.ml]
 optional = true
 
 [tool.poetry.group.ml.dependencies]
 faster-whisper = "1.2.1"
-tokenizers = "0.23.2"
+tokenizers = "0.23.3"
 ctranslate2 = "4.8.2"
 # HELD at 2.13.0/0.28.0 deliberately -- do not "update" this pair without re-running the
 # CUDA hardware rows. torch 2.14 resolves the CUDA 13 wheel set (nvidia-cudnn-cu13 9.24,
@@ -53,11 +53,11 @@ torchvision = "0.28.0"
 # wheel, 2026-09-07). audio-separator still declares only librosa>=0.10 with no upper
 # bound, so the pairing is ours to keep: do not move one of these two without the other.
 librosa = "1.0.0"
-openvino = "2026.4.0"
-openvino-genai = "2026.4.0.0"
-openvino-tokenizers = "2026.4.0.0"
-transformers = "5.17.0"
-huggingface-hub = "1.32.0"
+openvino = "2026.4.1"
+openvino-genai = "2026.4.1.0"
+openvino-tokenizers = "2026.4.1.0"
+transformers = "5.19.0"
+huggingface-hub = "2.2.0"
 audio-separator = "0.47.0"
 # audio-separator's uvr_lib_v5.spec_utils imports audioread directly but does
 # not declare it as a dependency; it previously came in transitively via
@@ -86,17 +86,17 @@ onnx-asr = "0.12.0"
 pytest = "9.1.1"
 pytest-cov = "7.1.0"
 pytest-xdist = "3.8.0"
-httpx2 = "2.13.0"
+httpx2 = "2.13.1"
 genbadge = { version = "1.1.3", extras = ["coverage"] }
 requests-mock = "1.12.1"
 yamllint = "1.38.0"
-ruff = "0.16.8"
-flake8 = "7.3.0"
-pylint = "4.0.8"
-black = "26.5.1"
-isort = "9.0.1"
+ruff = "0.17.0"
+flake8 = "7.4.1"
+pylint = "4.1.3"
+black = "26.10.1"
+isort = "9.0.2"
 radon = "^6.0.1"
-check-jsonschema = "0.38.0"
+check-jsonschema = "0.38.2"
 taplo = "0.9.3"
 bandit = "1.9.4"
 pip-audit = "2.10.1"

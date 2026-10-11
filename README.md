@@ -292,7 +292,7 @@ CodeRabbit review guidance is stored in [.coderabbit.yaml](.coderabbit.yaml) and
 
 - **Multi-Backend Support**: Specialized optimization profiles for **NVIDIA CUDA**, **native Linux AMD ROCm**, **Intel OpenVINO**, and **Generic CPU** runtimes. WSL2 `/dev/dxg` enables AMD adapter detection for this image, but UVR still runs on CPU there.
 - **Nesting-Safe Hardware Orchestration**: Complex pipelines (UVR → ASR → Diarization) share a single hardware claim without deadlocking, via dedicated non-locking "_direct" entry points for internal sub-stages. Top-level task dispatch is gated by the global `STATE.model_lock` semaphore (`model_lock_ctx` in `modules/inference/runtime/model_manager.py`), while which specific hardware unit gets assigned is tracked separately via `STATE.hw_pool`.
-- **FFmpeg 9.0.1 Integration**: The production and Docker test images compile the signed upstream FFmpeg 9.0.1 release, with optimized hardware-accelerated decoding. All media (MKV, AVI, MP4, etc.) is automatically standardized to **16kHz Mono WAV** using the `utils.py` core before entering the AI pipeline for maximum accuracy.
+- **FFmpeg 9.0.2 Integration**: The production and Docker test images compile the signed upstream FFmpeg 9.0.2 release, with optimized hardware-accelerated decoding. All media (MKV, AVI, MP4, etc.) is automatically standardized to **16kHz Mono WAV** using the `utils.py` core before entering the AI pipeline for maximum accuracy.
 
 ### Advanced Intelligence
 
