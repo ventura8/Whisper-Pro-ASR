@@ -173,9 +173,7 @@ def test_bazarr_asr_resolvable_video_file_uses_mapped_path_not_upload(
     assert resolve_result.get("upload") is None
 
 
-def test_bazarr_detect_resolvable_video_file_uses_mapped_path_not_upload(
-    bazarr_client: FlaskCompatibleClient, tmp_path: Path
-):
+def test_bazarr_detect_resolvable_video_file_uses_mapped_path_not_upload(bazarr_client: FlaskCompatibleClient, tmp_path: Path):
     """Mounts present: detect-language also prefers resolvable video_file over upload."""
     mapped = _write_mapped_media(tmp_path)
     resolved = str(mapped.resolve())
