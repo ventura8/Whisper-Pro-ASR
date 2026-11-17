@@ -122,37 +122,62 @@ def _is_custom_mount_point(mount_point: str, system_roots: set[str]) -> bool:
     return True
 
 
-def resolve_temp_dir(temp_dir: str, persistent_dir: str, min_free_bytes: int, required_bytes: int = 0) -> str:
-    """Return the best temp directory based on available tmpfs disk space."""
-    resolved_temp = os.path.abspath(temp_dir)
-    resolved_persistent = os.path.abspath(persistent_dir)
-    headroom_bytes = int(required_bytes * 1.5) if required_bytes > 0 else 0
-    threshold = max(min_free_bytes, headroom_bytes)
+def _fallback_unwritable_temp(resolved_temp: str, resolved_persistent: str) -> str:
+    logger.warning(
+        "[Config] Temp directory %s is not writable; falling back to persistent temp %s "
+        "(compose should mount /tmp/whisper as tmpfs with mode=1777).",
+        resolved_temp,
+        resolved_persistent,
+    )
+    return resolved_persistent
+
+
+def _select_temp_by_free_space(resolved_temp: str, resolved_persistent: str, threshold: int) -> str:
+    """Prefer tmpfs when it clears ``threshold``; otherwise return persistent temp."""
     try:
         free = shutil.disk_usage(resolved_temp).free
-        if free < threshold:
-            logger.debug(
-                "[Config] tmpfs free space (%d MB) below threshold (%d MB) — falling back to persistent temp dir.",
-                free // (1024 * 1024),
+        if free >= threshold:
+            return resolved_temp
+        logger.debug(
+            "[Config] tmpfs free space (%d MB) below threshold (%d MB) — falling back to persistent temp dir.",
+            free // (1024 * 1024),
+            threshold // (1024 * 1024),
+        )
+        persistent_free = shutil.disk_usage(resolved_persistent).free
+        if persistent_free < threshold:
+            # Warn, do not raise. This function only *selects* a directory, and it is
+            # called while resolving config on the request path -- raising here turned
+            # a capacity warning into a hard failure for every request. The threshold
+            # is also max(min_free, 1.5x required): it is desired headroom, not the
+            # space the work actually needs, so being under it does not mean the write
+            # would fail. Let the write fail with a real ENOSPC if it truly cannot fit,
+            # which says what was actually being written.
+            logger.warning(
+                "[Config] Neither temp directory has the preferred %d MB free (tmpfs %d MB, persistent %d MB); "
+                "using the persistent directory anyway.",
                 threshold // (1024 * 1024),
+                free // (1024 * 1024),
+                persistent_free // (1024 * 1024),
             )
-            persistent_free = shutil.disk_usage(resolved_persistent).free
-            if persistent_free < threshold:
-                # Warn, do not raise. This function only *selects* a directory, and it is
-                # called while resolving config on the request path -- raising here turned
-                # a capacity warning into a hard failure for every request. The threshold
-                # is also max(min_free, 1.5x required): it is desired headroom, not the
-                # space the work actually needs, so being under it does not mean the write
-                # would fail. Let the write fail with a real ENOSPC if it truly cannot fit,
-                # which says what was actually being written.
-                logger.warning(
-                    "[Config] Neither temp directory has the preferred %d MB free (tmpfs %d MB, persistent %d MB); "
-                    "using the persistent directory anyway.",
-                    threshold // (1024 * 1024),
-                    free // (1024 * 1024),
-                    persistent_free // (1024 * 1024),
-                )
-            return resolved_persistent
+        return resolved_persistent
     except OSError:
         return resolved_persistent
-    return resolved_temp
+
+
+def resolve_temp_dir(temp_dir: str, persistent_dir: str, min_free_bytes: int, required_bytes: int = 0) -> str:
+    """Return the best temp directory based on writability and available tmpfs disk space.
+
+    Writability is checked first. An unwritable ``TEMP_DIR`` (common when a Portainer/
+    Compose stack sets ``WHISPER_TEMP_DIR=/tmp/whisper`` but omits the ``tmpfs`` mount
+    with ``mode=1777`` that the repo compose ships) used to pass the free-space check
+    and then silently fail every upload materialization as "No audio source provided".
+    Falling back to the persistent directory here keeps the Bazarr upload path working
+    without media mounts -- mounts remain an optional zero-copy optimisation.
+    """
+    resolved_temp = os.path.abspath(temp_dir)
+    resolved_persistent = os.path.abspath(persistent_dir)
+    if not is_path_writable(resolved_temp):
+        return _fallback_unwritable_temp(resolved_temp, resolved_persistent)
+    headroom_bytes = int(required_bytes * 1.5) if required_bytes > 0 else 0
+    threshold = max(min_free_bytes, headroom_bytes)
+    return _select_temp_by_free_space(resolved_temp, resolved_persistent, threshold)

@@ -63,6 +63,14 @@ async def materialize_upload_file(upload_file, local_path=None):
 
     write_result = await _write_upload_to_disk(upload_file, tmp_path)
     if not write_result["success"]:
+        # Without this log the route collapses to "No audio source provided", which
+        # hides the real failure mode: TEMP_DIR unwritable / write error while the
+        # multipart body was present (NUC Portainer stack without tmpfs mode=1777).
+        logger.error(
+            "[System] Failed to materialize uploaded audio %r to %s (temp dir not writable?)",
+            original_filename,
+            tmp_path,
+        )
         return None, None
     if not _validate_or_discard_materialized_file(tmp_path, write_result["used_sync"]):
         return None, None

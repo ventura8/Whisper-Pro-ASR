@@ -31,7 +31,7 @@ HOST = os.environ.get("HOST") or ".".join(["0", "0", "0", "0"])
 
 # --- [CORE SERVICE CONFIG] ---
 APP_NAME = "Whisper Pro ASR"
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 #: Which image this container was built from (cpu, intel, nvidia, amd, nvidia-intel,
 #: full), stamped per target in the Dockerfile. Two containers can run the same VERSION
 #: with very different accelerator support, so the dashboard shows both. Empty when the
@@ -215,10 +215,13 @@ PERSISTENT_TEMP_DIR = _RUNTIME_DIRS["PERSISTENT_TEMP_DIR"]
 def get_temp_dir(required_bytes=0):
     """Return the best temp directory for transient file I/O.
 
-    Returns ``TEMP_DIR`` when it has ``TEMP_DIR_MIN_FREE_BYTES`` of headroom plus
-    ``required_bytes``, and ``PERSISTENT_TEMP_DIR`` otherwise -- including when the free-space
-    check itself raises ``OSError`` (an unmounted tmpfs, a path that has gone away), because
-    an unanswerable question about the RAM disk is treated as a reason not to use it.
+    Returns ``TEMP_DIR`` when it is writable and has ``TEMP_DIR_MIN_FREE_BYTES`` of
+    headroom plus ``required_bytes``, and ``PERSISTENT_TEMP_DIR`` otherwise -- including
+    when the free-space check itself raises ``OSError`` (an unmounted tmpfs, a path that
+    has gone away), or when ``TEMP_DIR`` exists but is not writable by the service user
+    (compose/Portainer omitted the ``tmpfs`` ``mode=1777`` mount). An unanswerable
+    question about the RAM disk, or a directory the process cannot write, is treated as
+    a reason not to use it.
 
     It does **not** raise, and it does **not** check the persistent directory against the
     same threshold: the fallback is returned unconditionally, so a caller that needs

@@ -92,6 +92,7 @@ Transcribe audio to SRT/VTT/JSON with optional speaker diarization. All incoming
 
 - If `local_path` is readable inside the service container (volume mapping works), the request uses that path directly and skips upload materialization.
 - If `local_path` is unavailable, a readable `video_file` inside the approved roots is used directly without upload materialization.
+- Media volume mounts are optional. When neither mapped path resolves, the uploaded `audio_file` is materialized under a writable temp dir (`TEMP_DIR`, falling back to `PERSISTENT_TEMP_DIR` if needed).
 - If neither path is usable, the service falls back to the uploaded payload (`audio_file`/`file`) when present.
 
 **Approved roots**. A `local_path` is only read when it resolves under an approved root, so

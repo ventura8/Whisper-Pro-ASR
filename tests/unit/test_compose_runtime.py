@@ -23,7 +23,12 @@ def _env():
 
 
 def test_tmpfs_mounts_remain_writable_after_compose_restart():
-    """Compose must remount transient directories writable by the service user."""
+    """Compose must remount transient directories writable by the service user.
+
+    ``mode=1777`` is mandatory: ``size=2G`` alone remounts as root:root 755 after
+    ``docker compose restart``, and every Bazarr upload then fails to materialize
+    as ``No audio source provided`` (NUC Portainer outage 2026-11-17).
+    """
     assert "/tmp/whisper:size=2G,mode=1777" in _service()["tmpfs"]
 
 

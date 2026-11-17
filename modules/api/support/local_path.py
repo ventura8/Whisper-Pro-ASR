@@ -24,10 +24,17 @@ _MEDIA_PATH_EXTENSIONS = (
 
 
 def get_approved_roots() -> list[str]:
-    """Return canonical roots allowed for local-path optimization."""
+    """Return canonical roots allowed for local-path optimization.
+
+    Includes ``PERSISTENT_TEMP_DIR`` as well as ``TEMP_DIR``: when tmpfs is
+    unwritable or low on space, ``get_temp_dir`` materializes Bazarr uploads under
+    the persistent temp directory, and those paths must still pass the approved-roots
+    gate in ``resolve_local_path`` / ``_resolve_pre_materialized_upload``.
+    """
 
     roots = [
         os.path.realpath(config.TEMP_DIR),
+        os.path.realpath(config.PERSISTENT_TEMP_DIR),
         os.path.realpath(config.PERSISTENT_DIR),
         os.path.realpath(os.getcwd()),
     ]
