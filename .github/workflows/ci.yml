@@ -36,7 +36,7 @@ jobs:
 
       - name: Enforce Up-to-date Poetry Lock File
         env:
-          PIP_VERSION: "26.2.1"
+          PIP_VERSION: "26.3"
           POETRY_VERSION: "2.4.1"
         run: |
           docker run --rm \

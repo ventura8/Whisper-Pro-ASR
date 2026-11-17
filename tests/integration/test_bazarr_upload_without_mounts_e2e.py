@@ -1,11 +1,18 @@
-"""E2E: Bazarr multipart uploads must work without media volume mounts.
+"""E2E: Bazarr works both with and without media volume mounts.
 
 Media mounts (/tv, /movies) are an optional zero-copy optimisation. Real Bazarr
 always uploads pre-encoded raw PCM (encode=false) and may also send video_file as
-caller metadata. When video_file is unresolvable -- or TEMP_DIR is present but
-not writable (Portainer stack missing tmpfs mode=1777) -- the upload path must
-still succeed. The NUC production outage of 2026-11-17 was exactly this:
-unwritable /tmp/whisper + no media mounts → every job "No audio source provided".
+caller metadata.
+
+Two contracts must both hold:
+
+1. Mounts absent / video_file unresolvable -- or TEMP_DIR present but not writable
+   (Portainer stack missing tmpfs mode=1777) -- the upload path must still succeed.
+   The NUC production outage of 2026-11-17 was exactly that: unwritable /tmp/whisper
+   + no media mounts → every job "No audio source provided".
+2. Mounts present / video_file readable under approved roots -- the mapped media
+   path wins, uploads are not materialized, raw-PCM input flags are cleared, and
+   stream alignment runs against the container (not the upload).
 """
 
 from __future__ import annotations
@@ -18,9 +25,14 @@ from unittest import mock
 
 import pytest
 
+from modules.api.support import request_utils as routes_utils
 from tests.conftest import FlaskCompatibleClient
 
 _RAW_PCM = b"\x00\x01" * 1000
+_DEFAULT_ASR_RESULT = {
+    "text": "Hello from mapped media",
+    "segments": [{"timestamp": (0.0, 1.0), "text": "Hello from mapped media"}],
+}
 
 
 def _bazarr_detect_post(client: FlaskCompatibleClient, *, video_file: str | None = "/tv/missing.mkv"):
@@ -118,3 +130,91 @@ def test_bazarr_asr_unresolvable_video_file_uses_upload_not_mapped_path(bazarr_c
     assert src != "/etc/passwd"
     assert "upload_" in os.path.basename(src)
     assert mock_convert.call_args.kwargs.get("input_flags") == ["-f", "s16le", "-ar", "16000", "-ac", "1"]
+
+
+def _write_mapped_media(tmp_path: Path) -> Path:
+    media = tmp_path / "tv" / "Show S01E01.mkv"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"REAL-MAPPED-MEDIA-CONTAINER-NOT-THE-UPLOAD")
+    return media
+
+
+def test_bazarr_asr_resolvable_video_file_uses_mapped_path_not_upload(
+    bazarr_client: FlaskCompatibleClient, bazarr_wav: str, tmp_path: Path
+):
+    """Mounts present: resolvable video_file wins over multipart upload (zero-copy)."""
+    mapped = _write_mapped_media(tmp_path)
+    resolved = str(mapped.resolve())
+    resolve_result: dict[str, object] = {}
+    original = routes_utils.resolve_and_materialize_upload
+
+    async def _capture(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        resolve_result["local"] = result[0]
+        resolve_result["upload"] = result[1]
+        return result
+
+    with (
+        mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav) as mock_convert,
+        mock.patch("modules.core.utils.get_stream_alignment_directives", return_value=(None, None)) as mock_alignment,
+        mock.patch("modules.api.routes.asr.model_manager") as mock_mm,
+        mock.patch("modules.api.routes.asr.routes_utils.resolve_and_materialize_upload", side_effect=_capture),
+    ):
+        mock_mm.is_engine_initialized.return_value = True
+        mock_mm.increment_active_session.return_value = None
+        mock_mm.decrement_active_session.return_value = None
+        mock_mm.run_transcription.return_value = _DEFAULT_ASR_RESULT
+        resp = _bazarr_asr_post(bazarr_client, video_file=str(mapped))
+
+    assert resp.status_code == 200, resp.data
+    mock_convert.assert_called_once_with(resolved, input_flags=[], stream_index=None, delay_filter=None)
+    mock_alignment.assert_called_once_with(resolved, "en")
+    assert resolve_result.get("local") == resolved
+    assert resolve_result.get("upload") is None
+
+
+def test_bazarr_detect_resolvable_video_file_uses_mapped_path_not_upload(bazarr_client: FlaskCompatibleClient, tmp_path: Path):
+    """Mounts present: detect-language also prefers resolvable video_file over upload."""
+    mapped = _write_mapped_media(tmp_path)
+    resolved = str(mapped.resolve())
+    materialized: list[str] = []
+    original = routes_utils.materialize_upload_file
+
+    async def _capture(upload_file, local_path=None):
+        path, name = await original(upload_file, local_path=local_path)
+        if path:
+            materialized.append(path)
+        return path, name
+
+    with (
+        mock.patch("modules.core.utils.get_audio_duration", return_value=90.0) as mock_duration,
+        mock.patch("modules.api.support.request_utils.materialize_upload_file", side_effect=_capture),
+    ):
+        resp = _bazarr_detect_post(bazarr_client, video_file=str(mapped))
+
+    assert resp.status_code == 200, resp.data
+    body = json.loads(resp.data)
+    assert body["language_code"] == "en"
+    mock_duration.assert_called()
+    assert mock_duration.call_args[0][0] == resolved
+    assert not materialized, "resolvable mapped media must skip upload materialization"
+
+
+def test_bazarr_local_path_with_mount_skips_upload_and_clears_raw_pcm_flags(
+    bazarr_client: FlaskCompatibleClient, bazarr_wav: str, tmp_path: Path
+):
+    """Explicit local_path under approved roots remains the zero-copy ASR path."""
+    mapped = _write_mapped_media(tmp_path)
+    resolved = str(mapped.resolve())
+    with (
+        mock.patch("modules.core.utils.convert_to_wav", return_value=bazarr_wav) as mock_convert,
+        mock.patch("modules.core.utils.get_stream_alignment_directives", return_value=(1, "adelay=10:all=1")) as mock_alignment,
+    ):
+        resp = bazarr_client.post(
+            f"/asr?task=transcribe&language=en&output=srt&encode=false&local_path={mapped}",
+            data={"audio_file": (io.BytesIO(_RAW_PCM), "audio.raw")},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 200, resp.data
+    mock_alignment.assert_called_once_with(resolved, "en")
+    mock_convert.assert_called_once_with(resolved, input_flags=[], stream_index=1, delay_filter="adelay=10:all=1")
