@@ -27,10 +27,26 @@ class TestSSDOptimization:
         """Test that TEMP_DIR respects WHISPER_TEMP_DIR environment variable."""
         custom_temp = "/tmp/custom_whisper"
         with mock.patch.dict(os.environ, {"WHISPER_TEMP_DIR": custom_temp}):
-            # Mock os.makedirs to avoid actually creating the directory
-            with mock.patch("os.makedirs"):
+            # Mock os.makedirs to avoid actually creating the directory; TemporaryFile
+            # must also succeed so the writability probe does not reject custom_temp.
+            with mock.patch("os.makedirs"), mock.patch("modules.core.mount_helpers.tempfile.TemporaryFile"):
                 importlib.reload(config_module)
                 assert config_module.TEMP_DIR == custom_temp
+
+    def test_temp_dir_falls_back_when_env_path_not_writable(self):
+        """WHISPER_TEMP_DIR that exists but is not writable must not be selected."""
+        custom = "/tmp/unwritable_whisper"
+
+        def _writable(path: str) -> bool:
+            return os.path.abspath(path) != os.path.abspath(custom)
+
+        with mock.patch.dict(os.environ, {"WHISPER_TEMP_DIR": custom}):
+            with (
+                mock.patch("os.makedirs"),
+                mock.patch("modules.core.mount_helpers.is_path_writable", side_effect=_writable),
+            ):
+                importlib.reload(config_module)
+                assert config_module.TEMP_DIR == tempfile.gettempdir()
 
     def test_preprocessing_cache_dir_derived_from_temp(self):
         """Test that PREPROCESSING_CACHE_DIR is derived from TEMP_DIR."""
@@ -39,13 +55,16 @@ class TestSSDOptimization:
             # Mock disk_usage to return plenty of space
             with mock.patch("shutil.disk_usage") as mock_usage:
                 mock_usage.return_value = mock.MagicMock(free=10 * 1024 * 1024 * 1024)
-                with mock.patch("os.makedirs"):
+                with mock.patch("os.makedirs"), mock.patch("modules.core.mount_helpers.tempfile.TemporaryFile"):
                     importlib.reload(config_module)
                     assert config_module.PREPROCESSING_CACHE_DIR.startswith(custom_temp)
 
     def test_get_temp_dir_sufficient_space(self):
         """Test get_temp_dir returns TEMP_DIR when there is enough space."""
-        with mock.patch("shutil.disk_usage") as mock_usage:
+        with (
+            mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+            mock.patch("shutil.disk_usage") as mock_usage,
+        ):
             # 4GB free (well above the 2048 MB minimum threshold)
             mock_usage.return_value = mock.MagicMock(free=4 * 1024 * 1024 * 1024)
 
@@ -55,7 +74,10 @@ class TestSSDOptimization:
 
     def test_get_temp_dir_low_space_fallback(self):
         """Test get_temp_dir falls back to persistent temp when space is low."""
-        with mock.patch("shutil.disk_usage") as mock_usage:
+        with (
+            mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+            mock.patch("shutil.disk_usage") as mock_usage,
+        ):
             # 100MB free, but we need 512MB (default min) or more
             mock_usage.return_value = mock.MagicMock(free=100 * 1024 * 1024)
 
@@ -65,10 +87,19 @@ class TestSSDOptimization:
 
     def test_get_temp_dir_error_fallback(self):
         """Test get_temp_dir falls back to persistent temp on OSError."""
-        with mock.patch("shutil.disk_usage", side_effect=OSError("Drive not ready")):
+        with (
+            mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+            mock.patch("shutil.disk_usage", side_effect=OSError("Drive not ready")),
+        ):
             with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 res = config_module.get_temp_dir()
                 assert res == config_module.PERSISTENT_TEMP_DIR
+
+    def test_get_temp_dir_unwritable_fallback(self):
+        """Unwritable TEMP_DIR falls back even when free-space looks fine."""
+        with mock.patch("modules.core.mount_helpers.is_path_writable", return_value=False):
+            with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
+                assert config_module.get_temp_dir() == config_module.PERSISTENT_TEMP_DIR
 
 
 class TestTempDirNeverRaises:
@@ -82,7 +113,10 @@ class TestTempDirNeverRaises:
     """
 
     def test_returns_persistent_when_neither_has_the_preferred_headroom(self):
-        with mock.patch("shutil.disk_usage") as usage:
+        with (
+            mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+            mock.patch("shutil.disk_usage") as usage,
+        ):
             usage.return_value = mock.MagicMock(free=1024)  # 1 KB everywhere
             with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 assert config_module.get_temp_dir(required_bytes=10 * 1024**3) == config_module.PERSISTENT_TEMP_DIR
@@ -90,7 +124,10 @@ class TestTempDirNeverRaises:
     def test_says_so_in_the_log_rather_than_failing(self, caplog):
         import logging
 
-        with mock.patch("shutil.disk_usage") as usage:
+        with (
+            mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+            mock.patch("shutil.disk_usage") as usage,
+        ):
             usage.return_value = mock.MagicMock(free=1024)
             with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 with caplog.at_level(logging.WARNING):
@@ -100,6 +137,9 @@ class TestTempDirNeverRaises:
 
     def test_zero_free_space_still_returns_a_directory(self):
         Usage = namedtuple("Usage", ["free"])
-        with mock.patch("shutil.disk_usage", return_value=Usage(free=0)):
+        with (
+            mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+            mock.patch("shutil.disk_usage", return_value=Usage(free=0)),
+        ):
             with mock.patch("modules.core.config.TEMP_DIR", "/tmp/whisper"):
                 assert config_module.get_temp_dir(required_bytes=1_000_000) == config_module.PERSISTENT_TEMP_DIR

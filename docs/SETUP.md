@@ -684,12 +684,22 @@ Edit `docker-compose.yml`:
 volumes:
   - ./model_cache:/app/model_cache     # NPU compilation blobs + diarization models (Critical for fast reload)
   - ./data:/app/data                   # Task history, telemetry, and system logs (upgrade-safe; backward-compatible)
-  - /mnt/nas/movies:/movies            # Your media (mapped to same path as in Bazarr)
+  - /mnt/nas/movies:/movies            # Optional: same paths as Bazarr for zero-copy local_path/video_file
   - /mnt/nas/tv:/tv
 ```
 
-> [!TIP]
-> The `model_cache` volume now also stores cached WhisperX alignment and PyAnnote diarization models. Mapping this volume avoids re-downloading these models on container restarts.
+> [!IMPORTANT]
+> Media mounts (`/tv`, `/movies`) are an **optional optimisation**. Bazarr's real wire format
+> always uploads raw PCM (`encode=false`); Whisper Pro materializes that upload under
+> `WHISPER_TEMP_DIR` (compose ships `tmpfs: /tmp/whisper:size=2G,mode=1777`). Without media
+> mounts the upload path must still work. If you deploy via Portainer or a custom compose
+> and omit that tmpfs mount, `/tmp/whisper` can end up root-owned and unwritable -- uploads
+> then fail as `No audio source provided`. Keep the tmpfs line (or any writable TEMP_DIR);
+> the service also falls back to persistent temp when TEMP_DIR is not writable.
+
+## Model cache tip
+
+The `model_cache` volume now also stores cached WhisperX alignment and PyAnnote diarization models. Mapping this volume avoids re-downloading these models on container restarts.
 
 ## SSD Protection
 

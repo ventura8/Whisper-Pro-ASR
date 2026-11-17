@@ -180,16 +180,37 @@ def _resolve_upload_display_name(
     return display_name or _filtered_upload_display_name(original_filename) or _display_name_from_path(video_file or "") or fallback
 
 
-def _resolve_pre_materialized_upload(audio_file, display_name: Optional[str], video_file: Optional[str] = None) -> Optional[tuple]:
-    if not isinstance(audio_file, str):
-        return None
-    resolved_p = resolve_local_path(audio_file)
-    if not resolved_p:
-        return None
-    original_filename = getattr(audio_file, "original_filename", None)
+def _finish_pre_materialized_upload(
+    resolved_p: str, display_name: Optional[str], original_filename: Optional[str], video_file: Optional[str]
+) -> tuple:
     resolved_name = _resolve_upload_display_name(display_name, original_filename, video_file, os.path.basename(resolved_p))
     logger.info("[System] Using pre-materialized upload: %s", os.path.basename(resolved_p))
     return resolved_p, resolved_p, resolved_name
+
+
+def _trust_server_materialized_upload(audio_file, display_name: Optional[str], video_file: Optional[str]) -> Optional[tuple]:
+    """Accept MaterializedUploadPath without the caller-facing approved-roots gate.
+
+    These paths are written by ``materialize_upload_file`` under ``get_temp_dir()``, which
+    may be ``PERSISTENT_TEMP_DIR`` after a tmpfs writability/space fallback. Re-gating them
+    through ``resolve_local_path`` rejected our own files and then crashed in handle_upload.
+    """
+    original_filename = getattr(audio_file, "original_filename", None)
+    if original_filename is None or not os.path.isfile(audio_file):
+        return None
+    return _finish_pre_materialized_upload(os.path.realpath(audio_file), display_name, original_filename, video_file)
+
+
+def _resolve_pre_materialized_upload(audio_file, display_name: Optional[str], video_file: Optional[str] = None) -> Optional[tuple]:
+    if not isinstance(audio_file, str):
+        return None
+    trusted = _trust_server_materialized_upload(audio_file, display_name, video_file)
+    if trusted:
+        return trusted
+    resolved_p = resolve_local_path(audio_file)
+    if not resolved_p:
+        return None
+    return _finish_pre_materialized_upload(resolved_p, display_name, getattr(audio_file, "original_filename", None), video_file)
 
 
 def _prepare_audio_file_path(audio_file, display_name: Optional[str], video_file: Optional[str] = None) -> Optional[tuple]:

@@ -57,11 +57,30 @@ def test_resolve_writable_dir_raises_when_fallback_not_writable():
             mount_helpers.resolve_writable_dir("Cache", ["/data/cache"], "/fallback")
 
 
+def test_resolve_temp_dir_falls_back_when_temp_dir_not_writable(caplog):
+    """Unwritable TEMP_DIR must fall back before any free-space check.
+
+    Reproduces the NUC Portainer failure mode: WHISPER_TEMP_DIR=/tmp/whisper exists
+    as root:root mode 755 (no tmpfs mode=1777), disk_usage would succeed, and every
+    Bazarr upload then failed to materialize as "No audio source provided".
+    """
+    with mock.patch("modules.core.mount_helpers.is_path_writable", return_value=False):
+        with mock.patch("modules.core.mount_helpers.shutil.disk_usage") as usage:
+            with caplog.at_level(logging.WARNING):
+                res = mount_helpers.resolve_temp_dir("/tmp/whisper", "/persistent/temp", min_free_bytes=100 * 1024 * 1024)
+    assert res == "/persistent/temp"
+    usage.assert_not_called()
+    assert any("not writable" in record.message for record in caplog.records)
+
+
 def test_resolve_temp_dir_threshold_min_free_bytes():
     """When free space is below min_free_bytes, fallback to persistent dir."""
     tmpfs_usage = mock.MagicMock(free=50 * 1024 * 1024)
     persistent_usage = mock.MagicMock(free=200 * 1024 * 1024)
-    with mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=[tmpfs_usage, persistent_usage]):
+    with (
+        mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=[tmpfs_usage, persistent_usage]),
+    ):
         # min_free_bytes = 100MB > 50MB free
         res = mount_helpers.resolve_temp_dir("/tmp", "/persistent", min_free_bytes=100 * 1024 * 1024, required_bytes=0)
         assert res == "/persistent"
@@ -88,7 +107,10 @@ def test_resolve_temp_dir_warns_but_still_answers_when_neither_has_headroom(capl
     file, which is more use than a config-time error that cannot name one.
     """
     low_space = mock.MagicMock(free=50 * 1024 * 1024)
-    with mock.patch("modules.core.mount_helpers.shutil.disk_usage", return_value=low_space):
+    with (
+        mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", return_value=low_space),
+    ):
         with caplog.at_level(logging.WARNING):
             res = mount_helpers.resolve_temp_dir("/tmp", "/persistent", min_free_bytes=100 * 1024 * 1024)
 
@@ -101,7 +123,10 @@ def test_resolve_temp_dir_threshold_required_bytes_headroom():
     # Free space: 140MB. required_bytes = 100MB -> headroom = 150MB -> threshold = 150MB > 140MB
     tmpfs_usage = mock.MagicMock(free=140 * 1024 * 1024)
     persistent_usage = mock.MagicMock(free=200 * 1024 * 1024)
-    with mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=[tmpfs_usage, persistent_usage]):
+    with (
+        mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=[tmpfs_usage, persistent_usage]),
+    ):
         res = mount_helpers.resolve_temp_dir("/tmp", "/persistent", min_free_bytes=10 * 1024 * 1024, required_bytes=100 * 1024 * 1024)
         assert res == "/persistent"
 
@@ -110,7 +135,10 @@ def test_resolve_temp_dir_boundary_equality_retains_temp_dir():
     """When free space equals the exact threshold, retain temp_dir."""
     # Free space: 150MB. required_bytes = 100MB -> headroom = 150MB -> threshold = 150MB == 150MB free
     mock_usage = mock.MagicMock(free=150 * 1024 * 1024)
-    with mock.patch("modules.core.mount_helpers.shutil.disk_usage", return_value=mock_usage):
+    with (
+        mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", return_value=mock_usage),
+    ):
         res = mount_helpers.resolve_temp_dir("/tmp", "/persistent", min_free_bytes=100 * 1024 * 1024, required_bytes=100 * 1024 * 1024)
         assert res == "/tmp"
 
@@ -118,21 +146,30 @@ def test_resolve_temp_dir_boundary_equality_retains_temp_dir():
 def test_resolve_temp_dir_retains_temp_dir_when_free_exceeds_threshold():
     """When free space strictly exceeds threshold, retain temp_dir."""
     mock_usage = mock.MagicMock(free=200 * 1024 * 1024)
-    with mock.patch("modules.core.mount_helpers.shutil.disk_usage", return_value=mock_usage):
+    with (
+        mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", return_value=mock_usage),
+    ):
         res = mount_helpers.resolve_temp_dir("/tmp", "/persistent", min_free_bytes=100 * 1024 * 1024, required_bytes=100 * 1024 * 1024)
         assert res == "/tmp"
 
 
 def test_resolve_temp_dir_handles_os_error():
     """When shutil.disk_usage raises OSError, fallback to persistent dir."""
-    with mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=OSError("disk failure")):
+    with (
+        mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=OSError("disk failure")),
+    ):
         res = mount_helpers.resolve_temp_dir("/tmp", "/persistent", min_free_bytes=100 * 1024 * 1024)
         assert res == "/persistent"
 
 
 def test_resolve_temp_dir_relative_persistent_dir():
     """Relative persistent directory must resolve to an absolute path."""
-    with mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=OSError("fallback")):
+    with (
+        mock.patch("modules.core.mount_helpers.is_path_writable", return_value=True),
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", side_effect=OSError("fallback")),
+    ):
         res = mount_helpers.resolve_temp_dir("./temp", "./model_cache", min_free_bytes=100 * 1024 * 1024)
         assert os.path.isabs(res)
         assert res == os.path.abspath("./model_cache")

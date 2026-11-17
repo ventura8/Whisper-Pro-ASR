@@ -17,7 +17,7 @@ import math
 import os
 import tempfile
 
-from modules.core.mount_helpers import get_custom_mount_points, resolve_writable_dir
+from modules.core.mount_helpers import get_custom_mount_points, is_path_writable, resolve_writable_dir
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +101,27 @@ def _persistent_temp_dir(ov_cache_dir: str) -> str:
 
 
 def _temp_dir() -> str:
+    """Resolve ``WHISPER_TEMP_DIR``, falling back when create/write fails.
+
+    ``makedirs(..., exist_ok=True)`` succeeds when the directory already exists even if
+    the service user cannot write to it (the NUC Portainer stack hit this: image/root
+    created ``/tmp/whisper`` as ``root:root`` mode 755, and every Bazarr upload then
+    failed to materialize). Probe writability the same way as the other runtime dirs.
+    """
     path = os.environ.get("WHISPER_TEMP_DIR", tempfile.gettempdir())
+    fallback = tempfile.gettempdir()
     try:
         os.makedirs(path, exist_ok=True)
     except OSError:
-        return tempfile.gettempdir()
-    return path
+        return fallback
+    if is_path_writable(path):
+        return path
+    logger.warning(
+        "[Config] WHISPER_TEMP_DIR=%s exists but is not writable; using %s instead.",
+        path,
+        fallback,
+    )
+    return fallback
 
 
 def resolve_runtime_dirs() -> dict[str, object]:

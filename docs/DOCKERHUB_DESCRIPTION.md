@@ -163,8 +163,8 @@ To use this service with **Bazarr**:
 2. **Endpoint**: `http://<IP_OR_HOSTNAME>:9000`
 3. **Timeouts**: Should be set very high (54000) for long movies
 4. **Pass video filename to Whisper**: Should be enabled for volume mapping to work correctly
-5. **Volume Mapping (Highly Recommended)**:
-    - Ensure your Bazarr and Whisper-Pro-ASR containers share the same media paths (e.g., both map `/tv` to the same actual folder).
+5. **Volume Mapping (Optional optimisation)**:
+    - Media mounts are zero-copy only. Bazarr always uploads raw PCM; keep the compose `tmpfs: /tmp/whisper:size=2G,mode=1777` so uploads can materialize without media mounts. Matching `/tv`/`/movies` paths with Bazarr skips the upload when present.
     - When configured this way, Bazarr sends the *file path* to Whisper. Whisper Pro checks if it can read that path locally. If yes, it processes the file instantly without network overhead.
     - If paths don't match, Whisper Pro automatically falls back to handling the full file upload from Bazarr.
 
@@ -176,7 +176,7 @@ To use this service with **Bazarr**:
 - **Intel ASR Chunking & Streaming**: Refactored OpenVINO engine transcription to split long media files dynamically into structured chunks guided by speech VAD timestamps, ensuring stability on very long movies.
 - **O(1) Live Subtitle Updates**: Appends pre-formatted subtitle blocks incrementally to the live SRT stream during processing instead of doing full $O(N^2)$ stream reconstructions.
 - **UVR Chunk Progress Tracking**: Computes and emits real-time preprocessing progress updates per UVR chunk to keep the dashboard progress bar fluid during vocal separation.
-- **Graceful Temp-Storage Fallback**: Establishes a 2GB minimum free space threshold and 1.5x file-size headroom multiplier; both tmpfs and persistent fallback storage are validated so insufficient capacity fails early instead of causing an ENOSPC crash.
+- **Graceful Temp-Storage Fallback**: Falls back from `WHISPER_TEMP_DIR` when it is unwritable or below the 2GB free-space / 1.5x headroom threshold, so Bazarr uploads keep working without media mounts (and without a misleading `No audio source provided`).
 - **16kHz WAV Standardization**: High-performance audio normalization layer for consistent cross-format results.
 - **Global VAD & In-Memory Batch ID**: Optimized language identification using a single VAD pass and zero-I/O NumPy slicing.
 - **Customizable ASR Parameters**: Fine-tune transcription with `initial_prompt`, `vad_filter`, and `word_timestamps`.
