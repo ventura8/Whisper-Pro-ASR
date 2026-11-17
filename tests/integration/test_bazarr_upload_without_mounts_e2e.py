@@ -80,10 +80,12 @@ def test_bazarr_detect_upload_survives_unwritable_temp_dir(bazarr_client: FlaskC
             materialized.append(path)
         return path, name
 
+    ample = mock.MagicMock(free=10 * 1024 * 1024 * 1024)
     with (
         mock.patch("modules.core.config.TEMP_DIR", str(unwritable)),
         mock.patch("modules.core.config.PERSISTENT_TEMP_DIR", str(persistent)),
-        mock.patch("modules.core.mount_helpers.is_path_writable", side_effect=_writable),
+        mock.patch("modules.core.mount_helpers.is_path_writable", side_effect=_writable) as mock_writable,
+        mock.patch("modules.core.mount_helpers.shutil.disk_usage", return_value=ample),
         mock.patch(
             "modules.api.support.request_utils.materialize_upload_file",
             side_effect=_capture_materialize,
@@ -98,6 +100,8 @@ def test_bazarr_detect_upload_survives_unwritable_temp_dir(bazarr_client: FlaskC
     assert body["language_code"] == "en"
     assert materialized, "upload must be materialized"
     assert all(os.path.abspath(p).startswith(os.path.abspath(str(persistent))) for p in materialized)
+    probed = {os.path.abspath(call.args[0]) for call in mock_writable.call_args_list if call.args}
+    assert os.path.abspath(str(unwritable)) in probed
 
 
 def test_bazarr_asr_unresolvable_video_file_uses_upload_not_mapped_path(bazarr_client: FlaskCompatibleClient, bazarr_wav: str):
@@ -113,3 +117,4 @@ def test_bazarr_asr_unresolvable_video_file_uses_upload_not_mapped_path(bazarr_c
     src = mock_convert.call_args[0][0]
     assert src != "/etc/passwd"
     assert "upload_" in os.path.basename(src)
+    assert mock_convert.call_args.kwargs.get("input_flags") == ["-f", "s16le", "-ar", "16000", "-ac", "1"]

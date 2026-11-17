@@ -36,6 +36,7 @@ class TestSSDOptimization:
     def test_temp_dir_falls_back_when_env_path_not_writable(self):
         """WHISPER_TEMP_DIR that exists but is not writable must not be selected."""
         custom = "/tmp/unwritable_whisper"
+        expected = os.path.join(tempfile.gettempdir(), "whisper-runtime", "temp")
 
         def _writable(path: str) -> bool:
             return os.path.abspath(path) != os.path.abspath(custom)
@@ -43,10 +44,11 @@ class TestSSDOptimization:
         with mock.patch.dict(os.environ, {"WHISPER_TEMP_DIR": custom}):
             with (
                 mock.patch("os.makedirs"),
-                mock.patch("modules.core.mount_helpers.is_path_writable", side_effect=_writable),
+                # config_paths binds is_path_writable at import; patch that name.
+                mock.patch("modules.core.config_paths.is_path_writable", side_effect=_writable),
             ):
                 importlib.reload(config_module)
-                assert config_module.TEMP_DIR == tempfile.gettempdir()
+                assert config_module.TEMP_DIR == expected
 
     def test_preprocessing_cache_dir_derived_from_temp(self):
         """Test that PREPROCESSING_CACHE_DIR is derived from TEMP_DIR."""

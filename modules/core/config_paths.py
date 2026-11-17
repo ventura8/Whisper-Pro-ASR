@@ -91,12 +91,28 @@ def _state_dir_candidates(persistent_dir: str) -> list[str]:
     return [persistent_dir, "./test_state"]
 
 
+def _whisper_owned_temp_fallback() -> str:
+    """Return a whisper-owned temp directory under the runtime fallback root.
+
+    Never publish bare ``tempfile.gettempdir()`` (usually ``/tmp``) as ``TEMP_DIR``.
+    That value feeds ``get_approved_roots()`` for caller ``local_path`` / ``video_file``
+    and cleanup keyed off ``TEMP_DIR``, so allowlisting the shared system temp root
+    would expose unrelated files. Keep the boundary to a dedicated subdirectory.
+    """
+    path = os.path.join(tempfile.gettempdir(), "whisper-runtime", "temp")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
 def _persistent_temp_dir(ov_cache_dir: str) -> str:
     path = os.path.abspath(os.path.join(ov_cache_dir, "temp"))
     try:
         os.makedirs(path, exist_ok=True)
     except OSError:
-        return os.path.abspath(tempfile.gettempdir())
+        return os.path.abspath(_whisper_owned_temp_fallback())
     return path
 
 
@@ -107,12 +123,21 @@ def _temp_dir() -> str:
     the service user cannot write to it (the NUC Portainer stack hit this: image/root
     created ``/tmp/whisper`` as ``root:root`` mode 755, and every Bazarr upload then
     failed to materialize). Probe writability the same way as the other runtime dirs.
+
+    Startup fallback is a dedicated whisper-owned directory under ``whisper-runtime``,
+    not bare system temp. Runtime free-space / writability selection still happens later
+    in ``resolve_temp_dir`` / ``get_temp_dir``, which may choose ``PERSISTENT_TEMP_DIR``.
     """
     path = os.environ.get("WHISPER_TEMP_DIR", tempfile.gettempdir())
-    fallback = tempfile.gettempdir()
+    fallback = _whisper_owned_temp_fallback()
     try:
         os.makedirs(path, exist_ok=True)
     except OSError:
+        logger.warning(
+            "[Config] WHISPER_TEMP_DIR=%s could not be created; using %s instead.",
+            path,
+            fallback,
+        )
         return fallback
     if is_path_writable(path):
         return path

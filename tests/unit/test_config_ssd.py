@@ -119,6 +119,7 @@ class TestConfigSSD:
                 # reached if that also fails, which isn't this scenario.
                 expected_persistent_fallback = os.path.normpath(os.path.abspath(os.path.join(config_module.OV_CACHE_DIR, ".state")))
                 expected_persistent_temp = os.path.normpath(os.path.abspath(os.path.join(config_module.OV_CACHE_DIR, "temp")))
+                expected_temp_fallback = os.path.join(tempfile.gettempdir(), "whisper-runtime", "temp")
                 assert (
                     config_module.TEMP_DIR,
                     os.path.normpath(config_module.PERSISTENT_DIR),
@@ -126,7 +127,7 @@ class TestConfigSSD:
                     config_module.LOG_DIR,
                     os.path.normpath(config_module.PERSISTENT_TEMP_DIR),
                 ) == (
-                    tempfile.gettempdir(),
+                    expected_temp_fallback,
                     expected_persistent_fallback,
                     expected_persistent_fallback,
                     expected_persistent_fallback,
@@ -216,7 +217,7 @@ shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0
             assert "/my movies" in config_module.get_custom_mount_points()
 
     def test_persistent_temp_dir_file_exists_fallback(self):
-        """When persistent temp path conflicts with a regular file, fall back to tempfile.gettempdir()."""
+        """When persistent temp path conflicts with a regular file, use whisper-owned temp."""
 
         # The one path this test is about: the persistent temp directory config derives
         # from OV_CACHE_DIR. `"temp" in str(path)` matched anything with those four letters
@@ -224,6 +225,7 @@ shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0
         # reached well outside the branch under test and what it broke depended on which
         # other directories config happened to create on the machine running it.
         persistent_temp = os.path.normpath(os.path.abspath(os.path.join(config_module.OV_CACHE_DIR, "temp")))
+        expected = os.path.abspath(os.path.join(tempfile.gettempdir(), "whisper-runtime", "temp"))
 
         def mock_makedirs(path, *_args, **_kwargs):
             # *_args because os.makedirs' real signature is (name, mode=0o777, exist_ok=False)
@@ -235,4 +237,4 @@ shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0
 
         with mock.patch("os.makedirs", side_effect=mock_makedirs):
             importlib.reload(config_module)
-            assert config_module.PERSISTENT_TEMP_DIR == os.path.abspath(tempfile.gettempdir())
+            assert config_module.PERSISTENT_TEMP_DIR == expected

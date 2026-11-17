@@ -16,7 +16,7 @@ Keep Bazarr integration reliable for large media files and mapped-volume workflo
 6. Some Bazarr clients send JSON bodies where the media path is the object key (for example `{"/tv/show.mkv": ""}`) instead of a `local_path` field. Route parsing and history backfill must recover those paths.
 7. Failed registered tasks must persist dashboard history fields: normalized `request_json.local_path`, `result.error` / `response_json`, and at least one execution log line via `record_task_failure()`.
 8. `encode=false` (Bazarr raw PCM) applies raw-PCM input flags only to an uploaded audio stream. A readable mapped `local_path` or `video_file` takes precedence and clears those flags because it represents an original media container, which FFmpeg must auto-detect.
-9. `TEMP_DIR` / tmpfs must stay writable by the service user (`tmpfs` `mode=1777` in compose). An unwritable temp dir must fall back to persistent temp so materialization cannot collapse into `No audio source provided`.
+9. `TEMP_DIR` / tmpfs must stay writable by the service user (`tmpfs` `mode=1777` in compose). Startup `_temp_dir()` falls back to a whisper-owned `whisper-runtime/temp` directory (never bare `/tmp`); runtime `resolve_temp_dir` may further select `PERSISTENT_TEMP_DIR` so materialization cannot collapse into `No audio source provided`.
 
 ## Manual Validation
 
